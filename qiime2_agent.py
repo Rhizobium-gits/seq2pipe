@@ -64,22 +64,36 @@ _UI: dict = {
         "no_model":       "⚠️  Ollama にモデルがインストールされていません。",
         "no_model_hint":  "推奨モデル: {}",
         "no_model_hint2": "軽量版    : {}",
-        "runtime_error":  "エラーが発生しました: {}",
+        "runtime_error":    "エラーが発生しました: {}",
+        "cmd_request":      "⚡ コマンド実行リクエスト",
+        "cmd_desc":         "説明",
+        "cmd_cmd":          "コマンド",
+        "cmd_confirm":      "[y] 実行する  [n] キャンセル",
+        "cmd_cancelled_ki": "❌ キャンセルされました（キーボード割り込み）",
+        "cmd_cancelled":    "❌ ユーザーによりキャンセルされました。",
+        "agent_limit":      "⚠️  最大ステップ数 ({}) に達しました。ループを終了します。",
     },
     "en": {
-        "model_selected": "✅ Model: {}",
-        "hint_exit":      "Tip: Press Ctrl+C to exit.",
-        "prompt":         "You",
-        "tool_exec":      "🔧 Tool: {}",
-        "tool_result":    "📋 Result:",
-        "goodbye":        "👋 Goodbye!",
-        "ollama_error":   "❌ Ollama is not running.",
-        "ollama_hint":    "Run the following command in another terminal:",
-        "ollama_hint2":   "If Ollama is not installed:",
-        "no_model":       "⚠️  No models installed in Ollama.",
-        "no_model_hint":  "Recommended model: {}",
-        "no_model_hint2": "Lightweight: {}",
-        "runtime_error":  "An error occurred: {}",
+        "model_selected":   "✅ Model: {}",
+        "hint_exit":        "Tip: Press Ctrl+C to exit.",
+        "prompt":           "You",
+        "tool_exec":        "🔧 Tool: {}",
+        "tool_result":      "📋 Result:",
+        "goodbye":          "👋 Goodbye!",
+        "ollama_error":     "❌ Ollama is not running.",
+        "ollama_hint":      "Run the following command in another terminal:",
+        "ollama_hint2":     "If Ollama is not installed:",
+        "no_model":         "⚠️  No models installed in Ollama.",
+        "no_model_hint":    "Recommended model: {}",
+        "no_model_hint2":   "Lightweight: {}",
+        "runtime_error":    "An error occurred: {}",
+        "cmd_request":      "⚡ Command Execution Request",
+        "cmd_desc":         "Description",
+        "cmd_cmd":          "Command",
+        "cmd_confirm":      "[y] Execute  [n] Cancel",
+        "cmd_cancelled_ki": "❌ Cancelled (keyboard interrupt)",
+        "cmd_cancelled":    "❌ Cancelled by user.",
+        "agent_limit":      "⚠️  Max steps ({}) reached. Stopping loop.",
     },
 }
 
@@ -1148,18 +1162,18 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
 
 def tool_run_command(command: str, description: str, working_dir: str = None) -> str:
     """シェルコマンドを実行（ユーザー確認付き）"""
-    print(f"\n{c('⚡ コマンド実行リクエスト', YELLOW)}")
-    print(f"   説明: {description}")
-    print(f"   コマンド:\n   {c(command, CYAN)}")
-    print(f"\n{c('[y] 実行する  [n] キャンセル', DIM)}", end=" > ")
+    print(f"\n{c(ui('cmd_request'), YELLOW)}")
+    print(f"   {ui('cmd_desc')}: {description}")
+    print(f"   {ui('cmd_cmd')}:\n   {c(command, CYAN)}")
+    print(f"\n{c(ui('cmd_confirm'), DIM)}", end=" > ")
 
     try:
         answer = input().strip().lower()
     except (EOFError, KeyboardInterrupt):
-        return "❌ キャンセルされました（キーボード割り込み）"
+        return ui("cmd_cancelled_ki")
 
     if answer not in ["y", "yes", "はい"]:
-        return "❌ ユーザーによりキャンセルされました。"
+        return ui("cmd_cancelled")
 
     try:
         cwd = Path(working_dir).expanduser() if working_dir else None
@@ -1372,13 +1386,18 @@ _SUBFOLDER_ORDER = [
 def _tex_escape(s: str) -> str:
     """TeX 特殊文字をエスケープ（順序依存に注意）
 
-    { } を ^ ~ より先に処理することで、
-    ^ → \\^{} の {} が再エスケープされるバグを防ぐ。
+    処理順序の原則:
+    1. \\ をプレースホルダーに退避（後続ループで {} が再エスケープされるのを防ぐ）
+    2. { } を ^ ~ より先に処理（^ → \\^{} の {} が再エスケープされるバグを防ぐ）
+    3. プレースホルダーを \\textbackslash{} に置換（ステップ2 の {} エスケープを受けない）
     """
+    _BS = "\x00BACKSLASH\x00"
+    s = s.replace("\\", _BS)
     for ch, rep in [("&", r"\&"), ("%", r"\%"), ("#", r"\#"),
                     ("_", r"\_"), ("{", r"\{"), ("}", r"\}"),
                     ("$", r"\$"), ("^", r"\^{}"), ("~", r"\~{}")]:
         s = s.replace(ch, rep)
+    s = s.replace(_BS, r"\textbackslash{}")
     return s
 
 
@@ -1766,9 +1785,15 @@ def get_available_models() -> list:
 # エージェントループ
 # ======================================================================
 
-def run_agent_loop(messages: list, model: str):
+def run_agent_loop(messages: list, model: str, max_steps: int = 30):
     """ツール呼び出しを含むエージェントループを実行"""
+    steps = 0
     while True:
+        if steps >= max_steps:
+            print(f"\n{c(ui('agent_limit', max_steps), YELLOW)}")
+            break
+        steps += 1
+
         print(f"\n{c('🤖 AI', CYAN + BOLD)}: ", end="", flush=True)
 
         response = call_ollama(messages, model, tools=TOOLS)
@@ -1800,9 +1825,8 @@ def run_agent_loop(messages: list, model: str):
                     "content": result
                 })
 
-            # tool_calls を assistant メッセージに追加
-            if response["tool_calls"]:
-                assistant_msg["tool_calls"] = response["tool_calls"]
+            # tool_calls を assistant メッセージに追加（重複チェック不要 — 外側の if で確認済み）
+            assistant_msg["tool_calls"] = response["tool_calls"]
 
             messages.append(assistant_msg)
             messages.extend(tool_results)
