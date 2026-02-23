@@ -24,33 +24,44 @@ if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
     echo -e "${YELLOW}Ollama が起動していません。自動起動を試みます...${RESET}"
 
     if command -v ollama &>/dev/null; then
-        # Linux: システム level systemd → ユーザー level → 直接起動 の順で試みる
+        # Linux: systemctl は timeout 付きで試みる（非 systemd 環境でのハング防止）
         OS_INNER="$(uname -s)"
+        STARTED_BY_SYSTEMD=false
         if [[ "$OS_INNER" == "Linux" ]] && command -v systemctl &>/dev/null; then
-            if sudo systemctl start ollama 2>/dev/null; then
+            if timeout 5 sudo systemctl start ollama 2>/dev/null; then
                 echo -e "${CYAN}systemd (system) で Ollama を起動しました${RESET}"
-            elif systemctl --user start ollama 2>/dev/null; then
+                STARTED_BY_SYSTEMD=true
+            elif timeout 5 systemctl --user start ollama 2>/dev/null; then
                 echo -e "${CYAN}systemd (user) で Ollama を起動しました${RESET}"
-            else
-                nohup ollama serve > /tmp/ollama.log 2>&1 &
-                echo -e "${CYAN}Ollama をバックグラウンドで起動しました${RESET}"
+                STARTED_BY_SYSTEMD=true
             fi
-        else
+        fi
+        if [[ "$STARTED_BY_SYSTEMD" == "false" ]]; then
             nohup ollama serve > /tmp/ollama.log 2>&1 &
-            echo -e "${CYAN}Ollama をバックグラウンドで起動しました${RESET}"
+            OLLAMA_BG_PID=$!
+            echo -e "${CYAN}Ollama をバックグラウンドで起動しました (PID: $OLLAMA_BG_PID)${RESET}"
         fi
 
-        # 起動待機（最大 30 秒）
-        for i in {1..30}; do
+        # 起動待機（最大 60 秒）
+        for i in {1..60}; do
             sleep 1
             if curl -s http://localhost:11434/api/tags &>/dev/null; then
-                echo -e "${GREEN}✅ Ollama 起動確認${RESET}"
+                echo -e "${GREEN}✅ Ollama 起動確認（${i} 秒）${RESET}"
                 break
             fi
-            if [[ $i -eq 30 ]]; then
-                echo -e "${RED}❌ Ollama の起動に失敗しました。${RESET}"
+            if [[ -n "${OLLAMA_BG_PID:-}" ]] && ! kill -0 "$OLLAMA_BG_PID" 2>/dev/null; then
+                echo -e "${RED}❌ Ollama プロセスがクラッシュしました。${RESET}"
+                cat /tmp/ollama.log 2>/dev/null | tail -20
+                exit 1
+            fi
+            if [[ $i -eq 60 ]]; then
+                echo -e "${RED}❌ Ollama の起動に失敗しました（60 秒タイムアウト）。${RESET}"
+                echo "   ログ: $(cat /tmp/ollama.log 2>/dev/null | tail -5)"
                 echo "   手動で 'ollama serve' を別ターミナルで実行してから再試行してください。"
                 exit 1
+            fi
+            if (( i % 10 == 0 )); then
+                echo "   待機中... ${i}/60 秒"
             fi
         done
     else

@@ -80,29 +80,49 @@ else
         # macOS: バックグラウンドで起動
         nohup ollama serve > /tmp/ollama.log 2>&1 &
     else
-        # Linux: システム level systemd → ユーザー level → 直接起動 の順で試みる
-        if command -v systemctl &>/dev/null && systemctl is-active --quiet ollama 2>/dev/null; then
-            : # すでにシステム systemd で動いている
-        elif command -v systemctl &>/dev/null && sudo systemctl start ollama 2>/dev/null; then
-            success "systemd (system) で Ollama を起動しました"
-        elif command -v systemctl &>/dev/null && systemctl --user start ollama 2>/dev/null; then
-            success "systemd (user) で Ollama を起動しました"
-        else
+        # Linux: systemctl は timeout 付きで試みる（非 systemd 環境でのハング防止）
+        STARTED_BY_SYSTEMD=false
+        if command -v systemctl &>/dev/null; then
+            if timeout 5 systemctl is-active --quiet ollama 2>/dev/null; then
+                STARTED_BY_SYSTEMD=true  # すでにシステム systemd で動いている
+            elif timeout 5 sudo systemctl start ollama 2>/dev/null; then
+                success "systemd (system) で Ollama を起動しました"
+                STARTED_BY_SYSTEMD=true
+            elif timeout 5 systemctl --user start ollama 2>/dev/null; then
+                success "systemd (user) で Ollama を起動しました"
+                STARTED_BY_SYSTEMD=true
+            fi
+        fi
+        if [[ "$STARTED_BY_SYSTEMD" == "false" ]]; then
             nohup ollama serve > /tmp/ollama.log 2>&1 &
+            OLLAMA_BG_PID=$!
+            info "Ollama をバックグラウンドで起動しました (PID: $OLLAMA_BG_PID)"
         fi
     fi
 
-    # 起動確認（最大 30 秒待機）
-    info "Ollama の起動を待っています..."
-    for i in {1..30}; do
+    # 起動確認（最大 60 秒待機、Codespaces のコールドスタートに対応）
+    info "Ollama の起動を待っています（最大 60 秒）..."
+    for i in {1..60}; do
         if curl -s http://localhost:11434/api/tags &>/dev/null; then
-            success "Ollama サービスが起動しました"
+            success "Ollama サービスが起動しました（${i} 秒）"
             break
         fi
-        if [[ $i -eq 30 ]]; then
-            warn "Ollama の起動確認がタイムアウトしました。"
+        # バックグラウンドプロセスがクラッシュしていたら早期終了
+        if [[ -n "${OLLAMA_BG_PID:-}" ]] && ! kill -0 "$OLLAMA_BG_PID" 2>/dev/null; then
+            warn "Ollama プロセスがクラッシュしました。ログ:"
+            cat /tmp/ollama.log 2>/dev/null | tail -20
+            exit 1
+        fi
+        if [[ $i -eq 60 ]]; then
+            warn "Ollama の起動確認がタイムアウトしました（60 秒）。"
+            warn "ログ (/tmp/ollama.log):"
+            cat /tmp/ollama.log 2>/dev/null | tail -20
             warn "別ターミナルで 'ollama serve' を実行してから setup.sh を再実行してください。"
             exit 1
+        fi
+        # 進捗表示（10 秒ごと）
+        if (( i % 10 == 0 )); then
+            info "  待機中... ${i}/60 秒"
         fi
         sleep 1
     done
