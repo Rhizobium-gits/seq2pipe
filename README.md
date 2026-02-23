@@ -274,6 +274,15 @@ QIIME2_AI_MODEL=llama3.2:3b ./launch.sh
 
 ---
 
+## Contributors
+
+| | Name | Role |
+|---|---|---|
+| [@Rhizobium-gits](https://github.com/Rhizobium-gits) | Rhizobium-gits | Author |
+| [@claude-bot](https://github.com/claude-bot) | Claude (Anthropic) | Co-author — design & implementation |
+
+---
+
 ## ライセンス
 
 - このツール: MIT License
