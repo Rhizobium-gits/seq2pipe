@@ -50,15 +50,30 @@
 
 ## クイックスタート
 
-### macOS / Linux
+### macOS
 
 ```bash
 git clone https://github.com/Rhizobium-gits/seq2pipe.git
 cd seq2pipe
 chmod +x setup.sh launch.sh
-./setup.sh      # 初回のみ
+./setup.sh      # 初回のみ（Ollama + Docker Desktop を確認）
 ./launch.sh     # 起動
 ```
+
+### Linux（Ubuntu / Debian / Fedora / Arch など）
+
+```bash
+git clone https://github.com/Rhizobium-gits/seq2pipe.git
+cd seq2pipe
+chmod +x setup.sh launch.sh
+./setup.sh      # 初回のみ（Ollama + Docker Engine を自動インストール）
+./launch.sh     # 起動
+```
+
+> **Linux の注意点:**
+> - `setup.sh` が Docker Engine を `curl -fsSL https://get.docker.com | sudo sh` でインストールします
+> - インストール後、`newgrp docker` または再ログインが必要です
+> - systemd がある場合は `sudo systemctl enable --now docker` で自動起動されます
 
 ### Windows
 
@@ -189,6 +204,22 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+### Linux: docker コマンドが permission denied
+
+```bash
+# ユーザーを docker グループに追加してから再ログイン
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+### Linux: Docker サービスが起動していない
+
+```bash
+sudo systemctl start docker
+# 自動起動設定
+sudo systemctl enable docker
 ```
 
 ### classify-sklearn でメモリエラー

@@ -157,38 +157,73 @@ if [[ -n "$MODEL" ]]; then
 fi
 
 # ============================================================
-# STEP 5: Docker Desktop の確認
+# STEP 5: Docker の確認・インストール（Linux のみ自動インストール）
 # ============================================================
 echo ""
-info "Docker Desktop の状態を確認します..."
+info "Docker の状態を確認します..."
 
-DOCKER_PATH="/Applications/Docker.app/Contents/Resources/bin/docker"
-if [[ -f "$DOCKER_PATH" ]] || command -v docker &>/dev/null; then
-    DOCKER_CMD="${DOCKER_PATH:-docker}"
+# プラットフォーム別 Docker コマンドの解決
+if [[ "$OS" == "Darwin" ]]; then
+    DOCKER_CMD="/Applications/Docker.app/Contents/Resources/bin/docker"
+    [[ ! -f "$DOCKER_CMD" ]] && DOCKER_CMD="$(command -v docker || echo '')"
+else
+    DOCKER_CMD="$(command -v docker || echo '')"
+fi
+
+if [[ -n "$DOCKER_CMD" ]] && command -v "$DOCKER_CMD" &>/dev/null; then
     if "$DOCKER_CMD" info &>/dev/null 2>&1; then
-        success "Docker Desktop: 起動中"
+        success "Docker: 起動中"
         "$DOCKER_CMD" --version
     else
-        warn "Docker Desktop がインストールされていますが、起動していません。"
-        warn "Docker Desktop を起動してから QIIME2 解析を開始してください。"
+        warn "Docker がインストールされていますが、起動していません。"
+        if [[ "$OS" == "Darwin" ]]; then
+            warn "Docker Desktop を起動してから QIIME2 解析を開始してください。"
+        elif [[ "$OS" == "Linux" ]]; then
+            warn "Docker サービスを起動します..."
+            if command -v systemctl &>/dev/null; then
+                sudo systemctl start docker 2>/dev/null && \
+                    success "Docker サービスを起動しました" || \
+                    warn "sudo systemctl start docker を手動で実行してください"
+            else
+                sudo service docker start 2>/dev/null || \
+                    warn "sudo service docker start を手動で実行してください"
+            fi
+        fi
     fi
 else
-    warn "Docker Desktop が見つかりません。"
-    echo ""
-    echo "  QIIME2 の実行には Docker Desktop が必要です。"
-    echo "  以下からダウンロードしてインストールしてください:"
-    echo "  → https://www.docker.com/products/docker-desktop/"
-    echo ""
-    echo "  ※ Apple Silicon Mac の場合は「Apple Chip」版を選択してください"
+    if [[ "$OS" == "Darwin" ]]; then
+        warn "Docker Desktop が見つかりません。"
+        echo ""
+        echo "  QIIME2 の実行には Docker Desktop が必要です:"
+        echo "  → https://www.docker.com/products/docker-desktop/"
+        echo "  ※ Apple Silicon Mac の場合は「Apple Chip」版を選択してください"
+    elif [[ "$OS" == "Linux" ]]; then
+        warn "Docker が見つかりません。Docker Engine をインストールします..."
+        echo ""
+        read -rp "Docker Engine を自動インストールしますか? (sudo 権限が必要) [y/N]: " INSTALL_DOCKER
+        if [[ "${INSTALL_DOCKER,,}" == "y" ]]; then
+            info "Docker 公式スクリプトでインストールします..."
+            curl -fsSL https://get.docker.com | sudo sh
+            # 現ユーザーを docker グループに追加（sudo なしで使えるように）
+            sudo usermod -aG docker "$USER"
+            # Docker サービスを起動・自動起動設定
+            if command -v systemctl &>/dev/null; then
+                sudo systemctl enable --now docker
+            fi
+            success "Docker Engine のインストールが完了しました"
+            warn "グループ変更を反映するため、一度ログアウト／再ログインしてください。"
+            warn "または 'newgrp docker' を実行してから launch.sh を再起動してください。"
+        else
+            echo "  インストール手順: https://docs.docker.com/engine/install/"
+        fi
+    fi
+    DOCKER_CMD=""
 fi
 
 # ============================================================
 # STEP 6: QIIME2 Docker イメージの確認（オプション）
 # ============================================================
-DOCKER_CMD="/Applications/Docker.app/Contents/Resources/bin/docker"
-[[ ! -f "$DOCKER_CMD" ]] && DOCKER_CMD="docker"
-
-if command -v "$DOCKER_CMD" &>/dev/null && "$DOCKER_CMD" info &>/dev/null 2>&1; then
+if [[ -n "$DOCKER_CMD" ]] && command -v "$DOCKER_CMD" &>/dev/null && "$DOCKER_CMD" info &>/dev/null 2>&1; then
     echo ""
     read -rp "QIIME2 Docker イメージ (quay.io/qiime2/amplicon:2026.1) を今すぐプルしますか? [y/N]: " PULL_QIIME2
     if [[ "${PULL_QIIME2,,}" == "y" ]]; then
@@ -210,7 +245,13 @@ echo "╚═══════════════════════�
 echo ""
 echo "次のステップ:"
 echo ""
-echo "  1. Docker Desktop を起動してください（アプリケーションから）"
+if [[ "$OS" == "Darwin" ]]; then
+    echo "  1. Docker Desktop を起動してください（アプリケーションから）"
+elif [[ "$OS" == "Linux" ]]; then
+    echo "  1. Docker が起動していない場合: sudo systemctl start docker"
+else
+    echo "  1. Docker を起動してください"
+fi
 echo ""
 echo "  2. Ollama を起動してください（既に起動中なら不要）:"
 echo -e "     ${CYAN}ollama serve${RESET}"

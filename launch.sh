@@ -68,15 +68,20 @@ if [[ -z "$MODELS" ]]; then
 fi
 
 # ============================================================
-# Docker Desktop 確認（警告のみ、必須ではない）
+# Docker 確認（警告のみ、必須ではない）
 # ============================================================
-DOCKER_PATH="/Applications/Docker.app/Contents/Resources/bin/docker"
-[[ ! -f "$DOCKER_PATH" ]] && DOCKER_PATH="docker"
+OS="$(uname -s)"
+if [[ "$OS" == "Darwin" ]]; then
+    DOCKER_CMD="/Applications/Docker.app/Contents/Resources/bin/docker"
+    [[ ! -f "$DOCKER_CMD" ]] && DOCKER_CMD="$(command -v docker || echo '')"
+else
+    DOCKER_CMD="$(command -v docker || echo '')"
+fi
 
-if command -v "$DOCKER_PATH" &>/dev/null; then
-    if ! "$DOCKER_PATH" info &>/dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️  Docker Desktop が起動していません。${RESET}"
-        echo "   QIIME2 コマンドを実行する場合は Docker Desktop を起動してください。"
+if [[ -n "$DOCKER_CMD" ]] && command -v "$DOCKER_CMD" &>/dev/null; then
+    if ! "$DOCKER_CMD" info &>/dev/null 2>&1; then
+        echo -e "${YELLOW}Docker が起動していません。${RESET}"
+        echo "   QIIME2 コマンドを実行する場合は Docker を起動してください。"
         echo "   （会話・スクリプト生成のみなら起動不要です）"
         echo ""
     fi
@@ -85,7 +90,7 @@ fi
 # ============================================================
 # エージェント起動
 # ============================================================
-echo -e "${CYAN}${BOLD}🧬 seq2pipe を起動しています...${RESET}"
+echo -e "${CYAN}${BOLD}seq2pipe を起動しています...${RESET}"
 echo -e "${CYAN}   モデル: ${QIIME2_AI_MODEL}${RESET}"
 echo ""
 
