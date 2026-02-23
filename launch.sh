@@ -24,18 +24,30 @@ if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
     echo -e "${YELLOW}Ollama が起動していません。自動起動を試みます...${RESET}"
 
     if command -v ollama &>/dev/null; then
-        nohup ollama serve > /tmp/ollama.log 2>&1 &
-        OLLAMA_PID=$!
-        echo -e "${CYAN}Ollama を起動しました (PID: $OLLAMA_PID)${RESET}"
+        # Linux: システム level systemd → ユーザー level → 直接起動 の順で試みる
+        OS_INNER="$(uname -s)"
+        if [[ "$OS_INNER" == "Linux" ]] && command -v systemctl &>/dev/null; then
+            if sudo systemctl start ollama 2>/dev/null; then
+                echo -e "${CYAN}systemd (system) で Ollama を起動しました${RESET}"
+            elif systemctl --user start ollama 2>/dev/null; then
+                echo -e "${CYAN}systemd (user) で Ollama を起動しました${RESET}"
+            else
+                nohup ollama serve > /tmp/ollama.log 2>&1 &
+                echo -e "${CYAN}Ollama をバックグラウンドで起動しました${RESET}"
+            fi
+        else
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+            echo -e "${CYAN}Ollama をバックグラウンドで起動しました${RESET}"
+        fi
 
-        # 起動待機（最大 20 秒）
-        for i in {1..20}; do
+        # 起動待機（最大 30 秒）
+        for i in {1..30}; do
             sleep 1
             if curl -s http://localhost:11434/api/tags &>/dev/null; then
                 echo -e "${GREEN}✅ Ollama 起動確認${RESET}"
                 break
             fi
-            if [[ $i -eq 20 ]]; then
+            if [[ $i -eq 30 ]]; then
                 echo -e "${RED}❌ Ollama の起動に失敗しました。${RESET}"
                 echo "   手動で 'ollama serve' を別ターミナルで実行してから再試行してください。"
                 exit 1
