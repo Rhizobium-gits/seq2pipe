@@ -76,31 +76,25 @@ if curl -s http://localhost:11434/api/tags &>/dev/null; then
     success "Ollama サービス: 既に起動中"
 else
     info "Ollama サービスを起動します..."
+    OLLAMA_BG_PID=""
     if [[ "$OS" == "Darwin" ]]; then
-        # macOS: バックグラウンドで起動
+        # macOS: バックグラウンドで直接起動
         nohup ollama serve > /tmp/ollama.log 2>&1 &
+        OLLAMA_BG_PID=$!
+        info "Ollama をバックグラウンドで起動しました (PID: $OLLAMA_BG_PID)"
     else
-        # Linux: systemctl は timeout 付きで試みる（非 systemd 環境でのハング防止）
-        STARTED_BY_SYSTEMD=false
+        # Linux: service マネージャーを試みるが exit code は信頼しない
+        # systemd が動いていれば起動される。動いていなくても後段の nohup で補完する
         if command -v systemctl &>/dev/null; then
-            if timeout 5 systemctl is-active --quiet ollama 2>/dev/null; then
-                STARTED_BY_SYSTEMD=true  # すでにシステム systemd で動いている
-            elif timeout 5 sudo systemctl start ollama 2>/dev/null; then
-                success "systemd (system) で Ollama を起動しました"
-                STARTED_BY_SYSTEMD=true
-            elif timeout 5 systemctl --user start ollama 2>/dev/null; then
-                success "systemd (user) で Ollama を起動しました"
-                STARTED_BY_SYSTEMD=true
-            fi
+            timeout 5 systemctl is-active --quiet ollama 2>/dev/null || \
+            timeout 5 sudo systemctl start ollama 2>/dev/null || \
+            timeout 5 systemctl --user start ollama 2>/dev/null || true
         fi
-        # systemd が使えない環境（Codespaces 等）では service コマンドを試みる
-        if [[ "$STARTED_BY_SYSTEMD" == "false" ]] && command -v service &>/dev/null; then
-            if timeout 5 service ollama start 2>/dev/null; then
-                success "service コマンドで Ollama を起動しました"
-                STARTED_BY_SYSTEMD=true
-            fi
+        if command -v service &>/dev/null; then
+            timeout 5 service ollama start 2>/dev/null || true
         fi
-        if [[ "$STARTED_BY_SYSTEMD" == "false" ]]; then
+        # API が応答しない場合は必ず nohup で直接起動（service/systemctl の exit code 不問）
+        if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
             nohup ollama serve > /tmp/ollama.log 2>&1 &
             OLLAMA_BG_PID=$!
             info "Ollama をバックグラウンドで起動しました (PID: $OLLAMA_BG_PID)"

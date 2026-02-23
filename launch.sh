@@ -26,24 +26,19 @@ if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
     if command -v ollama &>/dev/null; then
         # Linux: systemctl は timeout 付きで試みる（非 systemd 環境でのハング防止）
         OS_INNER="$(uname -s)"
-        STARTED_BY_SYSTEMD=false
-        if [[ "$OS_INNER" == "Linux" ]] && command -v systemctl &>/dev/null; then
-            if timeout 5 sudo systemctl start ollama 2>/dev/null; then
-                echo -e "${CYAN}systemd (system) で Ollama を起動しました${RESET}"
-                STARTED_BY_SYSTEMD=true
-            elif timeout 5 systemctl --user start ollama 2>/dev/null; then
-                echo -e "${CYAN}systemd (user) で Ollama を起動しました${RESET}"
-                STARTED_BY_SYSTEMD=true
+        OLLAMA_BG_PID=""
+        # Linux: service マネージャーを試みるが exit code は信頼しない
+        if [[ "$OS_INNER" == "Linux" ]]; then
+            if command -v systemctl &>/dev/null; then
+                timeout 5 sudo systemctl start ollama 2>/dev/null || \
+                timeout 5 systemctl --user start ollama 2>/dev/null || true
+            fi
+            if command -v service &>/dev/null; then
+                timeout 5 service ollama start 2>/dev/null || true
             fi
         fi
-        # systemd が使えない環境（Codespaces 等）では service コマンドを試みる
-        if [[ "$STARTED_BY_SYSTEMD" == "false" ]] && [[ "$OS_INNER" == "Linux" ]] && command -v service &>/dev/null; then
-            if timeout 5 service ollama start 2>/dev/null; then
-                echo -e "${CYAN}service コマンドで Ollama を起動しました${RESET}"
-                STARTED_BY_SYSTEMD=true
-            fi
-        fi
-        if [[ "$STARTED_BY_SYSTEMD" == "false" ]]; then
+        # API が応答しない場合は必ず nohup で直接起動（service/systemctl の exit code 不問）
+        if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
             nohup ollama serve > /tmp/ollama.log 2>&1 &
             OLLAMA_BG_PID=$!
             echo -e "${CYAN}Ollama をバックグラウンドで起動しました (PID: $OLLAMA_BG_PID)${RESET}"
