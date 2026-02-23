@@ -1033,8 +1033,7 @@ def tool_check_system() -> str:
     results.append(f"✅ Python: {sys.version.split()[0]}")
 
     # ディスク容量
-    import shutil as _shutil
-    usage = _shutil.disk_usage(Path.home())
+    usage = shutil.disk_usage(Path.home())
     free_gb = usage.free / 1024**3
     results.append(f"💾 ディスク空き容量: {free_gb:.1f} GB {'✅' if free_gb > 30 else '⚠️  (推奨: 30GB 以上)'}")
 
@@ -1061,6 +1060,8 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
                             paired_end: bool = True,
                             container_data_dir: str = "/data/output") -> str:
     """FASTQファイルからマニフェストを自動生成"""
+    # 末尾スラッシュを除去してパスの二重スラッシュを防ぐ
+    container_data_dir = container_data_dir.rstrip("/")
     d = Path(fastq_dir).expanduser()
     if not d.exists():
         return f"エラー: '{fastq_dir}' が存在しません。"
@@ -1176,6 +1177,8 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
         if count > 1:
             return (f"エラー: 指定した文字列が {count} 箇所で見つかりました。"
                     f"より一意に特定できる文字列に変更してください。")
+        if old_str == new_str:
+            return "⚠️  old_str と new_str が同一です。編集は実行されませんでした。"
         new_content = content.replace(old_str, new_str, 1)
         with open(p, "w", encoding="utf-8") as f:
             f.write(new_content)
@@ -1226,9 +1229,9 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
             return f"✅ 成功（終了コード 0）\n" + "\n".join(output_parts)
         else:
             return f"⚠️  終了コード {proc.returncode}\n" + "\n".join(output_parts)
-    except subprocess.TimeoutExpired as e:
-        e.process.kill() if e.process else None
-        return "⏱️  タイムアウト（1時間を超えました）。コマンドを強制終了しました。"
+    except subprocess.TimeoutExpired:
+        # subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
+        return "⏱️  タイムアウト（1時間を超えました）。コマンドは強制終了されました。"
     except Exception as e:
         return f"❌ 実行エラー: {e}"
 
@@ -1266,7 +1269,7 @@ def tool_set_plot_config(style: str = None, palette: str = None,
             PLOT_CONFIG["format"] = fmt
             changed.append(f"format: {fmt}")
         else:
-            changed.append(f"format: 無効な値 '{fig_format}' (pdf/png/svg のいずれかを指定)")
+            return f"❌ 無効な format: '{fig_format}'（pdf / png / svg のいずれかを指定してください）"
     if changed:
         lines = "\n".join(f"  {item}" for item in changed)
         return f"✅ プロット設定を更新しました:\n{lines}"
@@ -1390,9 +1393,9 @@ except ImportError as _e:
 
         return "\n".join(parts)
 
-    except subprocess.TimeoutExpired as e:
-        e.process.kill() if e.process else None
-        return "⏱️  タイムアウト（5分を超えました）。Pythonプロセスを強制終了しました。"
+    except subprocess.TimeoutExpired:
+        # subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
+        return "⏱️  タイムアウト（5分を超えました）。Pythonプロセスは強制終了されました。"
     except Exception as e:
         return f"❌ 実行エラー: {e}"
     finally:
