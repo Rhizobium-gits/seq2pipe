@@ -32,7 +32,8 @@
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
 - QIIME2 の出力を **Python（pandas / scipy / scikit-learn / matplotlib）で高度解析**
 - 解析図をすべて **PDF として自動保存**（view.qiime2.org 不要）
-- 解析終了後に **日本語・英語の TeX / PDF レポートを自動生成**
+- **自律探索モード**: α多様性・β多様性・分類組成・差次解析・機械学習を AI が自動で順番に実行
+- 解析終了後に **日本語・英語の TeX / PDF レポートを自動生成**（`build_report_tex` が ANALYSIS_LOG から自動構築）
 
 すべて **あなたのマシン上** で完結。クラウドや有料 API は一切使いません。
 
@@ -133,7 +134,51 @@ AI: V3-V4 パイプラインを生成します。
     -> manifest.tsv, run_pipeline.sh, setup_classifier.sh, ANALYSIS_README.md
 ```
 
-### Python ダウンストリーム解析（QIIME2 実行後）
+### 自律探索モード（推奨）
+
+QIIME2 解析後、AI が自動で 5 フェーズの探索を実行します。ユーザーは確認不要です。
+
+```
+あなた > /data/results/ を使って全ての基本解析を自動で探索して
+
+AI: 自律探索モードを開始します。5 フェーズを順番に実行します。
+
+[Phase 1: α多様性] -----
+[ツール実行: execute_python | subfolder=alpha_diversity]
+  -> Shannon / Simpson / Chao1 指数を計算
+  -> Mann-Whitney U / Kruskal-Wallis 検定
+  -> ~/seq2pipe_results/20260223/figures/alpha_diversity/ に保存
+
+[Phase 2: β多様性] -----
+[ツール実行: execute_python | subfolder=beta_diversity]
+  -> Bray-Curtis PCoA + 信頼楕円
+  -> PERMANOVA (R²、p 値)
+  -> ~/seq2pipe_results/20260223/figures/beta_diversity/ に保存
+
+[Phase 3: 分類組成] -----
+[ツール実行: execute_python | subfolder=taxonomy]
+  -> 門・属レベルの stacked bar chart + heatmap
+  -> ~/seq2pipe_results/20260223/figures/taxonomy/ に保存
+
+[Phase 4: 差次存在量] -----
+[ツール実行: execute_python | subfolder=differential_abundance]
+  -> 全 ASV に Mann-Whitney U、Benjamini-Hochberg 補正
+  -> volcano plot（FDR < 0.05 を赤でハイライト）
+  -> ~/seq2pipe_results/20260223/figures/differential_abundance/ に保存
+
+[Phase 5: 機械学習] -----
+[ツール実行: execute_python | subfolder=machine_learning]
+  -> Random Forest 5-fold CV (AUC, accuracy)
+  -> 重要特徴量 top 20 の horizontal bar chart
+  -> ~/seq2pipe_results/20260223/figures/machine_learning/ に保存
+
+[ツール実行: build_report_tex]
+  -> ANALYSIS_LOG から TeX を自動構築（LLM 不使用）
+  -> report_ja.pdf / report_en.pdf を生成
+  -> ~/seq2pipe_results/20260223/report/ に保存
+```
+
+### Python ダウンストリーム解析（手動）
 
 QIIME2 の結果を受け取ったら、そのまま Python 解析を続けられます。
 
@@ -157,7 +202,8 @@ AI: Shannon 多様性の violin plot を生成しました。
 
 あなた > 全解析のレポートを日本語と英語で PDF 出力して
 
-[ツール実行: compile_report]
+[ツール実行: build_report_tex]
+  -> ANALYSIS_LOG から TeX を自動構築
   -> report_ja.pdf / report_en.pdf を生成
 ```
 
@@ -186,15 +232,24 @@ AI: Shannon 多様性の violin plot を生成しました。
 │   └── ancombc-results.qza   <- 差次解析（オプション）
 └── ANALYSIS_README.md        <- このデータ専用の操作ガイド
 
-~/seq2pipe_results/<タイムスタンプ>/
+~/seq2pipe_results/<タイムスタンプ>/        <- セッションごとに自動作成
 ├── figures/
-│   ├── shannon_violin.pdf    <- Alpha 多様性
-│   ├── pcoa_bray_curtis.pdf  <- Beta 多様性 PCoA
-│   ├── taxonomy_heatmap.pdf  <- 分類組成ヒートマップ
-│   └── ...
+│   ├── alpha_diversity/      <- Phase 1: α多様性（Shannon, Simpson, Chao1）
+│   │   ├── alpha_boxplot.pdf
+│   │   └── alpha_stats.pdf
+│   ├── beta_diversity/       <- Phase 2: β多様性（PCoA, PERMANOVA）
+│   │   └── pcoa_bray_curtis.pdf
+│   ├── taxonomy/             <- Phase 3: 分類組成（bar chart, heatmap）
+│   │   ├── taxonomy_barplot.pdf
+│   │   └── taxonomy_heatmap.pdf
+│   ├── differential_abundance/ <- Phase 4: 差次解析（volcano plot）
+│   │   └── volcano_plot.pdf
+│   ├── machine_learning/     <- Phase 5: 機械学習（RF, AUC, feature importance）
+│   │   └── feature_importance.pdf
+│   └── <その他手動解析の図>
 └── report/
-    ├── report_ja.tex / report_ja.pdf   <- 日本語レポート
-    └── report_en.tex / report_en.pdf   <- 英語レポート
+    ├── report_ja.tex / report_ja.pdf   <- 日本語レポート（自動生成）
+    └── report_en.tex / report_en.pdf   <- 英語レポート（自動生成）
 ```
 
 ### 解析結果の確認
@@ -220,15 +275,15 @@ AI: Shannon 多様性の violin plot を生成しました。
 | 差次解析 ANCOM-BC | `qiime composition ancombc` |
 
 ### Python ダウンストリーム解析
-| 解析 | パッケージ |
-|---|---|
-| α 多様性可視化・統計検定 | pandas, scipy, seaborn |
-| β 多様性 PCoA / NMDS | pandas, matplotlib |
-| 分類組成ヒートマップ | pandas, seaborn |
-| ランダムフォレスト群判別 | scikit-learn |
-| 差次解析補完（Mann-Whitney / Kruskal-Wallis） | scipy, statsmodels |
-| co-occurrence ネットワーク | networkx, scipy |
-| レポート自動生成 | tectonic（TeX → PDF） |
+| フェーズ | 解析 | パッケージ |
+|---|---|---|
+| Phase 1 (alpha_diversity) | Shannon / Simpson / Chao1 + 統計検定 | pandas, scipy, seaborn |
+| Phase 2 (beta_diversity) | Bray-Curtis PCoA + PERMANOVA | pandas, matplotlib, scipy |
+| Phase 3 (taxonomy) | 分類組成 stacked bar + heatmap（門・属） | pandas, seaborn |
+| Phase 4 (differential_abundance) | 全 ASV 差次解析 + BH 補正 + volcano plot | scipy, statsmodels |
+| Phase 5 (machine_learning) | Random Forest 5-fold CV + feature importance | scikit-learn |
+| 手動 | co-occurrence ネットワーク | networkx, scipy |
+| レポート | ANALYSIS_LOG → TeX → PDF 自動構築 | tectonic（TeX → PDF） |
 
 ---
 
@@ -268,6 +323,13 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
   |       |
   |       v
   |     [ LLM: qwen2.5-coder など ]
+  |         |
+  |         v（自律探索モード）
+  |       Phase 1: alpha_diversity
+  |       Phase 2: beta_diversity
+  |       Phase 3: taxonomy
+  |       Phase 4: differential_abundance
+  |       Phase 5: machine_learning
   |
   +---> ツール実行
           |
@@ -282,11 +344,16 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
           +-- set_plot_config    (図スタイル・色・解像度・形式の設定)
           +-- execute_python     (pandas/scipy/sklearn/matplotlib で解析実行)
           |     |- PLOT_CONFIG 自動注入（FIGURE_DIR, FIGURE_FORMAT 等）
+          |     |- subfolder パラメータでフェーズ別ディレクトリに保存
           |     |- 生成図を PDF で自動保存
-          |     `- ANALYSIS_LOG にステップを記録
-          +-- compile_report     (TeX → PDF レポート生成)
-                |- 日本語版（xeCJK + Hiragino フォント）
-                `- 英語版（標準 LaTeX）
+          |     `- ANALYSIS_LOG にステップ・図・統計を記録
+          +-- build_report_tex   (ANALYSIS_LOG から TeX/PDF を自動構築)
+          |     |- Python で TeX を完全生成（LLM 不使用・高速）
+          |     |- フェーズ別セクション（α多様性 / β多様性 / ...）
+          |     |- tectonic でコンパイル
+          |     |- 日本語版（xeCJK + Hiragino フォント）
+          |     `- 英語版（標準 LaTeX）
+          +-- compile_report     (旧レポート生成：LLM が TeX を書く方式)
 ```
 
 ---
@@ -462,7 +529,8 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - Writes ready-to-run `.sh` / `.ps1` scripts
 - Runs **Python downstream analysis** (pandas / scipy / scikit-learn / matplotlib) on QIIME2 outputs
 - **Auto-saves all figures as PDF** — no need for view.qiime2.org
-- **Generates Japanese and English TeX / PDF reports** at the end of the session
+- **Autonomous exploration mode**: AI automatically runs all 5 analysis phases (alpha diversity → beta diversity → taxonomy → differential abundance → machine learning) without user confirmation
+- **Auto-generates Japanese and English TeX / PDF reports** (`build_report_tex` programmatically builds TeX from ANALYSIS_LOG — no LLM context needed)
 
 Everything runs **on your machine**. No cloud, no paid API, no internet required during analysis.
 
@@ -561,7 +629,51 @@ AI: Generating V3-V4 pipeline.
     -> manifest.tsv, run_pipeline.sh, setup_classifier.sh, ANALYSIS_README.md
 ```
 
-### Python downstream analysis (after QIIME2)
+### Autonomous exploration mode (recommended)
+
+After QIIME2, the AI automatically runs all 5 analysis phases without prompting.
+
+```
+You > Use /data/results/ and run all basic analyses automatically
+
+AI: Starting autonomous exploration mode. Running 5 phases in sequence.
+
+[Phase 1: Alpha diversity] -----
+[Tool: execute_python | subfolder=alpha_diversity]
+  -> Compute Shannon / Simpson / Chao1
+  -> Mann-Whitney U / Kruskal-Wallis test
+  -> Saved: ~/seq2pipe_results/20260223/figures/alpha_diversity/
+
+[Phase 2: Beta diversity] -----
+[Tool: execute_python | subfolder=beta_diversity]
+  -> Bray-Curtis PCoA + confidence ellipses
+  -> PERMANOVA (R², p-value)
+  -> Saved: ~/seq2pipe_results/20260223/figures/beta_diversity/
+
+[Phase 3: Taxonomy] -----
+[Tool: execute_python | subfolder=taxonomy]
+  -> Stacked bar chart + heatmap at phylum / genus level
+  -> Saved: ~/seq2pipe_results/20260223/figures/taxonomy/
+
+[Phase 4: Differential abundance] -----
+[Tool: execute_python | subfolder=differential_abundance]
+  -> Mann-Whitney U on all ASVs, Benjamini-Hochberg FDR
+  -> Volcano plot (FDR < 0.05 highlighted in red)
+  -> Saved: ~/seq2pipe_results/20260223/figures/differential_abundance/
+
+[Phase 5: Machine learning] -----
+[Tool: execute_python | subfolder=machine_learning]
+  -> Random Forest 5-fold CV (AUC, accuracy)
+  -> Top 20 feature importance bar chart
+  -> Saved: ~/seq2pipe_results/20260223/figures/machine_learning/
+
+[Tool: build_report_tex]
+  -> Build TeX from ANALYSIS_LOG (no LLM — pure Python, fast)
+  -> report_ja.pdf / report_en.pdf
+  -> Saved: ~/seq2pipe_results/20260223/report/
+```
+
+### Python downstream analysis (manual)
 
 ```
 You > Show Shannon diversity by group as a violin plot
@@ -577,7 +689,8 @@ AI: Shannon diversity violin plot saved.
 
 You > Generate a report in Japanese and English
 
-[Tool: compile_report]
+[Tool: build_report_tex]
+  -> Build TeX from ANALYSIS_LOG
   -> report_ja.pdf / report_en.pdf generated
 ```
 
@@ -604,15 +717,24 @@ You > Switch to publication quality — 300 DPI PNG
 │   └── ancombc-results.qza   <- Differential abundance (optional)
 └── ANALYSIS_README.md        <- Data-specific operation guide
 
-~/seq2pipe_results/<timestamp>/
+~/seq2pipe_results/<timestamp>/       <- auto-created per session
 ├── figures/
-│   ├── shannon_violin.pdf    <- Alpha diversity
-│   ├── pcoa_bray_curtis.pdf  <- Beta diversity PCoA
-│   ├── taxonomy_heatmap.pdf  <- Taxonomic composition
-│   └── ...
+│   ├── alpha_diversity/      <- Phase 1: Shannon, Simpson, Chao1
+│   │   ├── alpha_boxplot.pdf
+│   │   └── alpha_stats.pdf
+│   ├── beta_diversity/       <- Phase 2: PCoA, PERMANOVA
+│   │   └── pcoa_bray_curtis.pdf
+│   ├── taxonomy/             <- Phase 3: bar chart, heatmap
+│   │   ├── taxonomy_barplot.pdf
+│   │   └── taxonomy_heatmap.pdf
+│   ├── differential_abundance/ <- Phase 4: volcano plot
+│   │   └── volcano_plot.pdf
+│   ├── machine_learning/     <- Phase 5: RF, AUC, feature importance
+│   │   └── feature_importance.pdf
+│   └── <other manual analysis figures>
 └── report/
-    ├── report_ja.tex / report_ja.pdf   <- Japanese report
-    └── report_en.tex / report_en.pdf   <- English report
+    ├── report_ja.tex / report_ja.pdf   <- Japanese report (auto-generated)
+    └── report_en.tex / report_en.pdf   <- English report (auto-generated)
 ```
 
 ### Viewing results
@@ -638,15 +760,15 @@ You > Switch to publication quality — 300 DPI PNG
 | Differential abundance ANCOM-BC | `qiime composition ancombc` |
 
 ### Python downstream
-| Analysis | Packages |
-|---|---|
-| Alpha diversity visualization + stats | pandas, scipy, seaborn |
-| Beta diversity PCoA / NMDS | pandas, matplotlib |
-| Taxonomic composition heatmap | pandas, seaborn |
-| Random forest classifier | scikit-learn |
-| Differential analysis (Mann-Whitney / Kruskal-Wallis) | scipy, statsmodels |
-| Co-occurrence network | networkx, scipy |
-| Automated report generation | tectonic (TeX → PDF) |
+| Phase | Analysis | Packages |
+|---|---|---|
+| Phase 1 (alpha_diversity) | Shannon / Simpson / Chao1 + stats | pandas, scipy, seaborn |
+| Phase 2 (beta_diversity) | Bray-Curtis PCoA + PERMANOVA | pandas, matplotlib, scipy |
+| Phase 3 (taxonomy) | Stacked bar chart + heatmap (phylum/genus) | pandas, seaborn |
+| Phase 4 (differential_abundance) | All-ASV test + BH correction + volcano | scipy, statsmodels |
+| Phase 5 (machine_learning) | Random Forest 5-fold CV + feature importance | scikit-learn |
+| Manual | Co-occurrence network | networkx, scipy |
+| Report | ANALYSIS_LOG → TeX → PDF (pure Python, no LLM) | tectonic (TeX → PDF) |
 
 ---
 
@@ -686,6 +808,13 @@ You
   |       |
   |       v
   |     [ LLM: qwen2.5-coder etc. ]
+  |         |
+  |         v  (autonomous exploration mode)
+  |       Phase 1: alpha_diversity
+  |       Phase 2: beta_diversity
+  |       Phase 3: taxonomy
+  |       Phase 4: differential_abundance
+  |       Phase 5: machine_learning
   |
   +---> Tool execution
           |
@@ -700,11 +829,16 @@ You
           +-- set_plot_config    (style / palette / DPI / format)
           +-- execute_python     (pandas/scipy/sklearn/matplotlib analysis)
           |     |- auto-injects PLOT_CONFIG (FIGURE_DIR, FIGURE_FORMAT, etc.)
+          |     |- subfolder param → phase-organized directories
           |     |- saves figures as PDF by default
-          |     `- logs each step to ANALYSIS_LOG
-          +-- compile_report     (TeX → PDF report)
-                |- Japanese (xeCJK + Hiragino fonts)
-                `- English (standard LaTeX)
+          |     `- logs step / figures / stats to ANALYSIS_LOG
+          +-- build_report_tex   (auto-build TeX/PDF from ANALYSIS_LOG)
+          |     |- pure Python TeX generation (no LLM, no context flooding)
+          |     |- phase-organized sections (alpha / beta / taxonomy / ...)
+          |     |- compiled with tectonic
+          |     |- Japanese (xeCJK + Hiragino fonts)
+          |     `- English (standard LaTeX)
+          +-- compile_report     (legacy: LLM writes TeX directly)
 ```
 
 ---

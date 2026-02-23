@@ -446,7 +446,88 @@ plt.close()
 % content here
 \\end{document}
 ```
-図を埋め込む: \\includegraphics[width=0.8\\textwidth]{<FIGURE_DIR>/figure_name.png}"""
+図を埋め込む: \\includegraphics[width=0.8\\textwidth]{<FIGURE_DIR>/figure_name.png}
+
+━━━ 自律探索モード ━━━
+
+ユーザーが「自動で解析して」「どんどん探索して」「いろいろ試して」と言ったとき（または
+QIIME2 コア解析が完了した後）、以下のプロトコルを自律的に実行する。
+ユーザーの確認を待たずに Phase 1 〜 5 を順番に実行すること。
+
+## 探索フェーズ一覧
+
+### Phase 1: α多様性探索  (subfolder="alpha_diversity")
+- Shannon, Simpson, Chao1 を計算して violin/boxplot で可視化
+- グループ間の統計検定（Mann-Whitney U / Kruskal-Wallis）
+- 有意性を標準出力に print すること（例: `print(f"Shannon p={p:.4f}")`）
+
+### Phase 2: β多様性探索  (subfolder="beta_diversity")
+- Bray-Curtis dissimilarity を計算して PCoA を描画
+- グループごとに色を変え、95% 信頼楕円を描く
+- PERMANOVA を scipy で実装して p 値を出力（permutation_test または距離行列 + ランダム置換）
+
+### Phase 3: 分類組成探索  (subfolder="taxonomy")
+- 門・属レベルで relative abundance を集計
+- stacked bar chart と heatmap（属レベル top 20）を作成
+- グループ間で平均組成が異なる属を目視確認できるようにする
+
+### Phase 4: 差次解析  (subfolder="differential_abundance")
+- 全 ASV / 属に対して Mann-Whitney U / Kruskal-Wallis 検定を実施
+- Benjamini-Hochberg 法で多重検定補正（statsmodels.stats.multitest.multipletests）
+- 有意（FDR < 0.05）な taxa を dot plot / volcano plot で可視化
+- 有意な taxa の数を print する
+
+### Phase 5: 機械学習判別  (subfolder="machine_learning")  ※2群以上の場合
+- feature-table から ASV 相対存在量を特徴量として Random Forest を学習
+- 5-fold cross-validation で accuracy と AUC を評価
+- Feature importance 上位 20 種を棒グラフで表示
+
+## .qza ファイルの読み込みコード雛形
+```python
+import zipfile, os, io
+
+def extract_qza_data(qza_path):
+    # qza から data/ フォルダ内のデータファイルを読み込む
+    files = {}
+    with zipfile.ZipFile(qza_path) as z:
+        for name in z.namelist():
+            if '/data/' in name and not name.endswith('/'):
+                basename = os.path.basename(name)
+                if basename:
+                    files[basename] = z.read(name)
+    return files
+
+# 使用例: feature-table.biom の読み込み
+# data = extract_qza_data('/path/to/table.qza')
+# biom_bytes = data.get('feature-table.biom')
+# if biom_bytes:
+#     import biom
+#     table = biom.load_table(io.BytesIO(biom_bytes))
+#     df = pd.DataFrame(table.to_dataframe()).T  # サンプル×ASV
+
+# メタデータの読み込み
+# import pandas as pd
+# metadata = pd.read_csv('/path/to/metadata.tsv', sep='\t', index_col=0)
+# metadata = metadata[metadata.index != '#q2:types']  # q2:types 行を除外
+```
+
+## 探索中のコミュニケーションルール
+- 各フェーズ開始時: 「Phase X: ○○解析を開始します」と伝える
+- 各フェーズ終了時: 主要な発見（有意差の有無・特徴的な taxa 等）を要約する
+- 全フェーズ完了後: `build_report_tex` を呼び出してレポートを自動生成する
+- エラーが出たフェーズは原因を診断してスキップし、次のフェーズに進む
+
+## 探索完了後のレポート生成
+全フェーズ完了後、必ず以下を実行する:
+```
+build_report_tex(
+  title_ja="<実験タイトル> 自律探索解析レポート",
+  title_en="<Experiment Title> Autonomous Exploration Report",
+  experiment_summary="<ユーザーから得た実験系の説明>",
+  lang="both"
+)
+```
+このツールは ANALYSIS_LOG を読んで図・統計結果を自動的に TeX に埋め込み、PDF を生成する。"""
 
 # ======================================================================
 # ツール定義（Ollama function calling 形式）
@@ -669,6 +750,10 @@ TOOLS = [
                     "output_dir": {
                         "type": "string",
                         "description": "解析結果・図の保存先ディレクトリ（省略時はセッションのデフォルト出力先）"
+                    },
+                    "subfolder": {
+                        "type": "string",
+                        "description": "図を保存するサブフォルダ名。解析種別ごとに分ける（例: alpha_diversity, beta_diversity, taxonomy, differential_abundance, machine_learning）。省略時は figures/ 直下。"
                     }
                 },
                 "required": ["code", "description"]
@@ -697,6 +782,35 @@ TOOLS = [
                     }
                 },
                 "required": ["content_ja", "content_en"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_report_tex",
+            "description": "ANALYSIS_LOG を読み取り、全解析ステップ・図・統計結果を含む TeX レポートを自動生成して PDF にコンパイルする。探索が完了したとき、またはユーザーがレポートを求めたときに呼び出す。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title_ja": {
+                        "type": "string",
+                        "description": "日本語レポートのタイトル（例: ヒト腸内マイクロバイオーム 自律探索解析レポート）"
+                    },
+                    "title_en": {
+                        "type": "string",
+                        "description": "英語レポートのタイトル（例: Human Gut Microbiome Autonomous Exploration Report）"
+                    },
+                    "experiment_summary": {
+                        "type": "string",
+                        "description": "実験系の概要（実験背景・サンプル数・プライマー・グループ構成など）。ユーザーから得た情報をそのまま記載する。"
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "生成言語: 'ja'（日本語のみ）/ 'en'（英語のみ）/ 'both'（両方, デフォルト）"
+                    }
+                },
+                "required": ["title_ja", "title_en", "experiment_summary"]
             }
         }
     }
@@ -1063,7 +1177,8 @@ def tool_set_plot_config(style: str = None, palette: str = None,
     return "変更なし（有効なパラメータが指定されていません）"
 
 
-def tool_execute_python(code: str, description: str, output_dir: str = "") -> str:
+def tool_execute_python(code: str, description: str, output_dir: str = "",
+                         subfolder: str = "") -> str:
     """Pythonコードを実行してダウンストリーム解析・可視化を行う"""
     global SESSION_FIGURE_DIR
 
@@ -1076,8 +1191,11 @@ def tool_execute_python(code: str, description: str, output_dir: str = "") -> st
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    figures_dir = out_path / "figures"
-    figures_dir.mkdir(exist_ok=True)
+
+    # サブフォルダ対応（解析種別ごとに図を整理）
+    safe_sub = re.sub(r'[^\w]', '_', subfolder).strip('_') if subfolder else ""
+    figures_dir = (out_path / "figures" / safe_sub) if safe_sub else (out_path / "figures")
+    figures_dir.mkdir(parents=True, exist_ok=True)
 
     # プリアンブル: PLOT_CONFIG 変数 + 共通インポートを自動注入
     preamble = f"""import sys, os, warnings
@@ -1150,8 +1268,10 @@ except ImportError as _e:
         ANALYSIS_LOG.append({
             "step": len(ANALYSIS_LOG) + 1,
             "description": description,
+            "subfolder": safe_sub,
             "figures": [str(f) for f in new_figs],
             "output_summary": stdout[:600] if stdout else "",
+            "returncode": proc.returncode,
             "timestamp": datetime.datetime.now().isoformat(),
         })
 
@@ -1180,6 +1300,236 @@ except ImportError as _e:
         return f"❌ 実行エラー: {e}"
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+
+# サブフォルダ → セクション名 マッピング
+_SECTION_JA = {
+    "alpha_diversity":        "α多様性解析",
+    "beta_diversity":         "β多様性解析",
+    "taxonomy":               "分類組成解析",
+    "differential_abundance": "差次存在量解析",
+    "machine_learning":       "機械学習判別解析",
+}
+_SECTION_EN = {
+    "alpha_diversity":        "Alpha Diversity Analysis",
+    "beta_diversity":         "Beta Diversity Analysis",
+    "taxonomy":               "Taxonomic Composition Analysis",
+    "differential_abundance": "Differential Abundance Analysis",
+    "machine_learning":       "Machine Learning Classification",
+}
+_SUBFOLDER_ORDER = [
+    "alpha_diversity", "beta_diversity", "taxonomy",
+    "differential_abundance", "machine_learning", "",
+]
+
+
+def _tex_escape(s: str) -> str:
+    """TeX 特殊文字をエスケープ"""
+    for ch, rep in [("&", r"\&"), ("%", r"\%"), ("#", r"\#"),
+                    ("_", r"\_"), ("^", r"\^{}"), ("~", r"\~{}"),
+                    ("{", r"\{"), ("}", r"\}"), ("$", r"\$")]:
+        s = s.replace(ch, rep)
+    return s
+
+
+def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
+                        experiment_summary: str) -> str:
+    """ANALYSIS_LOG から TeX ソースを組み立てる"""
+    from collections import defaultdict
+
+    is_ja = (lang_code == "ja")
+    title = title_ja if is_ja else title_en
+    section_map = _SECTION_JA if is_ja else _SECTION_EN
+
+    groups: dict = defaultdict(list)
+    for entry in ANALYSIS_LOG:
+        groups[entry.get("subfolder", "")].append(entry)
+
+    total_figs = sum(len(e.get("figures", [])) for e in ANALYSIS_LOG)
+
+    L = []  # lines
+
+    # ── プリアンブル ──────────────────────────────────────────
+    if is_ja:
+        L += [
+            r"\documentclass[a4paper,12pt]{article}",
+            r"\usepackage{xeCJK}",
+            r"\setCJKmainfont{Hiragino Mincho ProN}",
+        ]
+    else:
+        L += [r"\documentclass[a4paper,12pt]{article}"]
+
+    L += [
+        r"\usepackage{graphicx}",
+        r"\usepackage{booktabs}",
+        r"\usepackage{longtable}",
+        r"\usepackage{geometry}",
+        r"\usepackage[hidelinks]{hyperref}",
+        r"\geometry{margin=2.5cm}",
+        f"\\title{{{_tex_escape(title)}}}",
+        r"\author{seq2pipe}",
+        r"\date{\today}",
+        r"\begin{document}",
+        r"\maketitle",
+        r"\tableofcontents",
+        r"\newpage",
+    ]
+
+    # ── 概要セクション ────────────────────────────────────────
+    if is_ja:
+        L += [
+            r"\section{解析概要}",
+            r"本レポートは seq2pipe の自律探索モードによって実行された解析の記録です。",
+            r"LLM エージェントが実験系の情報をもとに複数の解析手法を自動で選択・実行し、",
+            r"統計的有意性を評価しながら結果を整理しました。",
+            r"\vspace{1em}",
+            r"\begin{tabular}{ll}",
+            r"\toprule",
+            f"総解析ステップ数 & {len(ANALYSIS_LOG)} \\\\",
+            f"生成された図 & {total_figs} 件 \\\\",
+            r"\bottomrule",
+            r"\end{tabular}",
+        ]
+        if experiment_summary:
+            L += [r"\vspace{1em}", r"\subsection{実験系}", _tex_escape(experiment_summary)]
+    else:
+        L += [
+            r"\section{Overview}",
+            r"This report documents the analyses performed by seq2pipe's autonomous exploration mode.",
+            r"The LLM agent automatically selected and executed multiple analysis methods",
+            r"based on the experimental context, evaluating statistical significance at each step.",
+            r"\vspace{1em}",
+            r"\begin{tabular}{ll}",
+            r"\toprule",
+            f"Total analysis steps & {len(ANALYSIS_LOG)} \\\\",
+            f"Figures generated & {total_figs} \\\\",
+            r"\bottomrule",
+            r"\end{tabular}",
+        ]
+        if experiment_summary:
+            L += [r"\vspace{1em}", r"\subsection{Experimental Setup}",
+                  _tex_escape(experiment_summary)]
+
+    # ── 解析フェーズごとのセクション ─────────────────────────
+    for sf in _SUBFOLDER_ORDER:
+        if sf not in groups:
+            continue
+        entries = groups[sf]
+        sec_name = section_map.get(sf, (_tex_escape(sf) if sf else
+                                        ("その他の解析" if is_ja else "Other Analyses")))
+        L.append(f"\n\\section{{{sec_name}}}")
+
+        for entry in entries:
+            desc = _tex_escape(entry.get("description", ""))
+            figs = entry.get("figures", [])
+            out_summary = entry.get("output_summary", "")
+            ok = entry.get("returncode", 0) == 0
+
+            L.append(f"\n\\subsection{{{desc}}}")
+
+            # 統計出力の抜粋
+            stat_lines = [line for line in out_summary.split("\n")
+                          if any(kw in line.lower() for kw in
+                                 ["p =", "p=", "p-value", "pvalue", "accuracy",
+                                  "auc", "significant", "有意", "statistic",
+                                  "f1", "precision", "recall", "r2", "rmse"])]
+            if stat_lines:
+                L += [r"\begin{verbatim}"] + stat_lines[:12] + [r"\end{verbatim}"]
+            elif not ok:
+                L.append(r"\textit{(この解析はエラーにより完了しませんでした)}"
+                         if is_ja else
+                         r"\textit{(This analysis did not complete due to an error)}")
+
+            # 図の挿入
+            for fig_path in figs:
+                caption = desc
+                L += [
+                    r"\begin{figure}[htbp]",
+                    r"\centering",
+                    f"\\includegraphics[width=0.85\\textwidth]{{{fig_path}}}",
+                    f"\\caption{{{caption}}}",
+                    r"\end{figure}",
+                ]
+
+    # ── 解析ログ表 ────────────────────────────────────────────
+    log_title = "解析ログ" if is_ja else "Analysis Log"
+    L += [
+        f"\n\\section{{{log_title}}}",
+        r"\begin{longtable}{r p{7cm} r r}",
+        r"\toprule",
+    ]
+    if is_ja:
+        L.append(r"Step & 解析 & 図数 & 状態 \\ \midrule \endhead")
+    else:
+        L.append(r"Step & Analysis & Figs & Status \\ \midrule \endhead")
+
+    for entry in ANALYSIS_LOG:
+        step = entry.get("step", "")
+        desc = _tex_escape(entry.get("description", ""))
+        n_figs = len(entry.get("figures", []))
+        ok = "✓" if entry.get("returncode", 0) == 0 else "✗"
+        L.append(f"{step} & {desc} & {n_figs} & {ok} \\\\")
+
+    L += [r"\bottomrule", r"\end{longtable}", r"\end{document}"]
+
+    return "\n".join(L)
+
+
+def tool_build_report_tex(title_ja: str, title_en: str,
+                            experiment_summary: str = "",
+                            lang: str = "both") -> str:
+    """ANALYSIS_LOG から TeX を自動生成してコンパイルする"""
+    if not ANALYSIS_LOG:
+        return "❌ ANALYSIS_LOG が空です。先に execute_python で解析を実行してください。"
+
+    # 出力先
+    if SESSION_FIGURE_DIR:
+        report_dir = Path(SESSION_FIGURE_DIR) / "report"
+    else:
+        report_dir = Path.home() / "seq2pipe_results" / "report"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    tectonic_bin = shutil.which("tectonic")
+    results = []
+
+    tasks = []
+    if lang in ("ja", "both"):
+        tasks.append(("report_ja.tex", "ja", "日本語"))
+    if lang in ("en", "both"):
+        tasks.append(("report_en.tex", "en", "英語"))
+
+    for filename, lc, label in tasks:
+        tex_content = _build_tex_content(lc, title_ja, title_en, experiment_summary)
+        tex_path = report_dir / filename
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write(tex_content)
+        results.append(f"✅ {label} TeX を生成: {tex_path}")
+
+        if tectonic_bin:
+            try:
+                proc = subprocess.run(
+                    [tectonic_bin, str(tex_path)],
+                    capture_output=True, text=True,
+                    timeout=120, cwd=str(report_dir)
+                )
+                pdf_path = tex_path.with_suffix(".pdf")
+                if proc.returncode == 0 and pdf_path.exists():
+                    results.append(f"✅ {label} PDF を生成: {pdf_path}")
+                else:
+                    results.append(f"⚠️  {label} PDF コンパイル失敗")
+                    if proc.stderr:
+                        results.append(f"   {proc.stderr[:300]}")
+            except subprocess.TimeoutExpired:
+                results.append(f"⏱️  {label} コンパイルタイムアウト")
+            except Exception as e:
+                results.append(f"❌ {label} コンパイルエラー: {e}")
+        else:
+            results.append("⚠️  tectonic が見つかりません。brew install tectonic でインストールしてください。")
+
+    results.append(f"\n📁 出力先: {report_dir}")
+    results.append(f"📊 記録された解析ステップ: {len(ANALYSIS_LOG)}")
+    results.append(f"🖼️  総図数: {sum(len(e.get('figures', [])) for e in ANALYSIS_LOG)}")
+    return "\n".join(results)
 
 
 def tool_compile_report(content_ja: str, content_en: str, output_dir: str = "") -> str:
@@ -1258,6 +1608,8 @@ def dispatch_tool(name: str, args: dict) -> str:
             return tool_execute_python(**args)
         elif name == "compile_report":
             return tool_compile_report(**args)
+        elif name == "build_report_tex":
+            return tool_build_report_tex(**args)
         else:
             return f"❌ 不明なツール: {name}"
     except TypeError as e:
