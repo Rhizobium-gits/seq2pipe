@@ -42,6 +42,7 @@ PLOT_CONFIG: dict = {         # 図のデフォルトスタイル設定
     "dpi": 150,
     "font_size": 12,
     "title_font_size": 14,
+    "format": "pdf",           # 保存フォーマット: pdf / png / svg
 }
 
 # ======================================================================
@@ -393,10 +394,13 @@ with zipfile.ZipFile("/path/to/file.qza") as z:
 fig, ax = plt.subplots(figsize=PLOT_FIGSIZE)
 # ... 描画 ...
 plt.tight_layout()
-plt.savefig(f"{FIGURE_DIR}/figure_name.png", dpi=PLOT_DPI, bbox_inches='tight')
+# FIGURE_FORMAT はデフォルト "pdf"（変数がそのまま使える）
+plt.savefig(f"{FIGURE_DIR}/figure_name.{FIGURE_FORMAT}", dpi=PLOT_DPI, bbox_inches='tight')
 plt.close()
 ```
-savefig を呼ばないと図がトラッキングされないので必ず保存すること。
+- FIGURE_FORMAT を使うことで、ユーザーの設定（pdf/png/svg）が自動反映される
+- デフォルトは PDF なので view.qiime2.org を使わずにそのまま論文・レポートで使用可能
+- savefig を呼ばないと図がトラッキングされないので必ず保存すること
 
 ## レポート生成
 ユーザーが「レポートを作成して」と言ったら compile_report ツールを使う。
@@ -636,6 +640,10 @@ TOOLS = [
                     "title_font_size": {
                         "type": "integer",
                         "description": "タイトルのフォントサイズ（pt）"
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "保存フォーマット（pdf / png / svg）。デフォルトは pdf。"
                     }
                 },
                 "required": []
@@ -1018,7 +1026,8 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
 def tool_set_plot_config(style: str = None, palette: str = None,
                           figsize_w: float = None, figsize_h: float = None,
                           dpi: int = None, font_size: int = None,
-                          title_font_size: int = None) -> str:
+                          title_font_size: int = None,
+                          format: str = None) -> str:
     """プロット設定を変更する"""
     changed = []
     if style is not None:
@@ -1041,6 +1050,13 @@ def tool_set_plot_config(style: str = None, palette: str = None,
     if title_font_size is not None:
         PLOT_CONFIG["title_font_size"] = title_font_size
         changed.append(f"title_font_size: {title_font_size}")
+    if format is not None:
+        fmt = format.lower().lstrip(".")
+        if fmt in ("pdf", "png", "svg"):
+            PLOT_CONFIG["format"] = fmt
+            changed.append(f"format: {fmt}")
+        else:
+            changed.append(f"format: 無効な値 '{format}' (pdf/png/svg のいずれかを指定)")
     if changed:
         lines = "\n".join(f"  {c}" for c in changed)
         return f"✅ プロット設定を更新しました:\n{lines}"
@@ -1076,6 +1092,7 @@ PLOT_FIGSIZE = tuple({PLOT_CONFIG['figsize']})
 PLOT_DPI = {PLOT_CONFIG['dpi']}
 FONT_SIZE = {PLOT_CONFIG['font_size']}
 TITLE_FONT_SIZE = {PLOT_CONFIG['title_font_size']}
+FIGURE_FORMAT = {repr(PLOT_CONFIG.get('format', 'pdf'))}
 
 # --- 共通インポート ---
 try:
