@@ -1969,8 +1969,8 @@ def select_language() -> str:
         try:
             choice = input(f"\n  {BOLD}>{RESET} ").strip()
         except (EOFError, KeyboardInterrupt):
-            LANG = "ja"
-            return LANG
+            print(f"\n\n{c(ui('goodbye'), CYAN)}")
+            sys.exit(0)
         if choice in ("1", "ja", "JA", "japanese", "Japanese"):
             LANG = "ja"
             break
@@ -2042,19 +2042,23 @@ def main():
 
     # 言語に応じたシステムプロンプトと初期メッセージを選択
     if LANG == "en":
-        lang_prefix = (
-            "IMPORTANT: The user has selected English as the interface language. "
-            "You MUST respond in English for all subsequent messages, including tool comments, "
-            "explanations, and generated scripts. Do NOT use Japanese.\n\n"
+        # SYSTEM_PROMPT の末尾に追記することで「最後の指示」として機能させる
+        # （LLM は後方の指示を優先する傾向があるため、先頭追記より確実）
+        lang_suffix = (
+            "\n\n━━━ LANGUAGE OVERRIDE (highest priority) ━━━\n"
+            "The user has selected English as the interface language.\n"
+            "You MUST respond in English for ALL subsequent messages.\n"
+            "This includes explanations, shell scripts, Python code comments, and reports.\n"
+            "Do NOT use Japanese in any output."
         )
         initial_msg = INITIAL_MESSAGE_EN
     else:
-        lang_prefix = ""
+        lang_suffix = ""
         initial_msg = INITIAL_MESSAGE
 
     # 会話履歴を初期化
     messages = [
-        {"role": "system", "content": lang_prefix + SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + lang_suffix},
         {"role": "assistant", "content": initial_msg}
     ]
 
