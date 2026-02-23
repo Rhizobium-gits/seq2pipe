@@ -36,14 +36,21 @@ if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
                 STARTED_BY_SYSTEMD=true
             fi
         fi
+        # systemd が使えない環境（Codespaces 等）では service コマンドを試みる
+        if [[ "$STARTED_BY_SYSTEMD" == "false" ]] && [[ "$OS_INNER" == "Linux" ]] && command -v service &>/dev/null; then
+            if timeout 5 service ollama start 2>/dev/null; then
+                echo -e "${CYAN}service コマンドで Ollama を起動しました${RESET}"
+                STARTED_BY_SYSTEMD=true
+            fi
+        fi
         if [[ "$STARTED_BY_SYSTEMD" == "false" ]]; then
             nohup ollama serve > /tmp/ollama.log 2>&1 &
             OLLAMA_BG_PID=$!
             echo -e "${CYAN}Ollama をバックグラウンドで起動しました (PID: $OLLAMA_BG_PID)${RESET}"
         fi
 
-        # 起動待機（最大 60 秒）
-        for i in {1..60}; do
+        # 起動待機（最大 120 秒）
+        for i in {1..120}; do
             sleep 1
             if curl -s http://localhost:11434/api/tags &>/dev/null; then
                 echo -e "${GREEN}✅ Ollama 起動確認（${i} 秒）${RESET}"
@@ -54,14 +61,14 @@ if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
                 cat /tmp/ollama.log 2>/dev/null | tail -20
                 exit 1
             fi
-            if [[ $i -eq 60 ]]; then
-                echo -e "${RED}❌ Ollama の起動に失敗しました（60 秒タイムアウト）。${RESET}"
+            if [[ $i -eq 120 ]]; then
+                echo -e "${RED}❌ Ollama の起動に失敗しました（120 秒タイムアウト）。${RESET}"
                 echo "   ログ: $(cat /tmp/ollama.log 2>/dev/null | tail -5)"
                 echo "   手動で 'ollama serve' を別ターミナルで実行してから再試行してください。"
                 exit 1
             fi
             if (( i % 10 == 0 )); then
-                echo "   待機中... ${i}/60 秒"
+                echo "   待機中... ${i}/120 秒"
             fi
         done
     else
