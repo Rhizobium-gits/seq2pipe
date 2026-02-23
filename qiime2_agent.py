@@ -46,6 +46,51 @@ PLOT_CONFIG: dict = {         # 図のデフォルトスタイル設定
 }
 
 # ======================================================================
+# 言語設定（select_language() で起動時に設定）
+# ======================================================================
+LANG: str = "ja"  # "ja" | "en"
+
+_UI: dict = {
+    "ja": {
+        "model_selected": "✅ 使用モデル: {}",
+        "hint_exit":      "ヒント: 終了するには Ctrl+C を押してください。",
+        "prompt":         "あなた",
+        "tool_exec":      "🔧 ツール実行: {}",
+        "tool_result":    "📋 実行結果:",
+        "goodbye":        "👋 終了します。お疲れ様でした！",
+        "ollama_error":   "❌ Ollama が起動していません。",
+        "ollama_hint":    "以下のコマンドを別ターミナルで実行してから再試行してください:",
+        "ollama_hint2":   "Ollama が未インストールの場合:",
+        "no_model":       "⚠️  Ollama にモデルがインストールされていません。",
+        "no_model_hint":  "推奨モデル: {}",
+        "no_model_hint2": "軽量版    : {}",
+        "runtime_error":  "エラーが発生しました: {}",
+    },
+    "en": {
+        "model_selected": "✅ Model: {}",
+        "hint_exit":      "Tip: Press Ctrl+C to exit.",
+        "prompt":         "You",
+        "tool_exec":      "🔧 Tool: {}",
+        "tool_result":    "📋 Result:",
+        "goodbye":        "👋 Goodbye!",
+        "ollama_error":   "❌ Ollama is not running.",
+        "ollama_hint":    "Run the following command in another terminal:",
+        "ollama_hint2":   "If Ollama is not installed:",
+        "no_model":       "⚠️  No models installed in Ollama.",
+        "no_model_hint":  "Recommended model: {}",
+        "no_model_hint2": "Lightweight: {}",
+        "runtime_error":  "An error occurred: {}",
+    },
+}
+
+
+def ui(key: str, *args) -> str:
+    """現在の LANG に対応する UI 文字列を返す"""
+    tmpl = _UI.get(LANG, _UI["ja"]).get(key, key)
+    return tmpl.format(*args) if args else tmpl
+
+
+# ======================================================================
 # ANSI カラー
 # ======================================================================
 RESET = "\033[0m"
@@ -1742,12 +1787,12 @@ def run_agent_loop(messages: list, model: str):
                     except json.JSONDecodeError:
                         tool_args = {}
 
-                print(f"\n{c(f'🔧 ツール実行: {tool_name}', MAGENTA)}")
+                print(f"\n{c(ui('tool_exec', tool_name), MAGENTA)}")
                 print(f"{c(json.dumps(tool_args, ensure_ascii=False, indent=2), DIM)}")
 
                 result = dispatch_tool(tool_name, tool_args)
 
-                print(f"\n{c('📋 実行結果:', GREEN)}")
+                print(f"\n{c(ui('tool_result'), GREEN)}")
                 print(result)
 
                 tool_results.append({
@@ -1888,6 +1933,55 @@ INITIAL_MESSAGE = """こんにちは！私は QIIME2 + Python ダウンストリ
 一度にまとめて教えてもらうと、より的確なパイプラインを生成できます。
 """
 
+INITIAL_MESSAGE_EN = """Hello! I am a local AI agent specialized in QIIME2 + Python downstream microbiome analysis.
+
+Supported analyses:
+  [QIIME2] Import → DADA2 denoising → Taxonomy classification → Diversity analysis → Differential analysis
+  [Python] Composition heatmap / PCoA plot / Random forest classification / Network analysis
+  [Report] Auto-generate TeX / PDF reports in Japanese or English after analysis
+
+To get started, please provide:
+
+  1. Path to your data directory
+     e.g. /Users/yourname/microbiome-data/
+
+  2. Description of your experiment
+     e.g. Human gut microbiome, 16S V3-V4 (341F/806R), Illumina MiSeq paired-end 2×250bp
+          5 control samples vs 5 treatment samples
+
+  3. Analyses you want to perform
+     e.g. Taxonomy composition visualization / Alpha & beta diversity / Differential analysis / ML classification
+
+  4. Figure style (optional)
+     e.g. White background, blue palette / Dark theme / High-resolution for publication (300 DPI)
+
+Providing all information at once helps generate a more accurate pipeline.
+"""
+
+
+def select_language() -> str:
+    """起動時に操作言語を選択する（JA / EN）。選択結果を返し LANG グローバルを更新する。"""
+    global LANG
+    print(f"\n{CYAN}{BOLD}  Select language / 言語を選択してください{RESET}")
+    print(f"  {BOLD}[1]{RESET} 日本語 (Japanese)")
+    print(f"  {BOLD}[2]{RESET} English")
+    while True:
+        try:
+            choice = input(f"\n  {BOLD}>{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            LANG = "ja"
+            return LANG
+        if choice in ("1", "ja", "JA", "japanese", "Japanese"):
+            LANG = "ja"
+            break
+        elif choice in ("2", "en", "EN", "english", "English"):
+            LANG = "en"
+            break
+        else:
+            print(f"  {YELLOW}Please enter 1 or 2 / 1 か 2 を入力してください{RESET}")
+    print()
+    return LANG
+
 
 def select_model(available_models: list) -> str:
     """使用するモデルを選択"""
@@ -1922,48 +2016,63 @@ def main():
 
     print_banner()
 
+    # 言語選択
+    select_language()
+
     # Ollama 起動確認
     if not check_ollama_running():
-        print(f"{c('❌ Ollama が起動していません。', RED)}")
-        print(f"   以下のコマンドを別ターミナルで実行してから再試行してください:")
+        print(f"{c(ui('ollama_error'), RED)}")
+        print(f"   {ui('ollama_hint')}")
         print(f"   {c('ollama serve', CYAN)}")
-        print(f"\n   Ollama が未インストールの場合:")
-        print(f"   {c('./setup.sh', CYAN)} を実行してセットアップしてください。")
+        print(f"\n   {ui('ollama_hint2')}")
+        print(f"   {c('./setup.sh', CYAN)}")
         sys.exit(1)
 
     # モデル選択
     available = get_available_models()
     if not available:
-        print(f"{c('⚠️  Ollama にモデルがインストールされていません。', YELLOW)}")
-        print(f"   推奨モデル: {c('ollama pull qwen2.5-coder:7b', CYAN)}")
-        print(f"   軽量版    : {c('ollama pull llama3.2:3b', CYAN)}")
+        print(f"{c(ui('no_model'), YELLOW)}")
+        print(f"   {ui('no_model_hint', c('ollama pull qwen2.5-coder:7b', CYAN))}")
+        print(f"   {ui('no_model_hint2', c('ollama pull llama3.2:3b', CYAN))}")
         sys.exit(1)
 
     model = select_model(available)
-    print(f"{c(f'✅ 使用モデル: {model}', GREEN)}")
-    print(f"{c('ヒント: 終了するには Ctrl+C を押してください。', DIM)}\n")
+    print(f"{c(ui('model_selected', model), GREEN)}")
+    print(f"{c(ui('hint_exit'), DIM)}\n")
+
+    # 言語に応じたシステムプロンプトと初期メッセージを選択
+    if LANG == "en":
+        lang_prefix = (
+            "IMPORTANT: The user has selected English as the interface language. "
+            "You MUST respond in English for all subsequent messages, including tool comments, "
+            "explanations, and generated scripts. Do NOT use Japanese.\n\n"
+        )
+        initial_msg = INITIAL_MESSAGE_EN
+    else:
+        lang_prefix = ""
+        initial_msg = INITIAL_MESSAGE
 
     # 会話履歴を初期化
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "assistant", "content": INITIAL_MESSAGE}
+        {"role": "system", "content": lang_prefix + SYSTEM_PROMPT},
+        {"role": "assistant", "content": initial_msg}
     ]
 
-    print(f"{c('🤖 AI', CYAN + BOLD)}: {INITIAL_MESSAGE}")
+    print(f"{c('🤖 AI', CYAN + BOLD)}: {initial_msg}")
 
     # メインループ
     while True:
         try:
-            user_input = input(f"\n{c('あなた', BOLD + GREEN)} > ").strip()
+            user_input = input(f"\n{c(ui('prompt'), BOLD + GREEN)} > ").strip()
         except (EOFError, KeyboardInterrupt):
-            print(f"\n\n{c('👋 終了します。お疲れ様でした！', CYAN)}")
+            print(f"\n\n{c(ui('goodbye'), CYAN)}")
             break
 
         if not user_input:
             continue
 
         if user_input.lower() in ["quit", "exit", "終了", "q"]:
-            print(f"\n{c('👋 終了します。お疲れ様でした！', CYAN)}")
+            print(f"\n{c(ui('goodbye'), CYAN)}")
             break
 
         messages.append({"role": "user", "content": user_input})
@@ -1974,7 +2083,7 @@ def main():
             print(f"\n{c(str(e), RED)}")
             break
         except Exception as e:
-            print(f"\n{c(f'エラーが発生しました: {e}', RED)}")
+            print(f"\n{c(ui('runtime_error', e), RED)}")
             import traceback
             traceback.print_exc()
 
