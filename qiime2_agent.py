@@ -73,6 +73,10 @@ _UI: dict = {
         "cmd_cancelled_ki": "❌ キャンセルされました（キーボード割り込み）",
         "cmd_cancelled":    "❌ ユーザーによりキャンセルされました。",
         "agent_limit":      "⚠️  最大ステップ数 ({}) に達しました。ループを終了します。",
+        "deps_ok":          "✅ Pythonパッケージ確認済み（numpy/pandas/matplotlib/seaborn）",
+        "deps_warn":        "⚠️  Pythonパッケージが不足しています: {}",
+        "deps_hint":        "execute_python ツールが正しく動作しないことがあります。",
+        "deps_hint2":       "インストール方法: {}",
     },
     "en": {
         "model_selected":   "✅ Model: {}",
@@ -95,6 +99,10 @@ _UI: dict = {
         "cmd_cancelled_ki": "❌ Cancelled (keyboard interrupt)",
         "cmd_cancelled":    "❌ Cancelled by user.",
         "agent_limit":      "⚠️  Max steps ({}) reached. Stopping loop.",
+        "deps_ok":          "✅ Python packages verified (numpy/pandas/matplotlib/seaborn)",
+        "deps_warn":        "⚠️  Missing Python packages: {}",
+        "deps_hint":        "The execute_python tool may not work correctly.",
+        "deps_hint2":       "To install: {}",
     },
 }
 
@@ -1084,6 +1092,11 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
             sample_name = re.sub(r'_R1[_.].*$|_R1\.fastq.*$', '', r1.name)
             sample_name = re.sub(r'\.fastq.*$', '', sample_name)
 
+            # 空サンプル名は QIIME2 が拒否するためスキップ
+            if not sample_name:
+                unmatched.append(r1.name)
+                continue
+
             # 対応する R2 を探す
             r2_pattern = r1.name.replace("_R1_", "_R2_").replace("_R1.", "_R2.")
             r2_candidates = [f for f in r2_files if f.name == r2_pattern]
@@ -1403,7 +1416,8 @@ def _tex_escape(s: str) -> str:
 
 
 def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
-                        experiment_summary: str) -> str:
+                        experiment_summary: str,
+                        report_dir: "Path | None" = None) -> str:
     """ANALYSIS_LOG から TeX ソースを組み立てる"""
     from collections import defaultdict
 
@@ -1513,10 +1527,18 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
             # 図の挿入
             for fig_path in figs:
                 caption = desc
+                # report_dir からの相対パスを使用（tectonic のサンドボックス対策）
+                if report_dir is not None:
+                    try:
+                        fig_include = os.path.relpath(fig_path, report_dir).replace("\\", "/")
+                    except ValueError:
+                        fig_include = fig_path  # Windowsドライブ跨ぎ等で失敗した場合は絶対パス
+                else:
+                    fig_include = fig_path
                 L += [
                     r"\begin{figure}[htbp]",
                     r"\centering",
-                    f"\\includegraphics[width=0.85\\textwidth]{{{fig_path}}}",
+                    f"\\includegraphics[width=0.85\\textwidth]{{{fig_include}}}",
                     f"\\caption{{{caption}}}",
                     r"\end{figure}",
                 ]
@@ -1570,7 +1592,7 @@ def tool_build_report_tex(title_ja: str, title_en: str,
         tasks.append(("report_en.tex", "en", "英語"))
 
     for filename, lc, label in tasks:
-        tex_content = _build_tex_content(lc, title_ja, title_en, experiment_summary)
+        tex_content = _build_tex_content(lc, title_ja, title_en, experiment_summary, report_dir)
         tex_path = report_dir / filename
         with open(tex_path, "w", encoding="utf-8") as f:
             f.write(tex_content)
@@ -1756,11 +1778,43 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
             "thinking": thinking_content
         }
 
+    except urllib.error.HTTPError as e:
+        raise ConnectionError(
+            f"Ollama HTTP エラー: {e.code} {e.reason}\n"
+            f"詳細: {e}"
+        )
     except urllib.error.URLError as e:
         raise ConnectionError(
             f"Ollama に接続できません（{OLLAMA_URL}）。\n"
             f"'ollama serve' を別ターミナルで実行してください。\n詳細: {e}"
         )
+    except TimeoutError as e:
+        raise ConnectionError(
+            f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
+        )
+
+
+def check_python_deps() -> bool:
+    """numpy/pandas/matplotlib/seaborn が sys.executable でインポートできるか確認"""
+    check_code = "import numpy, pandas, matplotlib, seaborn"
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", check_code],
+            capture_output=True, text=True, timeout=10
+        )
+        if proc.returncode == 0:
+            print(f"   {c(ui('deps_ok'), GREEN)}")
+            return True
+        else:
+            # ImportError の場合 stderr からパッケージ名を抽出
+            missing = proc.stderr.strip().split("\n")[-1] if proc.stderr else "不明"
+            print(f"   {c(ui('deps_warn', missing), YELLOW)}")
+            print(f"   {ui('deps_hint')}")
+            install_cmd = f"{sys.executable} -m pip install numpy pandas matplotlib seaborn"
+            print(f"   {ui('deps_hint2', c(install_cmd, CYAN))}")
+            return False
+    except Exception:
+        return False
 
 
 def check_ollama_running() -> bool:
@@ -2043,6 +2097,9 @@ def main():
 
     # 言語選択
     select_language()
+
+    # Python 依存パッケージ確認（失敗しても続行、警告のみ）
+    check_python_deps()
 
     # Ollama 起動確認
     if not check_ollama_running():
