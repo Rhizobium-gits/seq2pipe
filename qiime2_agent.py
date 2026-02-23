@@ -22,6 +22,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 # ======================================================================
 # 設定
@@ -969,7 +970,7 @@ def tool_read_file(path: str, max_lines: int = 50) -> str:
         return f"読み込みエラー: {e}"
 
 
-def _get_docker_cmd() -> str | None:
+def _get_docker_cmd() -> Optional[str]:
     """クロスプラットフォームで Docker 実行ファイルを検出する"""
     # macOS: Docker Desktop の固定パスを優先
     if sys.platform == "darwin":
