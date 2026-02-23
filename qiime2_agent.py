@@ -30,6 +30,9 @@ from typing import Optional
 # 🍺 ======================================================================
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = os.environ.get("QIIME2_AI_MODEL", "qwen2.5-coder:7b")
+# 🐱 CPU 専用環境（Codespaces 等）での初回推論に対応するため 600 秒に設定
+# 🐱 環境変数 OLLAMA_TIMEOUT で上書き可能
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "600"))
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
 # 🍺 ======================================================================
@@ -1779,7 +1782,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
     thinking_content = ""
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8").strip()
                 if not line:
@@ -1827,7 +1830,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
         # 🐱 socket.timeout は URLError に包まれて届くため、reason で判定
         if isinstance(e.reason, (socket.timeout, TimeoutError)):
             raise ConnectionError(
-                f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
+                f"Ollama への接続がタイムアウトしました（timeout={OLLAMA_TIMEOUT}s）。\n詳細: {e}"
             )
         raise ConnectionError(
             f"Ollama に接続できません（{OLLAMA_URL}）。\n"
@@ -1836,7 +1839,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
     except (socket.timeout, TimeoutError) as e:
         # 🐱 URLError に包まれずに直接 raise される稀なケース
         raise ConnectionError(
-            f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
+            f"Ollama への接続がタイムアウトしました（timeout={OLLAMA_TIMEOUT}s）。\n詳細: {e}"
         )
 
 
