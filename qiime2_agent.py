@@ -1097,8 +1097,8 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
                 unmatched.append(r1.name)
                 continue
 
-            # 対応する R2 を探す
-            r2_pattern = r1.name.replace("_R1_", "_R2_").replace("_R1.", "_R2.")
+            # 対応する R2 を探す（最初の _R1_ / _R1. のみ置換し二重置換バグを防ぐ）
+            r2_pattern = re.sub(r'_R1([_.])', r'_R2\1', r1.name, count=1)
             r2_candidates = [f for f in r2_files if f.name == r2_pattern]
 
             # コンテナ内パス
@@ -1110,6 +1110,14 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
                 matched += 1
             else:
                 unmatched.append(r1.name)
+
+        # ペアが一件もない場合はファイルを書かずにエラーを返す
+        if matched == 0:
+            return (
+                "❌ エラー: ペアが1組も見つかりませんでした。\n"
+                "ファイル名が _R1_/_R1. パターンに合致していない可能性があります。\n"
+                f"見つかった R1 ファイル: {[f.name for f in r1_files]}"
+            )
 
         content = "\n".join(lines) + "\n"
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1176,6 +1184,16 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
 
 def tool_run_command(command: str, description: str, working_dir: str = None) -> str:
     """シェルコマンドを実行（ユーザー確認付き）"""
+    # working_dir を事前検証（ユーザーに確認を求める前にエラーを返す）
+    if working_dir:
+        cwd = Path(working_dir).expanduser()
+        if not cwd.exists():
+            return f"❌ ワーキングディレクトリが存在しません: {working_dir}"
+        if not cwd.is_dir():
+            return f"❌ ワーキングディレクトリはディレクトリではありません: {working_dir}"
+    else:
+        cwd = None
+
     print(f"\n{c(ui('cmd_request'), YELLOW)}")
     print(f"   {ui('cmd_desc')}: {description}")
     print(f"   {ui('cmd_cmd')}:\n   {c(command, CYAN)}")
@@ -1190,7 +1208,6 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
         return ui("cmd_cancelled")
 
     try:
-        cwd = Path(working_dir).expanduser() if working_dir else None
         proc = subprocess.run(
             command, shell=True, capture_output=True, text=True,
             timeout=3600, cwd=cwd
@@ -1417,7 +1434,7 @@ def _tex_escape(s: str) -> str:
 
 def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
                         experiment_summary: str,
-                        report_dir: "Path | None" = None) -> str:
+                        report_dir: Optional[Path] = None) -> str:
     """ANALYSIS_LOG から TeX ソースを組み立てる"""
     from collections import defaultdict
 
@@ -2094,6 +2111,11 @@ def main():
         os.system("")
 
     print_banner()
+
+    # セッションごとにグローバル状態をリセット（同一プロセスで複数回呼ばれた場合の混入防止）
+    global ANALYSIS_LOG, SESSION_FIGURE_DIR
+    ANALYSIS_LOG = []
+    SESSION_FIGURE_DIR = ""
 
     # 言語選択
     select_language()
