@@ -907,21 +907,94 @@ def run_agent_loop(messages: list, model: str):
 # バナー・UI
 # ======================================================================
 
-BANNER = f"""{CYAN}{BOLD}
-  ███████╗███████╗ ██████╗ ██████╗
-  ██╔════╝██╔════╝██╔═══██╗╚════██╗
-  ███████╗█████╗  ██║   ██║ █████╔╝
-  ╚════██║██╔══╝  ██║▄▄ ██║ ╚═══██╗
-  ███████║███████╗╚██████╔╝██████╔╝
-  ╚══════╝╚══════╝ ╚══▀▀═╝ ╚══════╝
-       ██████╗ ██╗██████╗ ███████╗
-       ██╔══██╗██║██╔══██╗██╔════╝
-       ██████╔╝██║██████╔╝█████╗
-       ██╔═══╝ ██║██╔═══╝ ██╔══╝
-       ██║     ██║██║     ███████╗
-       ╚═╝     ╚═╝╚═╝     ╚══════╝
-          sequence  ->  pipeline
-{RESET}"""
+# バナー文字列（"2" を正しいシングル斜めで修正済み）
+BANNER_LINES = [
+    "  ███████╗███████╗ ██████╗  ██████╗ ",
+    "  ██╔════╝██╔════╝██╔═══██╗╚════██╗ ",
+    "  ███████╗█████╗  ██║   ██║    ██╔╝ ",
+    "  ╚════██║██╔══╝  ██║▄▄ ██║   ██╔╝  ",
+    "  ███████║███████╗╚██████╔╝  ██████╗",
+    "  ╚══════╝╚══════╝ ╚══▀▀═╝   ╚═════╝",
+    "       ██████╗ ██╗██████╗ ███████╗",
+    "       ██╔══██╗██║██╔══██╗██╔════╝",
+    "       ██████╔╝██║██████╔╝█████╗  ",
+    "       ██╔═══╝ ██║██╔═══╝ ██╔══╝  ",
+    "       ██║     ██║██║     ███████╗",
+    "       ╚═╝     ╚═╝╚═╝     ╚══════╝",
+    "          sequence  ->  pipeline",
+]
+
+# シアン系グラデーション（256色）
+_GRAD = [
+    "\033[38;5;23m",   # dark teal
+    "\033[38;5;30m",
+    "\033[38;5;37m",
+    "\033[38;5;44m",
+    "\033[38;5;51m",   # bright cyan
+    "\033[1;36m",      # bold cyan
+    "\033[38;5;87m",
+    "\033[38;5;123m",  # pale cyan
+    "\033[38;5;87m",
+    "\033[1;36m",
+    "\033[38;5;51m",
+    "\033[38;5;44m",
+    "\033[38;5;37m",
+]
+
+
+def print_banner():
+    """グラデーション＋スパークルアニメーションでバナーを表示"""
+    import time
+    import random
+
+    n = len(BANNER_LINES)
+    is_tty = sys.stdout.isatty()
+
+    if not is_tty:
+        for line in BANNER_LINES:
+            print(f"{CYAN}{BOLD}{line}{RESET}")
+        return
+
+    try:
+        # Phase 1: 暗いシアンで一瞬表示
+        for line in BANNER_LINES:
+            sys.stdout.write(f"\033[38;5;23m{line}\033[0m\n")
+        sys.stdout.flush()
+        time.sleep(0.04)
+
+        # Phase 2: カーソルを先頭へ戻す
+        sys.stdout.write(f"\033[{n}A\r")
+        sys.stdout.flush()
+
+        # Phase 3: グラデーションカラーで下スイープ
+        for i, line in enumerate(BANNER_LINES):
+            color = _GRAD[i % len(_GRAD)]
+            sys.stdout.write(f"\033[2K{color}\033[1m{line}\033[0m\n")
+            sys.stdout.flush()
+            time.sleep(0.03)
+
+        # Phase 4: スパークル（ランダム行が白く光る × 3波）
+        for _ in range(3):
+            sparks = set(random.sample(range(n), k=min(4, n)))
+            sys.stdout.write(f"\033[{n}A\r")
+            for i, line in enumerate(BANNER_LINES):
+                color = "\033[1;97m" if i in sparks else _GRAD[i % len(_GRAD)]
+                sys.stdout.write(f"\033[2K{color}\033[1m{line}\033[0m\n")
+            sys.stdout.flush()
+            time.sleep(0.09)
+
+        # Phase 5: グラデーション状態に落ち着く
+        sys.stdout.write(f"\033[{n}A\r")
+        for i, line in enumerate(BANNER_LINES):
+            color = _GRAD[i % len(_GRAD)]
+            sys.stdout.write(f"\033[2K{color}\033[1m{line}\033[0m\n")
+        sys.stdout.flush()
+        print()
+
+    except Exception:
+        # アニメーション失敗時は静的表示にフォールバック
+        for line in BANNER_LINES:
+            print(f"{CYAN}{BOLD}{line}{RESET}")
 
 INITIAL_MESSAGE = """こんにちは！私は QIIME2 解析を支援するローカル AI エージェントです。
 
@@ -963,7 +1036,7 @@ def main():
     if sys.platform == "win32":
         os.system("")
 
-    print(BANNER)
+    print_banner()
 
     # Ollama 起動確認
     if not check_ollama_running():
