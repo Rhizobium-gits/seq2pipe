@@ -71,33 +71,38 @@ fi
 # ============================================================
 # STEP 3: Ollama サービスの起動
 # ============================================================
-if pgrep -x "ollama" &>/dev/null; then
+# プロセス名ではなく API 応答で確認（Codespaces / systemd 対応）
+if curl -s http://localhost:11434/api/tags &>/dev/null; then
     success "Ollama サービス: 既に起動中"
 else
     info "Ollama サービスを起動します..."
     if [[ "$OS" == "Darwin" ]]; then
         # macOS: バックグラウンドで起動
         nohup ollama serve > /tmp/ollama.log 2>&1 &
-        sleep 3
     else
-        # Linux: systemd 経由
-        if command -v systemctl &>/dev/null; then
-            systemctl --user enable --now ollama 2>/dev/null || \
-            nohup ollama serve > /tmp/ollama.log 2>&1 &
+        # Linux: システム level systemd → ユーザー level → 直接起動 の順で試みる
+        if command -v systemctl &>/dev/null && systemctl is-active --quiet ollama 2>/dev/null; then
+            : # すでにシステム systemd で動いている
+        elif command -v systemctl &>/dev/null && sudo systemctl start ollama 2>/dev/null; then
+            success "systemd (system) で Ollama を起動しました"
+        elif command -v systemctl &>/dev/null && systemctl --user start ollama 2>/dev/null; then
+            success "systemd (user) で Ollama を起動しました"
         else
             nohup ollama serve > /tmp/ollama.log 2>&1 &
         fi
-        sleep 3
     fi
 
-    # 起動確認（最大 15 秒待機）
-    for i in {1..15}; do
+    # 起動確認（最大 30 秒待機）
+    info "Ollama の起動を待っています..."
+    for i in {1..30}; do
         if curl -s http://localhost:11434/api/tags &>/dev/null; then
             success "Ollama サービスが起動しました"
             break
         fi
-        if [[ $i -eq 15 ]]; then
-            warn "Ollama の起動確認がタイムアウトしました。手動で 'ollama serve' を実行してください。"
+        if [[ $i -eq 30 ]]; then
+            warn "Ollama の起動確認がタイムアウトしました。"
+            warn "別ターミナルで 'ollama serve' を実行してから setup.sh を再実行してください。"
+            exit 1
         fi
         sleep 1
     done
