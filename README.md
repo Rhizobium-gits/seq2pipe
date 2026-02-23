@@ -93,27 +93,42 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 ## 使い方
 
-エージェントを起動すると、AI が対話形式でガイドします。
+起動すると、AI が **3 つの情報** を最初に確認します。
 
 ```
-AI: こんにちは！解析したいデータのディレクトリパスを教えてください。
+AI: こんにちは！始めるために以下の 3 つを教えてください:
+    1. データディレクトリのパス
+    2. 実験系の説明（領域・プライマー・比較グループ）
+    3. 行いたい解析
 
-あなた > /Users/yourname/microbiome-data/
+あなた > データ: /Users/yourname/microbiome-data/
+         実験系: ヒト腸内細菌、16S V3-V4（341F/806R）、MiSeq PE 2×250bp
+                 コントロール 5 サンプル vs 処理群 5 サンプル
+         解析: 分類組成 + α/β 多様性 + 差次解析
 
 [ツール実行: inspect_directory]
-  -> ディレクトリ内容を自動調査...
+  -> ペアエンド FASTQ 10 サンプルを検出、metadata.tsv も確認...
 
-AI: ペアエンド FASTQ を 16 サンプル検出しました。
-    V1-V3 領域（27F/338R）用のパイプラインを生成します。
-    どのような解析を行いたいですか？
+[ツール実行: read_file] metadata.tsv
+  -> group 列: control / treatment を確認...
 
-あなた > 分類組成と多様性の両方やりたい
-
-AI: 了解です。以下のファイルを生成します...
+AI: V3-V4 パイプラインを生成します。
+    trim-left-f=17, trim-left-r=21, trunc-f=270, trunc-r=220 を適用。
     -> manifest.tsv
-    -> run_pipeline.sh
+    -> run_pipeline.sh（差次解析込み）
     -> setup_classifier.sh
     -> ANALYSIS_README.md
+
+    ※ STEP 2 の demux-summary.qzv を view.qiime2.org で確認後、
+      品質ドロップ位置を教えてください（trunc-len を微調整します）。
+```
+
+生成後にスクリプトを修正したい場合もエージェントに頼むだけです:
+
+```
+あなた > sampling-depth を 2000 に変更して
+
+AI: run_pipeline.sh の該当部分を修正しました。
 ```
 
 ### 生成されるファイル
@@ -185,6 +200,7 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
           +-- inspect_directory  (データ構造の調査)
           +-- read_file          (ファイル内容の確認)
           +-- write_file         (スクリプト・READMEの書き出し)
+          +-- edit_file          (生成済みスクリプトの部分修正)
           +-- generate_manifest  (QIIME2 マニフェスト生成)
           +-- run_command        (Docker 経由で QIIME2 実行)
           +-- check_system       (環境確認)
@@ -411,27 +427,43 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 ## Usage
 
-Start the agent and the AI will guide you interactively.
+The agent asks for **3 pieces of information** at startup.
 
 ```
-AI: Hello! Please tell me the directory path of the data you want to analyze.
+AI: Hello! To get started, please tell me:
+    1. Path to your data directory
+    2. Experimental description (region, primers, comparison groups)
+    3. Desired analyses
 
-You > /Users/yourname/microbiome-data/
+You > Data: /Users/yourname/microbiome-data/
+      Experiment: Human gut microbiome, 16S V3-V4 (341F/806R),
+                  MiSeq PE 2x250bp, control (5) vs treatment (5)
+      Analyses: Taxonomic composition + alpha/beta diversity + differential abundance
 
 [Tool: inspect_directory]
-  -> Scanning directory contents...
+  -> 10 paired-end FASTQ samples detected, metadata.tsv found...
 
-AI: Detected paired-end FASTQ files from 16 samples.
-    Generating a pipeline for the V1-V3 region (27F/338R).
-    What kind of analysis would you like to perform?
+[Tool: read_file] metadata.tsv
+  -> group column: control / treatment confirmed...
 
-You > I want both taxonomic composition and diversity analysis
-
-AI: Got it. Generating the following files...
+AI: Generating V3-V4 pipeline.
+    Applying trim-left-f=17, trim-left-r=21, trunc-f=270, trunc-r=220.
     -> manifest.tsv
-    -> run_pipeline.sh
+    -> run_pipeline.sh  (includes differential abundance)
     -> setup_classifier.sh
     -> ANALYSIS_README.md
+
+    Note: After running STEP 2, open demux-summary.qzv at
+    view.qiime2.org and tell me where quality drops — I'll
+    fine-tune the trunc-len parameters for you.
+```
+
+To modify a generated script, just ask:
+
+```
+You > Change sampling-depth to 2000
+
+AI: Updated the relevant section in run_pipeline.sh.
 ```
 
 ### Generated files
@@ -503,6 +535,7 @@ You
           +-- inspect_directory  (scan data structure)
           +-- read_file          (read file contents)
           +-- write_file         (write scripts & README)
+          +-- edit_file          (patch generated scripts)
           +-- generate_manifest  (create QIIME2 manifest)
           +-- run_command        (run QIIME2 via Docker)
           +-- check_system       (verify environment)

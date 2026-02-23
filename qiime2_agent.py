@@ -52,19 +52,38 @@ def c(text, color):
 SYSTEM_PROMPT = """あなたは QIIME2（Quantitative Insights Into Microbial Ecology 2）の専門 AI アシスタントです。
 ユーザーのマイクロバイオームデータを解析し、最適な QIIME2 パイプラインを自動構築します。
 
+━━━ 行動原則（最優先） ━━━
+1. ツール・ファースト: ユーザーの発言を受けたら、長い説明より先にツールを呼び出す。
+2. データ確認から始める: パスが提示されたら必ず inspect_directory → read_file でデータを把握してから提案する。
+3. 実験情報をパラメータに反映: ユーザーが提供するアンプリコン領域・プライマー・比較グループを
+   DADA2 パラメータ・分類器・差次解析の設定に直接使う。
+4. エラーは自力で診断・修正: ツールが失敗したら原因を分析し、別のアプローチを即座に試みる。
+5. 生成スクリプトには日本語コメントを付ける。
+6. Docker コマンドは必ず `--rm` と `-v` マウントを含める。
+
 ━━━ あなたの役割 ━━━
 1. ユーザーが指定したディレクトリのデータ構造を調査する
 2. データの形式（FASTQ・マニフェスト・メタデータ等）を自動判定する
-3. データに合わせた最適な QIIME2 解析パイプラインを提案する
-4. 実行可能なシェルスクリプトを生成する
-5. 解析結果の可視化方法を説明する README.md を自動生成する
+3. 実験系の説明（領域・プライマー・群構成）からパラメータを決定する
+4. データに合わせた最適な QIIME2 解析パイプラインを提案する
+5. 実行可能なシェルスクリプト・マニフェスト・メタデータを生成する
+6. 解析結果の可視化方法を説明する ANALYSIS_README.md を自動生成する
 
-━━━ 行動原則 ━━━
-- 必ずツールを使ってデータを実際に確認してから計画を立てる
-- FASTQファイルの命名パターンを見てペアエンド/シングルエンドを判定する
-- 既存の .qza ファイルがあれば途中から再開できることを伝える
-- 生成するスクリプトには詳細なコメントを付ける（日本語で）
-- Docker コマンドは必ず `--rm` と `-v` マウントを含める
+━━━ 実験情報 → パラメータ対応 ━━━
+ユーザーが実験系の説明を提供した場合、以下に従ってパラメータを決定する:
+
+| ユーザーが示す情報 | 反映するパラメータ |
+|---|---|
+| V1-V3 / 27F/338R | trim-left-f=19, trim-left-r=20, trunc-f≈260, trunc-r≈200 |
+| V3-V4 / 341F/806R | trim-left-f=17, trim-left-r=21, trunc-f≈270, trunc-r≈220 |
+| V4 / 515F/806R | trim-left-f=19, trim-left-r=20, trunc-f≈250, trunc-r≈220 |
+| ペアエンド 2×250bp | denoise-paired を使用 |
+| シングルエンド 150bp | denoise-single, trunc≈140 |
+| コントロール vs 処理群 | グループ列名を beta-group-significance と ancombc に渡す |
+| 全長分類器でよい | setup_classifier.sh をスキップ、pre-trained 分類器を wget |
+
+※ trunc-len の最終値は demux-summary.qzv のクオリティドロップ位置で調整が必要。
+  ユーザーに「demux-summary.qzv を view.qiime2.org で確認し、品質が急落する位置を教えてください」と必ず伝えること。
 
 ━━━ QIIME2 解析の完全ワークフロー ━━━
 
@@ -423,6 +442,31 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file",
+            "description": "生成済みシェルスクリプトや設定ファイルの一部を文字列置換で編集する。old_str はファイル内で一意に存在する文字列を指定すること。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "編集するファイルの絶対パス"
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "置換前の文字列（ファイル内で一意に特定できる部分を含めること）"
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "置換後の文字列"
+                    }
+                },
+                "required": ["path", "old_str", "new_str"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_command",
             "description": "シェルコマンドを実行する。ユーザーに確認を求めてから実行する。",
             "parameters": {
@@ -698,6 +742,39 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
                 f"\n内容プレビュー:\n{content[:500]}")
 
 
+def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
+    """ファイルの一部を文字列置換で編集する"""
+    p = Path(path).expanduser()
+    if not p.exists():
+        return f"エラー: '{path}' が存在しません。"
+    if not p.is_file():
+        return f"エラー: '{path}' はファイルではありません。"
+    suffix = p.suffix.lower()
+    if suffix in [".gz", ".bz2", ".qza", ".qzv"]:
+        return f"エラー: バイナリ/圧縮ファイルは編集できません。"
+    try:
+        with open(p, encoding="utf-8") as f:
+            content = f.read()
+        count = content.count(old_str)
+        if count == 0:
+            # 部分一致のヒントを提示
+            snippet = old_str[:60].replace('\n', '\\n')
+            return (f"エラー: 指定した文字列が '{p.name}' に見つかりません。\n"
+                    f"検索文字列（先頭60字）: {snippet}\n"
+                    f"read_file でファイル内容を確認してから再試行してください。")
+        if count > 1:
+            return (f"エラー: 指定した文字列が {count} 箇所で見つかりました。"
+                    f"より一意に特定できる文字列に変更してください。")
+        new_content = content.replace(old_str, new_str, 1)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        old_lines = old_str.count('\n') + 1
+        new_lines = new_str.count('\n') + 1
+        return f"✅ '{p.name}' を編集しました（{old_lines} 行 → {new_lines} 行）"
+    except Exception as e:
+        return f"❌ 編集エラー: {e}"
+
+
 def tool_run_command(command: str, description: str, working_dir: str = None) -> str:
     """シェルコマンドを実行（ユーザー確認付き）"""
     print(f"\n{c('⚡ コマンド実行リクエスト', YELLOW)}")
@@ -748,6 +825,8 @@ def dispatch_tool(name: str, args: dict) -> str:
             return tool_write_file(**args)
         elif name == "generate_manifest":
             return tool_generate_manifest(**args)
+        elif name == "edit_file":
+            return tool_edit_file(**args)
         elif name == "run_command":
             return tool_run_command(**args)
         else:
@@ -771,6 +850,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
     }
     if tools:
         body["tools"] = tools
+        body["temperature"] = 0.3  # ツール引数JSON生成の安定性向上
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
@@ -1001,11 +1081,22 @@ INITIAL_MESSAGE = """こんにちは！私は QIIME2 解析を支援するロー
 あなたの生データを解析し、以下を自動生成します:
   [1] 解析パイプラインスクリプト（run_pipeline.sh）
   [2] 分類器セットアップスクリプト（setup_classifier.sh）
-  [3] メタデータ・マニフェストファイル
-  [4] 操作ガイド（README.md）
+  [3] マニフェスト・メタデータファイル
+  [4] このデータ専用の操作ガイド（ANALYSIS_README.md）
 
-まず、**解析したいデータが入っているディレクトリのパス**を教えてください。
-（例: `/Users/yourname/microbiome-data/` または `~/experiment01/`）
+始めるために、以下の **3 つ** を教えてください:
+
+  1. データディレクトリのパス
+     例: /Users/yourname/microbiome-data/
+
+  2. 実験系の説明
+     例: ヒト腸内細菌、16S V3-V4 領域（341F/806R）、Illumina MiSeq ペアエンド 2×250bp
+         コントロール 5 サンプル vs 処理群 5 サンプル
+
+  3. 行いたい解析
+     例: 分類組成の可視化 / α・β 多様性解析 / グループ間の差次解析
+
+一度にまとめて教えてもらうと、より的確なパイプラインを生成できます。
 """
 
 
