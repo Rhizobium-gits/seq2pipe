@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+
+# 環境設定（モデル名などローカル設定）
+.env
+
+# Python キャッシュ
+__pycache__/
+*.pyc
+*.pyo
+
+# QIIME2 大容量ファイル（個別にダウンロード）
+silva-*.qza
+*.qza
+*.qzv
+
+# 解析結果（再現可能なので除外）
+results/
+
+# ログ
+*.log
