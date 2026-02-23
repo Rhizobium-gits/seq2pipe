@@ -1130,9 +1130,13 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
             f.write(content)
 
         result = [f"✅ ペアエンドマニフェストを生成: '{out_path}'",
-                  f"   ペア数: {matched}"]
+                  f"   ペア数: {matched} / R1ファイル数: {len(r1_files)}"]
         if unmatched:
-            result.append(f"   ⚠️  R2が見つからなかったファイル: {', '.join(unmatched)}")
+            match_pct = matched / len(r1_files) * 100
+            if match_pct < 80:
+                result.append(f"   ⚠️  R2が見つからなかったファイル ({100 - match_pct:.0f}% 未マッチ): {', '.join(unmatched)}")
+            else:
+                result.append(f"   ⚠️  R2が見つからなかったファイル: {', '.join(unmatched)}")
         result.append(f"\n内容プレビュー:\n{content[:500]}")
         return "\n".join(result)
 
@@ -1289,12 +1293,22 @@ def tool_execute_python(code: str, description: str, output_dir: str = "",
         output_dir = SESSION_FIGURE_DIR
 
     out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
+    try:
+        out_path.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return f"❌ 出力ディレクトリを作成できません（権限不足）: {out_path}"
+    except OSError as e:
+        return f"❌ ディレクトリ作成エラー: {e}"
 
     # 🐱 サブフォルダ対応（解析種別ごとに図を整理）
     safe_sub = re.sub(r'[^\w]', '_', subfolder).strip('_') if subfolder else ""
     figures_dir = (out_path / "figures" / safe_sub) if safe_sub else (out_path / "figures")
-    figures_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        figures_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return f"❌ 図ディレクトリを作成できません（権限不足）: {figures_dir}"
+    except OSError as e:
+        return f"❌ 図ディレクトリ作成エラー: {e}"
 
     # 🐱 プリアンブル: PLOT_CONFIG 変数 + 共通インポートを自動注入
     preamble = f"""import sys, os, warnings
@@ -2135,9 +2149,10 @@ def main():
     print_banner()
 
     # 🐱 セッションごとにグローバル状態をリセット（同一プロセスで複数回呼ばれた場合の混入防止）
-    global ANALYSIS_LOG, SESSION_FIGURE_DIR
+    global ANALYSIS_LOG, SESSION_FIGURE_DIR, LANG
     ANALYSIS_LOG = []
     SESSION_FIGURE_DIR = ""
+    LANG = "ja"  # 🐱 select_language() で上書きされる
 
     # 🐱 言語選択
     select_language()

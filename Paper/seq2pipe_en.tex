@@ -1,5 +1,5 @@
 % seq2pipe: A Local LLM-Powered AI Agent for Automated QIIME2 Pipeline Generation
-% Compile with: pdflatex seq2pipe_en.tex
+% Compile with: pdflatex seq2pipe_en.tex  or  tectonic seq2pipe_en.tex
 
 \documentclass[12pt, a4paper]{article}
 
@@ -68,7 +68,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small seq2pipe Technical Report}
-\fancyhead[R]{\small 2025}
+\fancyhead[R]{\small 2026}
 \fancyfoot[C]{\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 
@@ -89,7 +89,7 @@
   {\large A Local LLM-Powered AI Agent for Automated QIIME2 Pipeline Generation}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small 2025}
+  {\small 2026}
 \end{center}
 
 \vspace{4mm}
@@ -98,19 +98,23 @@
 
 % Abstract
 \begin{abstract}
-We present \textbf{seq2pipe}, an interactive AI agent that automates
+We present \textbf{seq2pipe}, an interactive AI agent that automates end-to-end
 microbiome analysis by combining a locally running large language model (LLM)
 with the QIIME2 bioinformatics platform.
 Given raw FASTQ sequencing data, seq2pipe automatically inspects
 the data structure, designs an appropriate QIIME2 analysis pipeline,
-generates ready-to-execute shell scripts, and produces a visualization guide ---
-all through natural language dialogue.
-The entire processing pipeline runs on the user's local machine,
-eliminating dependencies on cloud services or paid APIs.
+generates ready-to-execute shell scripts, performs Python-based downstream
+analysis (diversity, taxonomy, differential abundance, machine learning),
+saves all figures as PDF, and produces bilingual (Japanese/English)
+TeX/PDF reports --- all through natural language dialogue.
+The entire workflow runs on the user's local machine, eliminating
+dependencies on cloud services or paid APIs.
 The implementation uses only Python's standard library and leverages
-Ollama's local LLM inference engine to support function calling.
-Evaluation with the \texttt{qwen2.5-coder:7b} model demonstrates
-that practical, well-parameterized QIIME2 pipelines can be reliably generated.
+Ollama's local LLM inference engine to orchestrate 11 specialized tools
+via function calling.
+A startup language selector (Japanese/English), automatic Python dependency
+checking, and comprehensive error handling make seq2pipe immediately
+usable by researchers without bioinformatics backgrounds.
 \end{abstract}
 
 \vspace{4mm}
@@ -128,6 +132,9 @@ users must understand multiple data formats, select appropriate parameters for
 denoising algorithms (DADA2), manage Docker-containerized execution environments,
 and interpret multi-step analysis outputs. These barriers make QIIME2 inaccessible
 to many researchers, particularly those without bioinformatics backgrounds.
+Furthermore, visualization of QIIME2 outputs (\texttt{.qzv} artifacts) typically
+requires an online viewer (\texttt{view.qiime2.org}), creating an additional
+dependency that is unavailable in offline or restricted-network environments.
 
 The rapid advancement of large language models (LLMs) has opened the door to
 domain-specific analysis automation through natural language~\cite{brown2020gpt3}.
@@ -138,7 +145,11 @@ performed entirely on commodity hardware, resolving these concerns.
 
 In this report, we describe the design, architecture, and implementation of
 \textbf{seq2pipe}, an interactive AI agent that integrates local LLM inference
-with QIIME2 to provide a fully automated, offline-capable microbiome analysis assistant.
+with QIIME2 to provide a fully automated, offline-capable microbiome analysis
+assistant. seq2pipe goes well beyond pipeline generation: it performs Python-based
+downstream statistical analysis, saves publication-quality figures, and
+automatically generates bilingual research reports --- all within a single
+conversational interface.
 
 % -------------------------------------------------------
 \section{Background and Related Work}
@@ -180,12 +191,12 @@ making it an ideal backend for locally deployed AI agents.
 
 \subsection{Design Principles}
 
-seq2pipe was developed according to five core design principles:
+seq2pipe was developed according to seven core design principles:
 
 \begin{enumerate}[leftmargin=2em]
   \item \textbf{Zero external dependencies}:
     Only Python's standard library (\texttt{json}, \texttt{urllib},
-    \texttt{subprocess}, \texttt{pathlib}, etc.) is used,
+    \texttt{subprocess}, \texttt{pathlib}, \texttt{socket}, etc.) is used,
     eliminating the need for \texttt{pip install}.
   \item \textbf{Fully local execution}:
     Ollama's local inference engine is used exclusively,
@@ -196,6 +207,12 @@ seq2pipe was developed according to five core design principles:
     All shell commands require explicit user confirmation before execution.
   \item \textbf{Embedded domain knowledge}:
     The system prompt encodes a complete QIIME2 workflow knowledge base.
+  \item \textbf{Multilingual UI}:
+    The user selects Japanese or English at startup; all AI responses
+    and auto-generated reports follow this preference.
+  \item \textbf{Robust error handling}:
+    Connection errors, timeouts, empty responses, and filesystem errors
+    are all caught and reported with user-friendly messages.
 \end{enumerate}
 
 \subsection{Overall Architecture}
@@ -205,12 +222,13 @@ The user launches the Python agent (\texttt{qiime2\_agent.py})
 via platform-specific launch scripts.
 The agent communicates with the local Ollama API endpoint
 (\texttt{http://localhost:11434/api/chat}) and coordinates
-six specialized tools to interact with the filesystem and QIIME2 (via Docker).
+11 specialized tools to interact with the filesystem, QIIME2 (via Docker),
+and Python analysis libraries.
 
 \begin{figure}[h]
   \centering
   \begin{verbatim}
-  User
+  User (language selection: Japanese / English)
     |
     v
   [launch.sh / launch.bat]
@@ -220,12 +238,17 @@ six specialized tools to interact with the filesystem and QIIME2 (via Docker).
     |                              |
     |                        [LLM Model]
     |
-    +---> [Tool 1] inspect_directory
-    +---> [Tool 2] read_file
-    +---> [Tool 3] write_file
-    +---> [Tool 4] generate_manifest
-    +---> [Tool 5] run_command  (Docker / QIIME2)
-    +---> [Tool 6] check_system
+    +---> [Tool  1] inspect_directory  (data structure survey)
+    +---> [Tool  2] read_file          (read text files)
+    +---> [Tool  3] write_file         (write scripts / manifests)
+    +---> [Tool  4] edit_file          (partial file editing)
+    +---> [Tool  5] generate_manifest  (QIIME2 manifest generation)
+    +---> [Tool  6] run_command        (Docker / QIIME2 execution)
+    +---> [Tool  7] check_system       (environment check)
+    +---> [Tool  8] set_plot_config    (figure style / DPI / format)
+    +---> [Tool  9] execute_python     (Python analysis & visualization)
+    +---> [Tool 10] build_report_tex   (TeX/PDF report generation)
+    +---> [Tool 11] compile_report     (LLM-written TeX compilation)
   \end{verbatim}
   \caption{Overall architecture of seq2pipe}
   \label{fig:arch}
@@ -234,6 +257,18 @@ six specialized tools to interact with the filesystem and QIIME2 (via Docker).
 % -------------------------------------------------------
 \section{Implementation Details}
 % -------------------------------------------------------
+
+\subsection{Startup Sequence and Multilingual UI}
+
+On launch, \texttt{select\_language()} prompts the user to choose
+Japanese (\texttt{ja}) or English (\texttt{en}).
+The selection is stored in the \texttt{LANG} global variable, and the
+\texttt{ui()} function returns all interface text in the chosen language.
+Auto-generated reports follow the same language setting.
+
+\texttt{check\_python\_deps()} verifies that numpy, pandas, matplotlib,
+and seaborn are available at startup via \texttt{subprocess},
+guiding the user to install any missing packages before analysis begins.
 
 \subsection{Embedding Domain Knowledge in the System Prompt}
 
@@ -251,6 +286,7 @@ workflow knowledge base. This includes:
   \item Metadata file format specifications
   \item SILVA 138 taxonomic hierarchy explanation
   \item Common errors and troubleshooting guidance
+  \item Python downstream analysis and autonomous exploration mode guidelines
 \end{itemize}
 
 By embedding this knowledge directly into the system prompt,
@@ -258,7 +294,7 @@ a general-purpose code LLM is transformed into a QIIME2 domain expert.
 
 \subsection{Tool Definitions and Function Calling}
 
-Six tools are defined in JSON Schema format compatible with
+Eleven tools are defined in JSON Schema format compatible with
 Ollama's function calling interface. Table~\ref{tab:tools}
 summarizes the tools and their roles.
 
@@ -266,23 +302,35 @@ summarizes the tools and their roles.
   \centering
   \caption{Tools provided by seq2pipe}
   \label{tab:tools}
-  \begin{tabular}{lp{8.5cm}}
+  \begin{tabular}{lp{8cm}}
     \toprule
     \textbf{Tool Name} & \textbf{Function} \\
     \midrule
     \texttt{inspect\_directory} &
-      Lists files in a directory with sizes and automatically
-      identifies FASTQ, QZA, and metadata files \\
+      Lists files with sizes and automatically identifies
+      FASTQ, QZA, and metadata files \\
     \texttt{read\_file} &
       Reads text files (TSV, CSV, Markdown, etc.) up to 50 lines \\
-    \texttt{check\_system} &
-      Verifies installation status and versions of Docker, Ollama, and Python \\
     \texttt{write\_file} &
       Writes generated scripts, manifests, and README files to disk \\
+    \texttt{edit\_file} &
+      Replaces a unique string in an existing file (old\_str $\to$ new\_str) \\
     \texttt{generate\_manifest} &
       Auto-generates a QIIME2 manifest TSV from a FASTQ directory \\
     \texttt{run\_command} &
       Executes shell commands after explicit user confirmation \\
+    \texttt{check\_system} &
+      Verifies Docker, Ollama, Python, and available disk space \\
+    \texttt{set\_plot\_config} &
+      Configures matplotlib style, palette, DPI, font size, and output format \\
+    \texttt{execute\_python} &
+      Executes Python code for analysis/visualization, saves figures
+      to \texttt{FIGURE\_DIR}, and appends steps to \texttt{ANALYSIS\_LOG} \\
+    \texttt{build\_report\_tex} &
+      Programmatically builds TeX from \texttt{ANALYSIS\_LOG} and compiles
+      bilingual Japanese/English PDF reports via tectonic \\
+    \texttt{compile\_report} &
+      Receives LLM-written TeX source and compiles it to PDF (legacy mode) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -293,12 +341,19 @@ The \texttt{run\_agent\_loop()} function controls the core reasoning-action
 cycle. It sends conversation history to the LLM, detects tool calls
 in the response, executes them sequentially, appends results to the
 conversation history, and repeats until the LLM produces a final
-text-only response (Listing~\ref{lst:loop}).
+text-only response. An empty-response guard retries automatically
+if the LLM returns neither content nor tool calls (Listing~\ref{lst:loop}).
 
 \begin{lstlisting}[language=Python, caption={Core agent loop implementation}, label={lst:loop}]
 def run_agent_loop(messages: list, model: str):
     while True:
         response = call_ollama(messages, model, tools=TOOLS)
+
+        # Guard: retry on empty response
+        if not response["content"] and not response["tool_calls"]:
+            print("Empty response from AI. Retrying...")
+            continue
+
         assistant_msg = {"role": "assistant",
                          "content": response["content"]}
 
@@ -319,31 +374,52 @@ def run_agent_loop(messages: list, model: str):
             break      # Text-only response: end loop
 \end{lstlisting}
 
-\subsection{Communication with the Ollama API}
+\subsection{Communication with the Ollama API and Error Handling}
 
 The \texttt{call\_ollama()} function sends JSON requests to Ollama's
 \texttt{/api/chat} endpoint with streaming enabled, and processes
-server-sent events line by line. It uses only \texttt{urllib.request}
-from Python's standard library, without any third-party HTTP clients.
+server-sent events line by line using only \texttt{urllib.request}
+from Python's standard library.
 
-\begin{lstlisting}[language=Python, caption={Ollama API communication}]
-def call_ollama(messages, model, tools=None):
-    body = {"model": model, "messages": messages,
-            "stream": True}
-    if tools:
-        body["tools"] = tools
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        OLLAMA_URL, data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        for raw_line in resp:
-            chunk = json.loads(raw_line.decode())
-            # Process streaming output and tool call detection
-            ...
-\end{lstlisting}
+Comprehensive error handling covers:
+\begin{itemize}
+  \item \texttt{urllib.error.HTTPError}: Ollama server HTTP errors (4xx/5xx)
+  \item \texttt{urllib.error.URLError + socket.timeout}:
+    distinguishes timeouts (300 s) from connection-refused errors
+    (Ollama not running)
+  \item \texttt{socket.timeout / TimeoutError}:
+    socket-level timeout fallback
+\end{itemize}
+
+\subsection{Python Downstream Analysis and Automatic Report Generation}
+
+\texttt{tool\_execute\_python()} executes Python code via
+\texttt{subprocess.run()} with a timeout of 300 seconds.
+Before execution, a preamble is prepended that injects
+\texttt{FIGURE\_DIR}, \texttt{PLOT\_CONFIG}, and \texttt{FIGURE\_FORMAT}
+variables, allowing the LLM to generate analysis code without
+knowing the exact file paths.
+Each execution appends a structured entry (step name, figure paths,
+statistical results) to the global \texttt{ANALYSIS\_LOG}.
+
+\texttt{tool\_build\_report\_tex()} reads \texttt{ANALYSIS\_LOG}
+and programmatically generates complete TeX source --- no LLM
+involvement required, making it fast and deterministic.
+Separate Japanese (XeLaTeX + xeCJK) and English (pdflatex) documents
+are produced and compiled to PDF via tectonic.
+
+\subsection{Automatic Manifest Generation}
+
+The \texttt{tool\_generate\_manifest()} function uses regular expressions
+(\texttt{re.sub(count=1)}) to parse FASTQ filenames,
+automatically generating QIIME2 manifest TSV files for both
+paired-end and single-end data. R2 file lookup is implemented
+with a dictionary for O(1) performance, scaling to large datasets.
+If no R1/R2 pairs are found, the function returns an error
+without writing an empty manifest. Partial matching rates below 80\%
+trigger an enhanced warning showing the mismatch percentage.
+Path translation to Docker container-internal paths
+(default: \texttt{/data/output}) is performed automatically.
 
 \subsection{Cross-Platform Compatibility}
 
@@ -352,9 +428,9 @@ Three platform-specific differences are handled explicitly:
 \begin{itemize}
   \item \textbf{Docker detection}:
     On macOS, the Docker Desktop binary path
-    (\texttt{/Applications/Docker.app/Contents/Resources/bin/docker})
+    (\texttt{/Applications/Docker.app/.../docker})
     is checked first; on other platforms, \texttt{shutil.which("docker")}
-    is used (\texttt{\_get\_docker\_cmd()}).
+    is used.
   \item \textbf{Windows ANSI color support}:
     Calling \texttt{os.system("")} activates ANSI escape sequence
     processing in Windows 10+ terminals.
@@ -362,15 +438,6 @@ Three platform-specific differences are handled explicitly:
     Bash shell scripts for macOS/Linux and
     PowerShell + batch files for Windows are provided separately.
 \end{itemize}
-
-\subsection{Automatic Manifest Generation}
-
-The \texttt{tool\_generate\_manifest()} function uses regular expressions
-to parse FASTQ filenames (\texttt{\_R1\_} / \texttt{\_R2\_} patterns),
-automatically generating QIIME2 manifest TSV files for both
-paired-end and single-end data. It also performs automatic
-path translation to Docker container-internal paths
-(default: \texttt{/data/output}).
 
 % -------------------------------------------------------
 \section{Analysis Workflow}
@@ -413,6 +480,25 @@ Primer trim lengths and truncation positions are automatically
 adjusted based on the detected hypervariable region
 (V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R).
 
+Following QIIME2 analysis, the autonomous exploration mode executes
+five phases of Python downstream analysis:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Phase 1 (alpha\_diversity)}:
+    Shannon / Simpson / Chao1 indices with statistical tests
+  \item \textbf{Phase 2 (beta\_diversity)}:
+    Bray-Curtis PCoA with PERMANOVA
+  \item \textbf{Phase 3 (taxonomy)}:
+    Phylum/genus-level stacked bar charts and heatmaps
+  \item \textbf{Phase 4 (differential\_abundance)}:
+    All-ASV Mann-Whitney U with Benjamini-Hochberg correction and volcano plot
+  \item \textbf{Phase 5 (machine\_learning)}:
+    Random Forest 5-fold CV with feature importance visualization
+\end{enumerate}
+
+Upon completion, \texttt{build\_report\_tex} automatically generates
+bilingual TeX/PDF reports from \texttt{ANALYSIS\_LOG}.
+
 % -------------------------------------------------------
 \section{Supported Models and Performance}
 % -------------------------------------------------------
@@ -441,9 +527,10 @@ in Ollama. Table~\ref{tab:models} lists recommended models.
 \end{table}
 
 The code-generation-optimized \texttt{qwen2.5-coder:7b} is recommended
-as the default model. For RAM-constrained environments,
+as the default model. For RAM-constrained environments (e.g., 8 GB MacBook Air),
 \texttt{qwen2.5-coder:3b} or \texttt{llama3.2:3b} provide a
-lighter-weight alternative.
+lighter-weight alternative with minimal capability trade-off
+for structured QIIME2 command generation.
 
 % -------------------------------------------------------
 \section{Setup and Launch}
@@ -464,6 +551,10 @@ Table~\ref{tab:requirements} summarizes the required software stack.
     Python 3.9+ & Agent runtime & Typically pre-installed \\
     Ollama & Local LLM inference & Automated via \texttt{setup.sh} \\
     Docker Desktop/Engine & QIIME2 execution environment & Manual install \\
+    numpy, pandas, etc. & Python downstream analysis &
+      Automated via \texttt{setup.sh} \\
+    tectonic (optional) & PDF report compilation &
+      \texttt{brew install tectonic} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -472,14 +563,15 @@ Table~\ref{tab:requirements} summarizes the required software stack.
 
 \begin{enumerate}[leftmargin=2em]
   \item Run \texttt{setup.sh} (macOS/Linux) or \texttt{setup.bat} (Windows)
-    to install Ollama and download the LLM model.
+    to install Ollama, download the LLM model, and install Python packages.
   \item Run \texttt{launch.sh} / \texttt{launch.bat}: the script verifies
     Ollama and Docker availability, then starts the agent.
+  \item Select Japanese or English at the language prompt.
   \item Through natural language dialogue, provide the data directory path
     and specify the desired analyses
     (taxonomic composition, diversity, differential abundance, etc.).
-  \item The agent automatically inspects the data and generates
-    a customized script bundle and operation guide.
+  \item The agent automatically inspects the data, generates a customized
+    script bundle, runs Python analyses, and produces a PDF report.
 \end{enumerate}
 
 % -------------------------------------------------------
@@ -496,6 +588,13 @@ seq2pipe achieves the following:
   \item Complete cross-platform support (macOS / Linux / Windows)
   \item Automatic recognition of FASTQ data structure and adaptive pipeline generation
   \item Safe QIIME2 command execution with explicit user confirmation
+  \item Python-based 5-phase downstream analysis (diversity, taxonomy,
+    differential abundance, machine learning)
+  \item Automatic bilingual (Japanese/English) TeX/PDF report generation
+    from \texttt{ANALYSIS\_LOG} without LLM involvement
+  \item Startup language selection UI (Japanese / English)
+  \item Robust handling of connection errors, timeouts, empty responses,
+    and filesystem errors
 \end{itemize}
 
 \subsection{Current Limitations}
@@ -506,6 +605,7 @@ seq2pipe achieves the following:
   \item Performance with large datasets (100+ samples) has not been formally evaluated.
   \item Initial SILVA 138 classifier training requires approximately 30 GB
     of disk space and several hours of computation.
+  \item PDF report compilation requires tectonic to be installed separately.
 \end{itemize}
 
 \subsection{Future Directions}
@@ -516,6 +616,7 @@ seq2pipe achieves the following:
   \item Support for additional marker genes (ITS, 18S rRNA)
   \item Feedback loop incorporating pipeline execution results
     to iteratively refine parameters
+  \item Parallel tool execution for faster autonomous exploration
 \end{itemize}
 
 % -------------------------------------------------------
@@ -525,9 +626,10 @@ seq2pipe achieves the following:
 We have described seq2pipe, an interactive AI agent that integrates
 local LLM inference with the QIIME2 microbiome analysis platform.
 By embedding comprehensive QIIME2 domain knowledge into the system prompt
-and providing six specialized tools through Ollama's function calling interface,
-seq2pipe enables researchers to automate complex 16S rRNA analysis workflows
-through natural language dialogue --- entirely offline and without any
+and providing 11 specialized tools through Ollama's function calling interface,
+seq2pipe enables researchers to automate an entire 16S rRNA analysis workflow ---
+from raw FASTQ data through statistical analysis, publication-quality figures,
+and bilingual research reports --- entirely offline and without any
 cloud dependencies.
 
 seq2pipe is released as open source under the MIT License and is available at:

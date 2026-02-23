@@ -73,7 +73,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small seq2pipe 技術レポート}
-\fancyhead[R]{\small 2025}
+\fancyhead[R]{\small 2026}
 \fancyfoot[C]{\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 
@@ -94,7 +94,7 @@
   {\large ローカル LLM による QIIME2 パイプライン自動生成 AI エージェント}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small 2025 年}
+  {\small 2026 年}
 \end{center}
 
 \vspace{4mm}
@@ -107,13 +107,14 @@
 \textbf{seq2pipe} の設計と実装について報告する。
 seq2pipe はユーザーが保有する生 FASTQ データを入力として受け取り、
 データ構造の自動認識・QIIME2 解析パイプラインの設計・実行可能シェルスクリプトの生成・
-可視化ガイドの作成を対話形式で行う。
+Python による高度な下流解析・可視化・日英 TeX/PDF レポートの自動生成を
+対話形式で一貫して行う。
 処理はすべてユーザーのローカル環境で完結し、
 クラウドサービスや有料 API への依存を排除する。
 実装には Python 標準ライブラリのみを使用し、Ollama が提供する
-ローカル LLM 推論エンジンを通じて関数呼び出し（Function Calling）を実現する。
-\texttt{qwen2.5-coder:7b} モデルを用いることで
-実用的な QIIME2 パイプラインが生成されることを確認した。
+ローカル LLM 推論エンジンを通じて 11 種類のツールによる関数呼び出し（Function Calling）を実現する。
+起動時の言語選択（日本語 / 英語）・Python 依存チェック・エラー処理の充実により、
+研究者が即座に実用できる堅牢なツールを提供する。
 \end{abstract}
 
 \vspace{4mm}
@@ -129,6 +130,8 @@ seq2pipe はユーザーが保有する生 FASTQ データを入力として受�
 広く普及している。しかし、QIIME2 の学習コストは高く、
 データ形式の理解・適切なパラメータ選択・Docker を介した実行環境の構築など、
 初心者にとっての障壁が大きい。
+さらに QIIME2 の出力（\texttt{.qzv} アーティファクト）の可視化には
+\texttt{view.qiime2.org} への依存があり、オフライン環境では解析結果の確認も困難である。
 
 近年、大規模言語モデル（LLM）の急速な発展により、
 自然言語によるコード生成やドメイン特化型の解析支援が実用化されつつある~\cite{brown2020gpt3}。
@@ -138,6 +141,9 @@ Ollama~\cite{ollama} をはじめとするローカル LLM 実行フレームワ
 
 本研究では、これらの技術を統合した対話型 AI エージェント \textbf{seq2pipe} を開発し、
 その設計原則・アーキテクチャ・実装詳細を報告する。
+seq2pipe は QIIME2 解析の自動化に留まらず、Python による下流解析・統計検定・
+機械学習・可視化、そして日本語・英語両対応の自動レポート生成まで
+一貫したパイプラインを提供する点で、従来ツールを大きく超える。
 
 % -------------------------------------------------------
 \section{背景と関連研究}
@@ -178,7 +184,7 @@ seq2pipe は以下の設計原則に従って開発した。
 
 \begin{enumerate}[leftmargin=2em]
   \item \textbf{外部依存ゼロ}: Python 標準ライブラリ（\texttt{json}, \texttt{urllib},
-    \texttt{subprocess}, \texttt{pathlib} 等）のみを使用し、
+    \texttt{subprocess}, \texttt{pathlib}, \texttt{socket} 等）のみを使用し、
     \texttt{pip install} を不要とする。
   \item \textbf{ローカル完結}: Ollama のローカル推論エンジンを使用し、
     インターネット接続を不要とする（初期セットアップを除く）。
@@ -186,6 +192,10 @@ seq2pipe は以下の設計原則に従って開発した。
   \item \textbf{安全なコマンド実行}: コマンド実行前にユーザーへの確認を必須とする。
   \item \textbf{QIIME2 ドメイン知識の内包}: システムプロンプトに QIIME2 の
     完全なワークフロー知識を埋め込む。
+  \item \textbf{多言語 UI}: 起動時に日本語 / 英語を選択し、
+    AI 応答・自動生成レポートを統一する。
+  \item \textbf{堅牢なエラー処理}: 接続エラー・タイムアウト・空レスポンス・
+    ファイルシステムエラーをすべて適切にキャッチし、ユーザーに分かりやすいメッセージを返す。
 \end{enumerate}
 
 \subsection{全体アーキテクチャ}
@@ -194,12 +204,13 @@ seq2pipe は以下の設計原則に従って開発した。
 ユーザーは起動スクリプト（\texttt{launch.sh} / \texttt{launch.bat}）を通じて
 Python エージェント本体（\texttt{qiime2\_agent.py}）を起動する。
 エージェントは Ollama のローカル API（\texttt{http://localhost:11434/api/chat}）
-と通信し、6 種類のツールを介してファイルシステムや QIIME2（Docker 経由）と連携する。
+と通信し、11 種類のツールを介してファイルシステム・QIIME2（Docker 経由）・
+Python 解析エンジンと連携する。
 
 \begin{figure}[h]
   \centering
   \begin{verbatim}
-  ユーザー
+  ユーザー（言語選択: 日本語 / English）
     |
     v
   [launch.sh / launch.bat]
@@ -209,12 +220,17 @@ Python エージェント本体（\texttt{qiime2\_agent.py}）を起動する。
     |                              |
     |                        [LLM モデル]
     |
-    +---> [Tool 1] inspect_directory
-    +---> [Tool 2] read_file
-    +---> [Tool 3] write_file
-    +---> [Tool 4] generate_manifest
-    +---> [Tool 5] run_command  (Docker/QIIME2)
-    +---> [Tool 6] check_system
+    +---> [Tool  1] inspect_directory  (データ構造調査)
+    +---> [Tool  2] read_file          (ファイル読み込み)
+    +---> [Tool  3] write_file         (スクリプト書き出し)
+    +---> [Tool  4] edit_file          (スクリプト部分修正)
+    +---> [Tool  5] generate_manifest  (マニフェスト生成)
+    +---> [Tool  6] run_command        (Docker/QIIME2 実行)
+    +---> [Tool  7] check_system       (環境確認)
+    +---> [Tool  8] set_plot_config    (図スタイル設定)
+    +---> [Tool  9] execute_python     (Python 解析・可視化)
+    +---> [Tool 10] build_report_tex   (TeX/PDF レポート生成)
+    +---> [Tool 11] compile_report     (LLM 記述 TeX コンパイル)
   \end{verbatim}
   \caption{seq2pipe の全体アーキテクチャ}
   \label{fig:arch}
@@ -223,6 +239,17 @@ Python エージェント本体（\texttt{qiime2\_agent.py}）を起動する。
 % -------------------------------------------------------
 \section{実装詳細}
 % -------------------------------------------------------
+
+\subsection{起動シーケンスと多言語 UI}
+
+エージェントの起動時に \texttt{select\_language()} が呼ばれ、
+ユーザーは日本語（\texttt{ja}）または英語（\texttt{en}）を選択する。
+選択は \texttt{LANG} グローバル変数に保存され、
+\texttt{ui()} 関数が全 UI テキストを選択言語で返す。
+自動生成されるレポートも同じ言語設定を使用する。
+
+また \texttt{check\_python\_deps()} が起動時に numpy・pandas・matplotlib・seaborn
+の存在を \texttt{subprocess} 経由で確認し、不足する場合はインストールコマンドを案内する。
 
 \subsection{システムプロンプトへのドメイン知識埋め込み}
 
@@ -238,20 +265,21 @@ Python エージェント本体（\texttt{qiime2\_agent.py}）を起動する。
   \item メタデータファイル形式仕様
   \item SILVA 138 分類階層の説明
   \item 一般的なエラーとトラブルシューティング
+  \item Python 下流解析・自律探索モードの実行指針
 \end{itemize}
 
 この手法により、汎用 LLM モデルが QIIME2 専門家として振る舞うことを可能にした。
 
 \subsection{ツール定義と関数呼び出し}
 
-Ollama の Function Calling 機能を活用し、6 つのツールを JSON Schema 形式で定義した。
+Ollama の Function Calling 機能を活用し、11 のツールを JSON Schema 形式で定義した。
 各ツールは特定の役割を担う（表~\ref{tab:tools}）。
 
 \begin{table}[h]
   \centering
   \caption{seq2pipe が提供するツール一覧}
   \label{tab:tools}
-  \begin{tabular}{lp{8cm}}
+  \begin{tabular}{lp{7.5cm}}
     \toprule
     \textbf{ツール名} & \textbf{機能} \\
     \midrule
@@ -259,15 +287,28 @@ Ollama の Function Calling 機能を活用し、6 つのツールを JSON Schem
       指定ディレクトリのファイル一覧・サイズを取得し、
       FASTQ/QZA/メタデータを自動判定する \\
     \texttt{read\_file} &
-      テキストファイル（TSV, CSV, Markdown 等）の内容を最大 50 行読み込む \\
-    \texttt{check\_system} &
-      Docker・Ollama・Python のインストール状況とバージョンを確認する \\
+      テキストファイルの内容を最大 50 行読み込む \\
     \texttt{write\_file} &
       解析スクリプト・マニフェスト・README 等をファイルに書き出す \\
+    \texttt{edit\_file} &
+      既存ファイルの指定文字列を置換する（old\_str → new\_str） \\
     \texttt{generate\_manifest} &
       FASTQ ディレクトリから QIIME2 マニフェスト TSV を自動生成する \\
     \texttt{run\_command} &
       ユーザー確認後にシェルコマンドを実行する \\
+    \texttt{check\_system} &
+      Docker・Ollama・Python のインストール状況とディスク容量を確認する \\
+    \texttt{set\_plot\_config} &
+      matplotlib のスタイル・カラー・DPI・フォントサイズ・保存形式を設定する \\
+    \texttt{execute\_python} &
+      Python コードを実行して解析・可視化を行い、
+      図を \texttt{FIGURE\_DIR} に PDF/PNG で保存、
+      ステップを \texttt{ANALYSIS\_LOG} に記録する \\
+    \texttt{build\_report\_tex} &
+      \texttt{ANALYSIS\_LOG} から TeX を自動構築し、
+      tectonic で日英 PDF レポートをコンパイルする \\
+    \texttt{compile\_report} &
+      LLM が記述した TeX を受け取りコンパイルする（旧方式） \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -276,13 +317,19 @@ Ollama の Function Calling 機能を活用し、6 つのツールを JSON Schem
 
 \texttt{run\_agent\_loop()} 関数が LLM の応答を受け取り、
 ツール呼び出しが含まれる場合は順次実行して結果を会話履歴に追加するループを制御する。
-このループは \texttt{tool\_calls} フィールドが空になるまで継続し、
-最終的にテキスト応答を返す時点で終了する（リスト~\ref{lst:loop}）。
+空レスポンス（\texttt{content} も \texttt{tool\_calls} も空）の場合は
+警告を出して再試行するガード処理を設けている（リスト~\ref{lst:loop}）。
 
 \begin{lstlisting}[language=Python, caption={エージェントループの中核部分}, label={lst:loop}]
 def run_agent_loop(messages: list, model: str):
     while True:
         response = call_ollama(messages, model, tools=TOOLS)
+
+        # 空レスポンスのガード
+        if not response["content"] and not response["tool_calls"]:
+            print("AI からの応答が空でした。再試行します...")
+            continue
+
         assistant_msg = {"role": "assistant",
                          "content": response["content"]}
 
@@ -303,12 +350,43 @@ def run_agent_loop(messages: list, model: str):
             break      # テキスト応答のみ -> ループ終了
 \end{lstlisting}
 
-\subsection{Ollama API との通信}
+\subsection{Ollama API との通信と堅牢なエラー処理}
 
 \texttt{call\_ollama()} 関数は Ollama の \texttt{/api/chat} エンドポイントに
 JSON リクエストを送信し、ストリーミングレスポンスを行単位で受信する。
 Python の \texttt{urllib.request} モジュールのみを使用しており、
 \texttt{requests} 等の外部パッケージに依存しない。
+
+エラー処理として以下を実装した。
+\begin{itemize}
+  \item \texttt{urllib.error.HTTPError}: Ollama サーバーの HTTP エラー（4xx/5xx）
+  \item \texttt{urllib.error.URLError + socket.timeout}: タイムアウト（300 秒）と
+    サーバー未起動（\texttt{Connection refused}）を区別して表示
+  \item \texttt{socket.timeout / TimeoutError}: ソケットレベルのタイムアウト
+\end{itemize}
+
+\subsection{Python 下流解析と自動レポート生成}
+
+\texttt{tool\_execute\_python()} は Python コードを
+\texttt{subprocess.run()} 経由で実行する。
+実行前に \texttt{FIGURE\_DIR}・\texttt{PLOT\_CONFIG}・
+\texttt{FIGURE\_FORMAT} 変数を自動注入するプリアンブルを付加するため、
+LLM はファイルパスを意識せずに解析コードを生成できる。
+実行結果のステップ・図パス・統計結果は \texttt{ANALYSIS\_LOG} に自動蓄積される。
+
+\texttt{tool\_build\_report\_tex()} は \texttt{ANALYSIS\_LOG} の内容から
+TeX ソースを Python で完全生成する（LLM を使用しない）。
+日本語版（XeLaTeX + xeCJK）と英語版（pdflatex）を別々に生成し、
+tectonic でコンパイルして PDF を出力する。
+
+\subsection{マニフェスト自動生成}
+
+\texttt{tool\_generate\_manifest()} は FASTQ ファイルの命名規則
+（\texttt{\_R1\_} / \texttt{\_R2\_} パターン）を正規表現（\texttt{re.sub(count=1)}）で解析し、
+ペアエンド・シングルエンド双方の QIIME2 マニフェスト TSV を自動生成する。
+R2 ファイルの探索は辞書ルックアップ（O(1)）で実装し大規模データセットにも対応する。
+Docker コンテナ内パス（デフォルト: \texttt{/data/output}）への変換も自動で行う。
+ペアが 1 組も見つからない場合はファイルを書かずにエラーを返す。
 
 \subsection{クロスプラットフォーム対応}
 
@@ -317,22 +395,14 @@ macOS・Linux・Windows の差異を吸収するために以下の対策を実�
 \begin{itemize}
   \item \textbf{Docker 検出}:
     macOS では Docker Desktop の固定パス
-    (\texttt{/Applications/Docker.app/Contents/Resources/bin/docker}) を優先し、
-    その他の OS では \texttt{shutil.which("docker")} を使用する（\texttt{\_get\_docker\_cmd()}）。
+    (\texttt{/Applications/Docker.app/.../docker}) を優先し、
+    その他の OS では \texttt{shutil.which("docker")} を使用する。
   \item \textbf{Windows ANSI カラー}:
     \texttt{os.system("")} を呼ぶことで Windows 10 以降における
     ANSI エスケープシーケンスを有効化する。
   \item \textbf{起動スクリプトの分離}:
-    macOS/Linux 用（Bash シェルスクリプト）と
-    Windows 用（PowerShell + バッチファイル）を別々に提供する。
+    macOS/Linux 用（Bash）と Windows 用（PowerShell + バッチ）を別々に提供する。
 \end{itemize}
-
-\subsection{マニフェスト自動生成}
-
-\texttt{tool\_generate\_manifest()} は FASTQ ファイルの命名規則
-（\texttt{\_R1\_} / \texttt{\_R2\_} パターン）を正規表現で解析し、
-ペアエンド・シングルエンド双方の QIIME2 マニフェスト TSV を自動生成する。
-Docker コンテナ内パス（デフォルト: \texttt{/data/output}）への変換も自動で行う。
 
 % -------------------------------------------------------
 \section{解析ワークフロー}
@@ -372,6 +442,19 @@ SILVA 138 参照データベース~\cite{silva} を用いた Naive Bayes 分類�
 16S rRNA 増幅領域の分類学的同定を行う。
 増幅領域（V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R）に応じて
 プライマートリム長・トランケーション長が自動的に調整される。
+
+QIIME2 解析後、自律探索モードでは以下の 5 フェーズの Python 解析を順番に実行する。
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Phase 1 (alpha\_diversity)}: Shannon / Simpson / Chao1 指数の計算・可視化・統計検定
+  \item \textbf{Phase 2 (beta\_diversity)}: Bray-Curtis PCoA + PERMANOVA
+  \item \textbf{Phase 3 (taxonomy)}: 門・属レベルの分類組成 stacked bar + heatmap
+  \item \textbf{Phase 4 (differential\_abundance)}: 全 ASV の Mann-Whitney U + BH 補正 + volcano plot
+  \item \textbf{Phase 5 (machine\_learning)}: Random Forest 5-fold CV + feature importance
+\end{enumerate}
+
+全フェーズ完了後、\texttt{build\_report\_tex} が \texttt{ANALYSIS\_LOG} から
+日英 TeX/PDF レポートを自動生成する。
 
 % -------------------------------------------------------
 \section{対応モデルと性能比較}
@@ -414,6 +497,10 @@ seq2pipe は以下の目標を達成した。
   \item 3 OS（macOS / Linux / Windows）への完全対応
   \item FASTQ データ構造の自動認識と適応的パイプライン生成
   \item QIIME2 コマンドを Docker 経由で安全に実行するコマンド確認機構
+  \item Python による 5 フェーズの下流解析（多様性・分類・差次・機械学習）
+  \item ANALYSIS\_LOG からの日英 TeX/PDF レポート自動生成
+  \item 日本語 / 英語の起動時言語選択 UI
+  \item 接続エラー・タイムアウト・空レスポンス・ファイルシステムエラーへの堅牢な処理
 \end{itemize}
 
 \subsection{現在の制限}
@@ -423,6 +510,7 @@ seq2pipe は以下の目標を達成した。
     誤ったパラメータが生成される可能性がある。
   \item 大規模データセット（100 サンプル以上）に対するパフォーマンスは未検証である。
   \item SILVA 138 参照ファイルのダウンロードには約 30 GB のディスク容量と数時間を要する。
+  \item TeX レポートのコンパイルには tectonic のインストールが必要である。
 \end{itemize}
 
 \subsection{今後の課題}
@@ -432,6 +520,7 @@ seq2pipe は以下の目標を達成した。
   \item Web UI の提供（Gradio や Streamlit との統合）
   \item ITS / 18S rRNA など他のマーカー遺伝子への対応
   \item パイプライン実行結果のフィードバックループ実装
+  \item 並列ツール実行による処理の高速化
 \end{itemize}
 
 % -------------------------------------------------------
@@ -441,9 +530,9 @@ seq2pipe は以下の目標を達成した。
 本稿では、ローカル LLM と QIIME2 を統合した自動解析エージェント
 seq2pipe の設計・実装を報告した。
 Python 標準ライブラリのみによるゼロ依存設計と、
-クロスプラットフォーム対応により、
-インターネット接続不要の環境でもマイクロバイオーム解析を
-自動化できる実用的なツールを実現した。
+クロスプラットフォーム対応・多言語 UI・Python 下流解析・自動レポート生成により、
+インターネット接続不要の環境でも研究者がマイクロバイオーム解析を
+端から端まで自動化できる実用的なツールを実現した。
 
 seq2pipe はオープンソース（MIT ライセンス）として公開されており、
 \texttt{https://github.com/Rhizobium-gits/seq2pipe} からアクセスできる。

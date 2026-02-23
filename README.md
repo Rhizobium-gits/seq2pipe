@@ -27,6 +27,8 @@
 **seq2pipe** は、あなたの PC で動くローカル AI エージェントです。
 生の FASTQ データを渡すだけで、QIIME2 解析パイプラインの**設計・実行・Python 解析・レポート生成**まで自動で行います。
 
+- **起動時に日本語 / 英語を選択**し、以降の AI 応答・レポートを統一
+- 起動時に Python 依存パッケージ（numpy / pandas 等）の存在を自動確認
 - データ構造を自動で調査（FASTQ / メタデータ / 既存 QZA）
 - データに合った QIIME2 コマンドをゼロから組み立てる
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
@@ -108,9 +110,14 @@ pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format netwo
 
 ### QIIME2 パイプライン生成
 
-起動すると、AI が情報を確認してパイプラインを自動生成します。
+起動すると、まず言語を選択してから AI がパイプラインを自動生成します。
 
 ```
+言語を選択してください / Select language:
+  1. 日本語 (ja)
+  2. English (en)
+> 1
+
 AI: こんにちは！以下を教えてください:
     1. データディレクトリのパス
     2. 実験系の説明（領域・プライマー・比較グループ）
@@ -524,6 +531,8 @@ seq2pipe/
 **seq2pipe** is a local AI agent that runs entirely on your own machine.
 Give it your raw FASTQ data, and it automatically handles **pipeline design, execution, Python analysis, and report generation**.
 
+- **Select Japanese or English at startup** — all AI responses and reports follow your choice
+- Automatically checks for required Python packages (numpy / pandas / etc.) at startup
 - Inspects your data structure automatically (FASTQ / metadata / existing QZA)
 - Builds the right QIIME2 commands from scratch for your dataset
 - Writes ready-to-run `.sh` / `.ps1` scripts
