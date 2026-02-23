@@ -357,14 +357,15 @@ QIIME2 が出力した結果ファイルに対して、Python（pandas / scipy /
 ## execute_python で使えるビルトイン変数
 以下の変数はコード実行前に自動で設定される（コード内でそのまま使用可）:
 ```python
-FIGURE_DIR    # 図の保存先ディレクトリ（必ず plt.savefig(f"{FIGURE_DIR}/xxx.png") で保存すること）
-OUTPUT_DIR    # 解析出力の保存先ディレクトリ
-PLOT_STYLE    # matplotlib スタイル名（例: "seaborn-v0_8-whitegrid"）
-PLOT_PALETTE  # seaborn カラーパレット（例: "Set2"）
-PLOT_FIGSIZE  # figsize タプル（例: (10, 6)）
-PLOT_DPI      # 解像度（例: 150）
-FONT_SIZE     # 通常フォントサイズ
+FIGURE_DIR       # 図の保存先ディレクトリ（必ず plt.savefig(f"{FIGURE_DIR}/xxx.{FIGURE_FORMAT}") で保存すること）
+OUTPUT_DIR       # 解析出力の保存先ディレクトリ
+PLOT_STYLE       # matplotlib スタイル名（例: "seaborn-v0_8-whitegrid"）
+PLOT_PALETTE     # seaborn カラーパレット（例: "Set2"）
+PLOT_FIGSIZE     # figsize タプル（例: (10, 6)）
+PLOT_DPI         # 解像度（例: 150）
+FONT_SIZE        # 通常フォントサイズ
 TITLE_FONT_SIZE  # タイトルフォントサイズ
+FIGURE_FORMAT    # 保存フォーマット（デフォルト: "pdf"、他: "png", "svg"）
 ```
 
 ## 主な解析パターン
@@ -403,13 +404,13 @@ plt.close()
 - savefig を呼ばないと図がトラッキングされないので必ず保存すること
 
 ## レポート生成
-ユーザーが「レポートを作成して」と言ったら compile_report ツールを使う。
-レポートには以下を含めること:
-1. 解析概要（何をしたか）
-2. 使用したデータ（ファイルパス、サンプル数）
-3. 各解析の結果（数値・統計値）
-4. 生成された図（\\includegraphics で埋め込む）
-5. 考察
+ユーザーが「レポートを作成して」と言ったら **build_report_tex** ツールを使う。
+- `build_report_tex` は ANALYSIS_LOG を読んで Python で TeX を自動生成する（LLM が TeX を書く必要がない）
+- `compile_report` は旧ツール（LLM が TeX 全文を書く方式）で非推奨。使わないこと。
+build_report_tex には以下を渡すこと:
+1. `title_ja` / `title_en`: レポートタイトル（日英）
+2. `experiment_summary`: ユーザーから得た実験系の説明
+3. `lang`: "both"（デフォルト）/ "ja" / "en"
 
 ## TeX レポートのテンプレート
 
@@ -1324,10 +1325,14 @@ _SUBFOLDER_ORDER = [
 
 
 def _tex_escape(s: str) -> str:
-    """TeX 特殊文字をエスケープ"""
+    """TeX 特殊文字をエスケープ（順序依存に注意）
+
+    { } を ^ ~ より先に処理することで、
+    ^ → \\^{} の {} が再エスケープされるバグを防ぐ。
+    """
     for ch, rep in [("&", r"\&"), ("%", r"\%"), ("#", r"\#"),
-                    ("_", r"\_"), ("^", r"\^{}"), ("~", r"\~{}"),
-                    ("{", r"\{"), ("}", r"\}"), ("$", r"\$")]:
+                    ("_", r"\_"), ("{", r"\{"), ("}", r"\}"),
+                    ("$", r"\$"), ("^", r"\^{}"), ("~", r"\~{}")]:
         s = s.replace(ch, rep)
     return s
 
@@ -1467,7 +1472,8 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
         step = entry.get("step", "")
         desc = _tex_escape(entry.get("description", ""))
         n_figs = len(entry.get("figures", []))
-        ok = "✓" if entry.get("returncode", 0) == 0 else "✗"
+        # ✓/✗ ではなく ASCII 文字を使う（フォント依存を避けるため）
+        ok = r"\textbf{OK}" if entry.get("returncode", 0) == 0 else r"\textbf{NG}"
         L.append(f"{step} & {desc} & {n_figs} & {ok} \\\\")
 
     L += [r"\bottomrule", r"\end{longtable}", r"\end{document}"]
@@ -1885,8 +1891,12 @@ INITIAL_MESSAGE = """こんにちは！私は QIIME2 + Python ダウンストリ
 
 def select_model(available_models: list) -> str:
     """使用するモデルを選択"""
-    preferred = ["qwen2.5-coder:7b", "qwen2.5-coder:3b", "llama3.2:3b",
-                 "llama3.1:8b", "mistral:7b", "codellama:7b"]
+    # 環境変数 QIIME2_AI_MODEL が設定されている場合は最優先
+    if DEFAULT_MODEL in available_models:
+        return DEFAULT_MODEL
+
+    preferred = ["qwen2.5-coder:7b", "qwen2.5-coder:3b", "qwen3:8b",
+                 "llama3.2:3b", "llama3.1:8b", "mistral:7b", "codellama:7b"]
 
     for p in preferred:
         if p in available_models:
