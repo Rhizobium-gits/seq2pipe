@@ -540,38 +540,41 @@ def tool_read_file(path: str, max_lines: int = 50) -> str:
         return f"読み込みエラー: {e}"
 
 
+def _get_docker_cmd() -> str | None:
+    """クロスプラットフォームで Docker 実行ファイルを検出する"""
+    # macOS: Docker Desktop の固定パスを優先
+    if sys.platform == "darwin":
+        mac_path = "/Applications/Docker.app/Contents/Resources/bin/docker"
+        if Path(mac_path).exists():
+            return mac_path
+    # Windows / Linux: PATH から検索
+    return shutil.which("docker") or shutil.which("docker.exe")
+
+
 def tool_check_system() -> str:
     """システム環境の確認"""
-    results = ["🖥️  システム確認結果:\n"]
+    results = ["[システム確認結果]\n"]
 
     # Docker
-    docker_path = "/Applications/Docker.app/Contents/Resources/bin/docker"
-    if Path(docker_path).exists():
+    docker_cmd = _get_docker_cmd()
+    if docker_cmd:
         try:
-            result = subprocess.run([docker_path, "--version"],
+            result = subprocess.run([docker_cmd, "--version"],
                                     capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
-                results.append(f"✅ Docker: {result.stdout.strip()}")
-                # Docker デーモン起動確認
-                ping = subprocess.run([docker_path, "info"],
+                results.append(f"OK Docker: {result.stdout.strip()}")
+                ping = subprocess.run([docker_cmd, "info"],
                                       capture_output=True, text=True, timeout=10)
                 if ping.returncode == 0:
-                    results.append("✅ Docker デーモン: 起動中")
+                    results.append("OK Docker デーモン: 起動中")
                 else:
-                    results.append("⚠️  Docker デーモン: 停止中 → Docker Desktop を起動してください")
+                    results.append("!! Docker デーモン: 停止中 → Docker Desktop を起動してください")
             else:
-                results.append("⚠️  Docker: インストール済みだが起動していません")
+                results.append("!! Docker: インストール済みだが起動していません")
         except Exception:
-            results.append("⚠️  Docker: 確認できませんでした")
-    elif shutil.which("docker"):
-        try:
-            result = subprocess.run(["docker", "--version"],
-                                    capture_output=True, text=True, timeout=5)
-            results.append(f"✅ Docker: {result.stdout.strip()}")
-        except Exception:
-            results.append("❌ Docker: 見つかりません")
+            results.append("!! Docker: 確認できませんでした")
     else:
-        results.append("❌ Docker: インストールされていません → Docker Desktop をインストールしてください")
+        results.append("NG Docker: インストールされていません → Docker Desktop をインストールしてください")
 
     # Ollama
     try:
@@ -905,19 +908,28 @@ def run_agent_loop(messages: list, model: str):
 # ======================================================================
 
 BANNER = f"""{CYAN}{BOLD}
-╔═══════════════════════════════════════════════════════════════╗
-║          seq2pipe  —  sequence → pipeline  🧬                ║
-║  ローカル LLM でマイクロバイオームデータを自動解析します     ║
-╚═══════════════════════════════════════════════════════════════╝{RESET}
-"""
+  ███████╗███████╗ ██████╗ ██████╗
+  ██╔════╝██╔════╝██╔═══██╗╚════██╗
+  ███████╗█████╗  ██║   ██║ █████╔╝
+  ╚════██║██╔══╝  ██║▄▄ ██║ ╚═══██╗
+  ███████║███████╗╚██████╔╝██████╔╝
+  ╚══════╝╚══════╝ ╚══▀▀═╝ ╚══════╝
+       ██████╗ ██╗██████╗ ███████╗
+       ██╔══██╗██║██╔══██╗██╔════╝
+       ██████╔╝██║██████╔╝█████╗
+       ██╔═══╝ ██║██╔═══╝ ██╔══╝
+       ██║     ██║██║     ███████╗
+       ╚═╝     ╚═╝╚═╝     ╚══════╝
+          sequence  ->  pipeline
+{RESET}"""
 
 INITIAL_MESSAGE = """こんにちは！私は QIIME2 解析を支援するローカル AI エージェントです。
 
 あなたの生データを解析し、以下を自動生成します:
-  📜 解析パイプラインスクリプト（run_pipeline.sh）
-  🧬 分類器セットアップスクリプト（setup_classifier.sh）
-  📊 メタデータ・マニフェストファイル
-  📖 操作ガイド（README.md）
+  [1] 解析パイプラインスクリプト（run_pipeline.sh）
+  [2] 分類器セットアップスクリプト（setup_classifier.sh）
+  [3] メタデータ・マニフェストファイル
+  [4] 操作ガイド（README.md）
 
 まず、**解析したいデータが入っているディレクトリのパス**を教えてください。
 （例: `/Users/yourname/microbiome-data/` または `~/experiment01/`）
@@ -947,6 +959,10 @@ def select_model(available_models: list) -> str:
 # ======================================================================
 
 def main():
+    # Windows 10+ で ANSI エスケープコードを有効化
+    if sys.platform == "win32":
+        os.system("")
+
     print(BANNER)
 
     # Ollama 起動確認
