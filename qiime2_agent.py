@@ -33,6 +33,12 @@ DEFAULT_MODEL = os.environ.get("QIIME2_AI_MODEL", "qwen2.5-coder:7b")
 # 🐱 CPU 専用環境（Codespaces 等）での初回推論に対応するため 600 秒に設定
 # 🐱 環境変数 OLLAMA_TIMEOUT で上書き可能
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "600"))
+# 🐱 execute_python のタイムアウト（issue #32: 300s → 600s に延長, 環境変数で上書き可）
+PYTHON_EXEC_TIMEOUT = int(os.environ.get("SEQ2PIPE_PYTHON_TIMEOUT", "600"))
+# 🐱 エージェントループの最大ステップ数（issue #33: 30 → 100, 環境変数で上書き可）
+MAX_AGENT_STEPS = int(os.environ.get("SEQ2PIPE_MAX_STEPS", "100"))
+# 🐱 自律モード: SEQ2PIPE_AUTO_YES=1 でコマンド確認をスキップ（issue #31）
+AUTO_YES = os.environ.get("SEQ2PIPE_AUTO_YES", "0") == "1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
 # 🍺 ======================================================================
@@ -590,6 +596,19 @@ def extract_qza_data(qza_path):
 - 全フェーズ完了後: `build_report_tex` を呼び出してレポートを自動生成する
 - エラーが出たフェーズは原因を診断してスキップし、次のフェーズに進む
 
+## IMPORTANT: run_command 実行後の ANALYSIS_LOG 登録
+run_command で QIIME2 コマンドを実行したら、必ず直後に `log_analysis_step` を呼び出して
+ANALYSIS_LOG に記録すること。こうしないと build_report_tex がそのステップを認識できない。
+
+例:
+```
+log_analysis_step(
+  description="DADA2 デノイジング完了: ASV×サンプル table.qza 生成",
+  subfolder="qiime2_pipeline",
+  summary="処理リード: 平均 85%保持, ASV数: 約300"
+)
+```
+
 ## 探索完了後のレポート生成
 全フェーズ完了後、必ず以下を実行する:
 ```
@@ -834,27 +853,36 @@ TOOLS = [
         }
     },
     {
+        # 🐱 issue #35: run_command 経由の QIIME2 ステップを ANALYSIS_LOG に手動登録するツール
         "type": "function",
         "function": {
-            "name": "compile_report",
-            "description": "解析結果をTeX形式のレポートにまとめてPDFを生成する。日本語版・英語版を選択可能。解析終了時にユーザーに提案する。",
+            "name": "log_analysis_step",
+            "description": (
+                "run_command で実行した QIIME2 操作や外部コマンドを ANALYSIS_LOG に記録する。"
+                "build_report_tex はこのログを参照するため、run_command 成功後に必ず呼び出す。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content_ja": {
+                    "description": {
                         "type": "string",
-                        "description": "日本語レポートの完全なTeX ソース（\\documentclass から \\end{document} まで）。不要なら空文字。"
+                        "description": "解析ステップの説明（例: DADA2 デノイジング完了, taxonomy 分類完了）"
                     },
-                    "content_en": {
+                    "subfolder": {
                         "type": "string",
-                        "description": "英語レポートの完全なTeX ソース（\\documentclass から \\end{document} まで）。不要なら空文字。"
+                        "description": "解析カテゴリ（alpha_diversity / beta_diversity / taxonomy / differential_abundance / machine_learning / qiime2_pipeline など）"
                     },
-                    "output_dir": {
+                    "figures": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "このステップで生成された図ファイルの絶対パスリスト（なければ省略）"
+                    },
+                    "summary": {
                         "type": "string",
-                        "description": "出力先ディレクトリ（省略時はセッションの出力先）"
+                        "description": "解析結果の要約テキスト（統計値・ASV数・taxonomy ヒット率など）"
                     }
                 },
-                "required": ["content_ja", "content_en"]
+                "required": ["description"]
             }
         }
     },
@@ -1211,15 +1239,19 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
     print(f"\n{c(ui('cmd_request'), YELLOW)}")
     print(f"   {ui('cmd_desc')}: {description}")
     print(f"   {ui('cmd_cmd')}:\n   {c(command, CYAN)}")
-    print(f"\n{c(ui('cmd_confirm'), DIM)}", end=" > ")
 
-    try:
-        answer = input().strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return ui("cmd_cancelled_ki")
+    # 🐱 issue #31: SEQ2PIPE_AUTO_YES=1 の場合はユーザー確認をスキップ（自律モード）
+    if AUTO_YES:
+        print(f"\n{c('[自律モード] コマンドを自動承認します', DIM)}")
+    else:
+        print(f"\n{c(ui('cmd_confirm'), DIM)}", end=" > ")
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return ui("cmd_cancelled_ki")
 
-    if answer not in ["y", "yes", "はい"]:
-        return ui("cmd_cancelled")
+        if answer not in ["y", "yes", "はい"]:
+            return ui("cmd_cancelled")
 
     try:
         proc = subprocess.run(
@@ -1367,7 +1399,7 @@ except ImportError as _e:
         proc = subprocess.run(
             [sys.executable, tmp_path],
             capture_output=True, text=True,
-            timeout=300,
+            timeout=PYTHON_EXEC_TIMEOUT,  # 🐱 issue #32: 環境変数 SEQ2PIPE_PYTHON_TIMEOUT で上書き可
             cwd=str(out_path)
         )
 
@@ -1412,11 +1444,43 @@ except ImportError as _e:
 
     except subprocess.TimeoutExpired:
         # 🐱 subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
-        return "⏱️  タイムアウト（5分を超えました）。Pythonプロセスは強制終了されました。"
+        return (f"⏱️  タイムアウト（{PYTHON_EXEC_TIMEOUT}秒を超えました）。Pythonプロセスは強制終了されました。\n"
+                f"   環境変数 SEQ2PIPE_PYTHON_TIMEOUT に大きい値を設定してください。")
     except Exception as e:
         return f"❌ 実行エラー: {e}"
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+
+def tool_log_analysis_step(description: str, subfolder: str = "",
+                            figures: list = None, summary: str = "") -> str:
+    """解析ステップを ANALYSIS_LOG に手動登録する（run_command 経由の QIIME2 操作を記録するために使用）。
+    issue #35: build_report_tex は ANALYSIS_LOG を参照するため、run_command 実行後にこのツールで記録する。
+    """
+    safe_sub = re.sub(r'[^\w]', '_', subfolder).strip('_') if subfolder else ""
+    # 🐱 figures が文字列のリストで渡された場合、Path として検証
+    validated_figs = []
+    if figures:
+        for f in figures:
+            p = Path(str(f)).expanduser()
+            if p.exists():
+                validated_figs.append(str(p))
+            else:
+                validated_figs.append(str(f))  # 存在確認は非必須（パス記録のみ）
+
+    ANALYSIS_LOG.append({
+        "step": len(ANALYSIS_LOG) + 1,
+        "description": description,
+        "subfolder": safe_sub,
+        "figures": validated_figs,
+        "output_summary": summary[:600] if summary else "",
+        "returncode": 0,
+        "timestamp": datetime.datetime.now().isoformat(),
+    })
+    return (f"✅ ANALYSIS_LOG に登録しました (step {len(ANALYSIS_LOG)})\n"
+            f"   説明: {description}\n"
+            f"   図数: {len(validated_figs)}\n"
+            f"   合計ステップ数: {len(ANALYSIS_LOG)}")
 
 
 # 🐱 サブフォルダ → セクション名 マッピング
@@ -1742,8 +1806,11 @@ def dispatch_tool(name: str, args: dict) -> str:
             return tool_set_plot_config(**args)
         elif name == "execute_python":
             return tool_execute_python(**args)
+        elif name == "log_analysis_step":
+            return tool_log_analysis_step(**args)
         elif name == "compile_report":
-            return tool_compile_report(**args)
+            # 🐱 issue #36: 非推奨ツール — build_report_tex を使うよう誘導
+            return "⚠️  compile_report は非推奨です。代わりに build_report_tex を使用してください。"
         elif name == "build_report_tex":
             return tool_build_report_tex(**args)
         else:
@@ -1844,8 +1911,19 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
 
 
 def check_python_deps() -> bool:
-    """numpy/pandas/matplotlib/seaborn が sys.executable でインポートできるか確認"""
-    check_code = "import numpy, pandas, matplotlib, seaborn"
+    """必須 Python パッケージが sys.executable でインポートできるか確認"""
+    # 🐱 issue #34: scipy/sklearn/statsmodels/biom-format を追加
+    required_pkgs = [
+        ("numpy", "numpy"),
+        ("pandas", "pandas"),
+        ("matplotlib", "matplotlib"),
+        ("seaborn", "seaborn"),
+        ("scipy", "scipy"),
+        ("sklearn", "scikit-learn"),
+        ("statsmodels", "statsmodels"),
+        ("biom", "biom-format"),
+    ]
+    check_code = "; ".join(f"import {pkg}" for pkg, _ in required_pkgs)
     try:
         proc = subprocess.run(
             [sys.executable, "-c", check_code],
@@ -1859,7 +1937,8 @@ def check_python_deps() -> bool:
             missing = proc.stderr.strip().split("\n")[-1] if proc.stderr else "不明"
             print(f"   {c(ui('deps_warn', missing), YELLOW)}")
             print(f"   {ui('deps_hint')}")
-            install_cmd = f"{sys.executable} -m pip install numpy pandas matplotlib seaborn"
+            pip_pkgs = " ".join(pip for _, pip in required_pkgs)
+            install_cmd = f"{sys.executable} -m pip install {pip_pkgs}"
             print(f"   {ui('deps_hint2', c(install_cmd, CYAN))}")
             return False
     except Exception:
@@ -1889,7 +1968,10 @@ def get_available_models() -> list:
 # 🐱 エージェントループ
 # 🍺 ======================================================================
 
-def run_agent_loop(messages: list, model: str, max_steps: int = 30):
+def run_agent_loop(messages: list, model: str, max_steps: int = None):
+    # 🐱 issue #33: デフォルト 30 → MAX_AGENT_STEPS(100), 環境変数 SEQ2PIPE_MAX_STEPS で上書き可
+    if max_steps is None:
+        max_steps = MAX_AGENT_STEPS
     """ツール呼び出しを含むエージェントループを実行"""
     steps = 0
     while True:
