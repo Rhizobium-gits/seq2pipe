@@ -1980,7 +1980,7 @@ def run_agent_loop(messages: list, model: str, max_steps: int = None):
             break
         steps += 1
 
-        print(f"\n{c('🤖 AI', CYAN + BOLD)}: ", end="", flush=True)
+        print(f"\n{c('😺 AI', CYAN + BOLD)}: ", end="", flush=True)
 
         response = call_ollama(messages, model, tools=TOOLS)
 
@@ -2288,7 +2288,7 @@ def main():
         {"role": "assistant", "content": initial_msg}
     ]
 
-    print(f"{c('🤖 AI', CYAN + BOLD)}: {initial_msg}")
+    print(f"{c('😺 AI', CYAN + BOLD)}: {initial_msg}")
 
     # 🐱 メインループ
     while True:
