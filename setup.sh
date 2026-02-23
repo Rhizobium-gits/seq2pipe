@@ -221,9 +221,52 @@ else
 fi
 
 # ============================================================
-# STEP 6: QIIME2 Docker イメージの確認（オプション）
+# STEP 6: Python ダウンストリーム解析パッケージのインストール
 # ============================================================
-if [[ -n "$DOCKER_CMD" ]] && command -v "$DOCKER_CMD" &>/dev/null && "$DOCKER_CMD" info &>/dev/null 2>&1; then
+echo ""
+info "Python ダウンストリーム解析パッケージを確認します..."
+
+PYTHON_CMD="$(command -v python3 || command -v python || echo '')"
+if [[ -z "$PYTHON_CMD" ]]; then
+    warn "Python が見つかりません。パッケージのインストールをスキップします。"
+else
+    PY_VERSION="$("$PYTHON_CMD" --version 2>&1)"
+    success "Python: $PY_VERSION"
+
+    # 必要パッケージの確認
+    MISSING_PKGS=()
+    for pkg in numpy pandas matplotlib seaborn scipy scikit-learn; do
+        if ! "$PYTHON_CMD" -c "import $(echo $pkg | tr '-' '_' | cut -d'[' -f1)" &>/dev/null 2>&1; then
+            MISSING_PKGS+=("$pkg")
+        fi
+    done
+
+    if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then
+        success "Python 解析パッケージ: すべてインストール済み"
+    else
+        echo ""
+        warn "以下のパッケージが不足しています: ${MISSING_PKGS[*]}"
+        echo ""
+        read -rp "Python ダウンストリーム解析パッケージをインストールしますか? [y/N]: " INSTALL_PY_PKGS
+        if [[ "${INSTALL_PY_PKGS,,}" == "y" ]]; then
+            info "パッケージをインストールします..."
+            "$PYTHON_CMD" -m pip install --quiet \
+                numpy pandas matplotlib seaborn scipy scikit-learn \
+                biom-format networkx statsmodels
+            success "Python パッケージのインストールが完了しました"
+            success "  インストール済み: numpy, pandas, matplotlib, seaborn, scipy,"
+            success "                   scikit-learn, biom-format, networkx, statsmodels"
+        else
+            info "スキップしました。後でインストールする場合:"
+            echo "  pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format networkx statsmodels"
+        fi
+    fi
+fi
+
+# ============================================================
+# STEP 7: QIIME2 Docker イメージの確認（オプション）
+# ============================================================
+if [[ -n "$DOCKER_CMD" ]] && [[ -x "$DOCKER_CMD" ]] && "$DOCKER_CMD" info &>/dev/null 2>&1; then
     echo ""
     read -rp "QIIME2 Docker イメージ (quay.io/qiime2/amplicon:2026.1) を今すぐプルしますか? [y/N]: " PULL_QIIME2
     if [[ "${PULL_QIIME2,,}" == "y" ]]; then
@@ -261,4 +304,6 @@ echo -e "     ${CYAN}./launch.sh${RESET}"
 echo ""
 echo "  ※ 初回 QIIME2 解析時に Docker イメージ (~4GB) を自動取得します"
 echo "  ※ 分類器 (SILVA 138) の構築には別途 30GB のディスクと 2-5 時間が必要です"
+echo "  ※ Python 解析パッケージ未インストールの場合:"
+echo "     pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format networkx statsmodels"
 echo ""

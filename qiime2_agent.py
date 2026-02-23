@@ -11,12 +11,14 @@ seq2pipe  —  sequence → pipeline
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+import datetime
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -27,6 +29,20 @@ from pathlib import Path
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = os.environ.get("QIIME2_AI_MODEL", "qwen2.5-coder:7b")
 SCRIPT_DIR = Path(__file__).parent.resolve()
+
+# ======================================================================
+# セッション状態（ダウンストリーム解析トラッキング）
+# ======================================================================
+ANALYSIS_LOG: list = []       # 実行した解析の記録
+SESSION_FIGURE_DIR: str = ""  # 図の出力先（初回 execute_python 呼び出し時に設定）
+PLOT_CONFIG: dict = {         # 図のデフォルトスタイル設定
+    "style": "seaborn-v0_8-whitegrid",
+    "palette": "Set2",
+    "figsize": [10, 6],
+    "dpi": 150,
+    "font_size": 12,
+    "title_font_size": 14,
+}
 
 # ======================================================================
 # ANSI カラー
@@ -330,7 +346,103 @@ d__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Lactobacillaceae;
 - `*.qzv` = QIIME2 ビジュアライゼーション → https://view.qiime2.org で開く
 - `results/` = すべての出力先ディレクトリ
 - `taxa-bar-plots.qzv` = 分類組成の積み上げ棒グラフ（最もよく使われる可視化）
-- `core-metrics-results/` = 多様性解析の全出力"""
+- `core-metrics-results/` = 多様性解析の全出力
+
+━━━ ダウンストリーム Python 解析 ━━━
+
+QIIME2 が出力した結果ファイルに対して、Python（pandas / scipy / sklearn / matplotlib / seaborn）
+を使った高度な統計・可視化・機械学習解析ができる。execute_python ツールを使うこと。
+
+## execute_python で使えるビルトイン変数
+以下の変数はコード実行前に自動で設定される（コード内でそのまま使用可）:
+```python
+FIGURE_DIR    # 図の保存先ディレクトリ（必ず plt.savefig(f"{FIGURE_DIR}/xxx.png") で保存すること）
+OUTPUT_DIR    # 解析出力の保存先ディレクトリ
+PLOT_STYLE    # matplotlib スタイル名（例: "seaborn-v0_8-whitegrid"）
+PLOT_PALETTE  # seaborn カラーパレット（例: "Set2"）
+PLOT_FIGSIZE  # figsize タプル（例: (10, 6)）
+PLOT_DPI      # 解像度（例: 150）
+FONT_SIZE     # 通常フォントサイズ
+TITLE_FONT_SIZE  # タイトルフォントサイズ
+```
+
+## 主な解析パターン
+| 解析 | 必要な QIIME2 出力 | Python パッケージ |
+|------|------|------|
+| OTU/ASV 組成解析（biplot, stacked bar） | table.qza を解凍した feature-table.biom | biom-format, pandas, matplotlib |
+| α多様性可視化・統計 | shannon_vector.qza 等を解凍した alpha-diversity.tsv | pandas, scipy, seaborn |
+| β多様性 PCoA 図 | unweighted_unifrac_pcoa_results.qza 解凍 | pandas, matplotlib |
+| ランダムフォレスト群判別 | feature-table.biom + metadata.tsv | sklearn, pandas |
+| 分類組成ヒートマップ | taxonomy.tsv + feature-table.biom | pandas, seaborn |
+| 差次解析補完（LEfSe 風） | feature-table.biom + metadata.tsv | scipy, statsmodels |
+| ネットワーク解析（co-occurrence） | feature-table.biom | scipy, networkx |
+
+## QIIME2 アーティファクトの解凍方法
+.qza は ZIP ファイルなので Python でそのまま読める:
+```python
+import zipfile, json
+with zipfile.ZipFile("/path/to/file.qza") as z:
+    # data/ 以下の実データを取り出す
+    for name in z.namelist():
+        if name.endswith('.tsv') or name.endswith('.biom'):
+            z.extract(name, OUTPUT_DIR)
+```
+
+## 図の保存ルール（必ず守ること）
+```python
+fig, ax = plt.subplots(figsize=PLOT_FIGSIZE)
+# ... 描画 ...
+plt.tight_layout()
+plt.savefig(f"{FIGURE_DIR}/figure_name.png", dpi=PLOT_DPI, bbox_inches='tight')
+plt.close()
+```
+savefig を呼ばないと図がトラッキングされないので必ず保存すること。
+
+## レポート生成
+ユーザーが「レポートを作成して」と言ったら compile_report ツールを使う。
+レポートには以下を含めること:
+1. 解析概要（何をしたか）
+2. 使用したデータ（ファイルパス、サンプル数）
+3. 各解析の結果（数値・統計値）
+4. 生成された図（\\includegraphics で埋め込む）
+5. 考察
+
+## TeX レポートのテンプレート
+
+### 日本語（XeLaTeX + xeCJK）
+```latex
+\\documentclass[a4paper,12pt]{article}
+\\usepackage{xeCJK}
+\\setCJKmainfont{Hiragino Mincho ProN}
+\\usepackage{graphicx}
+\\usepackage{booktabs}
+\\usepackage{geometry}
+\\geometry{margin=2.5cm}
+\\title{マイクロバイオーム解析レポート}
+\\author{seq2pipe}
+\\date{\\today}
+\\begin{document}
+\\maketitle
+% ここに内容
+\\end{document}
+```
+
+### 英語（標準 LaTeX）
+```latex
+\\documentclass[a4paper,12pt]{article}
+\\usepackage{graphicx}
+\\usepackage{booktabs}
+\\usepackage{geometry}
+\\geometry{margin=2.5cm}
+\\title{Microbiome Analysis Report}
+\\author{seq2pipe}
+\\date{\\today}
+\\begin{document}
+\\maketitle
+% content here
+\\end{document}
+```
+図を埋め込む: \\includegraphics[width=0.8\\textwidth]{<FIGURE_DIR>/figure_name.png}"""
 
 # ======================================================================
 # ツール定義（Ollama function calling 形式）
@@ -486,6 +598,97 @@ TOOLS = [
                     }
                 },
                 "required": ["command", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_plot_config",
+            "description": "図（グラフ）のスタイル・色・サイズを設定する。ユーザーが見た目の好みを指定したときに呼び出す。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "style": {
+                        "type": "string",
+                        "description": "matplotlib スタイル名（例: seaborn-v0_8-whitegrid, seaborn-v0_8-darkgrid, ggplot, dark_background）"
+                    },
+                    "palette": {
+                        "type": "string",
+                        "description": "seaborn/matplotlib カラーパレット名（例: Set2, tab10, husl, muted, deep, pastel）"
+                    },
+                    "figsize_w": {
+                        "type": "number",
+                        "description": "図の幅（インチ）"
+                    },
+                    "figsize_h": {
+                        "type": "number",
+                        "description": "図の高さ（インチ）"
+                    },
+                    "dpi": {
+                        "type": "integer",
+                        "description": "解像度 DPI（72=低, 150=中, 300=高品質）"
+                    },
+                    "font_size": {
+                        "type": "integer",
+                        "description": "通常テキストのフォントサイズ（pt）"
+                    },
+                    "title_font_size": {
+                        "type": "integer",
+                        "description": "タイトルのフォントサイズ（pt）"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_python",
+            "description": "Pythonコードを実行してダウンストリーム解析・統計・可視化を行う。QIIME2の出力（.qza/.tsv/.biom）を読み込み、pandas/scipy/sklearn/matplotlib/seabornで処理する。図は必ず FIGURE_DIR に savefig で保存すること。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "実行する Python コード。FIGURE_DIR, OUTPUT_DIR, PLOT_STYLE, PLOT_PALETTE, PLOT_FIGSIZE, PLOT_DPI, FONT_SIZE 変数が自動注入される。"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "この解析の説明（レポートに記録される）"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "解析結果・図の保存先ディレクトリ（省略時はセッションのデフォルト出力先）"
+                    }
+                },
+                "required": ["code", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compile_report",
+            "description": "解析結果をTeX形式のレポートにまとめてPDFを生成する。日本語版・英語版を選択可能。解析終了時にユーザーに提案する。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content_ja": {
+                        "type": "string",
+                        "description": "日本語レポートの完全なTeX ソース（\\documentclass から \\end{document} まで）。不要なら空文字。"
+                    },
+                    "content_en": {
+                        "type": "string",
+                        "description": "英語レポートの完全なTeX ソース（\\documentclass から \\end{document} まで）。不要なら空文字。"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "出力先ディレクトリ（省略時はセッションの出力先）"
+                    }
+                },
+                "required": ["content_ja", "content_en"]
             }
         }
     }
@@ -812,6 +1015,209 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
         return f"❌ 実行エラー: {e}"
 
 
+def tool_set_plot_config(style: str = None, palette: str = None,
+                          figsize_w: float = None, figsize_h: float = None,
+                          dpi: int = None, font_size: int = None,
+                          title_font_size: int = None) -> str:
+    """プロット設定を変更する"""
+    changed = []
+    if style is not None:
+        PLOT_CONFIG["style"] = style
+        changed.append(f"style: {style}")
+    if palette is not None:
+        PLOT_CONFIG["palette"] = palette
+        changed.append(f"palette: {palette}")
+    if figsize_w is not None or figsize_h is not None:
+        w = figsize_w if figsize_w is not None else PLOT_CONFIG["figsize"][0]
+        h = figsize_h if figsize_h is not None else PLOT_CONFIG["figsize"][1]
+        PLOT_CONFIG["figsize"] = [w, h]
+        changed.append(f"figsize: ({w}, {h})")
+    if dpi is not None:
+        PLOT_CONFIG["dpi"] = dpi
+        changed.append(f"dpi: {dpi}")
+    if font_size is not None:
+        PLOT_CONFIG["font_size"] = font_size
+        changed.append(f"font_size: {font_size}")
+    if title_font_size is not None:
+        PLOT_CONFIG["title_font_size"] = title_font_size
+        changed.append(f"title_font_size: {title_font_size}")
+    if changed:
+        lines = "\n".join(f"  {c}" for c in changed)
+        return f"✅ プロット設定を更新しました:\n{lines}"
+    return "変更なし（有効なパラメータが指定されていません）"
+
+
+def tool_execute_python(code: str, description: str, output_dir: str = "") -> str:
+    """Pythonコードを実行してダウンストリーム解析・可視化を行う"""
+    global SESSION_FIGURE_DIR
+
+    # 出力ディレクトリの決定
+    if not output_dir:
+        if not SESSION_FIGURE_DIR:
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            SESSION_FIGURE_DIR = str(Path.home() / "seq2pipe_results" / ts)
+        output_dir = SESSION_FIGURE_DIR
+
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    figures_dir = out_path / "figures"
+    figures_dir.mkdir(exist_ok=True)
+
+    # プリアンブル: PLOT_CONFIG 変数 + 共通インポートを自動注入
+    preamble = f"""import sys, os, warnings
+warnings.filterwarnings('ignore')
+
+# --- seq2pipe ビルトイン変数 ---
+FIGURE_DIR = {repr(str(figures_dir))}
+OUTPUT_DIR = {repr(str(out_path))}
+PLOT_STYLE = {repr(PLOT_CONFIG['style'])}
+PLOT_PALETTE = {repr(PLOT_CONFIG['palette'])}
+PLOT_FIGSIZE = tuple({PLOT_CONFIG['figsize']})
+PLOT_DPI = {PLOT_CONFIG['dpi']}
+FONT_SIZE = {PLOT_CONFIG['font_size']}
+TITLE_FONT_SIZE = {PLOT_CONFIG['title_font_size']}
+
+# --- 共通インポート ---
+try:
+    import numpy as np
+    import pandas as pd
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    try:
+        plt.style.use(PLOT_STYLE)
+    except Exception:
+        pass
+    import seaborn as sns
+    sns.set_palette(PLOT_PALETTE)
+    matplotlib.rcParams['font.size'] = FONT_SIZE
+    matplotlib.rcParams['axes.titlesize'] = TITLE_FONT_SIZE
+    matplotlib.rcParams['figure.dpi'] = PLOT_DPI
+except ImportError as _e:
+    print(f"[WARNING] パッケージ不足: {{_e}}")
+    print("pip install numpy pandas matplotlib seaborn を実行してください")
+
+# --- ユーザーコード ---
+"""
+
+    full_code = preamble + "\n" + code
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
+                                     encoding='utf-8') as f:
+        f.write(full_code)
+        tmp_path = f.name
+
+    try:
+        # 実行前の図ファイル一覧
+        existing_figs = set(figures_dir.glob("*.png")) | \
+                        set(figures_dir.glob("*.pdf")) | \
+                        set(figures_dir.glob("*.svg"))
+
+        proc = subprocess.run(
+            [sys.executable, tmp_path],
+            capture_output=True, text=True,
+            timeout=300,
+            cwd=str(out_path)
+        )
+
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+
+        # 新規生成された図を検出
+        new_figs = (set(figures_dir.glob("*.png")) |
+                    set(figures_dir.glob("*.pdf")) |
+                    set(figures_dir.glob("*.svg"))) - existing_figs
+        new_figs = sorted(new_figs)
+
+        # ANALYSIS_LOG に記録
+        ANALYSIS_LOG.append({
+            "step": len(ANALYSIS_LOG) + 1,
+            "description": description,
+            "figures": [str(f) for f in new_figs],
+            "output_summary": stdout[:600] if stdout else "",
+            "timestamp": datetime.datetime.now().isoformat(),
+        })
+
+        # 結果テキスト構築
+        parts = []
+        if proc.returncode == 0:
+            parts.append(f"✅ 解析完了: {description}")
+        else:
+            parts.append(f"⚠️  解析でエラーが発生: {description}")
+        if stdout:
+            parts.append(f"\n📄 出力:\n{stdout[:2000]}")
+        if stderr and proc.returncode != 0:
+            parts.append(f"\n[STDERR]\n{stderr[:500]}")
+        if new_figs:
+            parts.append(f"\n📊 生成された図 ({len(new_figs)} 件):")
+            for fig in new_figs:
+                parts.append(f"   {fig}")
+        else:
+            parts.append("\n（図は生成されませんでした。savefig を呼んでいない可能性があります）")
+
+        return "\n".join(parts)
+
+    except subprocess.TimeoutExpired:
+        return "⏱️  タイムアウト（5分を超えました）"
+    except Exception as e:
+        return f"❌ 実行エラー: {e}"
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def tool_compile_report(content_ja: str, content_en: str, output_dir: str = "") -> str:
+    """TeX レポートをコンパイルして PDF を生成する"""
+    if not output_dir:
+        if SESSION_FIGURE_DIR:
+            output_dir = str(Path(SESSION_FIGURE_DIR).parent / "report")
+        else:
+            output_dir = str(Path.home() / "seq2pipe_results" / "report")
+
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    tectonic = shutil.which("tectonic")
+
+    tasks = []
+    if content_ja and content_ja.strip():
+        tasks.append(("report_ja.tex", content_ja, "日本語"))
+    if content_en and content_en.strip():
+        tasks.append(("report_en.tex", content_en, "英語"))
+
+    if not tasks:
+        return "❌ content_ja と content_en の両方が空です。"
+
+    for filename, content, label in tasks:
+        tex_path = out_path / filename
+        with open(tex_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        results.append(f"✅ {label} TeX ファイルを作成: {tex_path}")
+
+        if tectonic:
+            try:
+                proc = subprocess.run(
+                    [tectonic, str(tex_path)],
+                    capture_output=True, text=True,
+                    timeout=120, cwd=str(out_path)
+                )
+                pdf_path = tex_path.with_suffix('.pdf')
+                if proc.returncode == 0 and pdf_path.exists():
+                    results.append(f"✅ {label} PDF 生成完了: {pdf_path}")
+                else:
+                    results.append(f"⚠️  {label} PDF コンパイルに問題:")
+                    if proc.stderr:
+                        results.append(f"   {proc.stderr[:400]}")
+            except subprocess.TimeoutExpired:
+                results.append(f"⏱️  {label} コンパイルタイムアウト")
+            except Exception as e:
+                results.append(f"❌ {label} コンパイルエラー: {e}")
+        else:
+            results.append(f"⚠️  tectonic が見つかりません。brew install tectonic でインストール後、手動でコンパイルしてください。")
+
+    return "\n".join(results)
+
+
 def dispatch_tool(name: str, args: dict) -> str:
     """ツール名とパラメータからツール関数を呼び出す"""
     try:
@@ -829,6 +1235,12 @@ def dispatch_tool(name: str, args: dict) -> str:
             return tool_edit_file(**args)
         elif name == "run_command":
             return tool_run_command(**args)
+        elif name == "set_plot_config":
+            return tool_set_plot_config(**args)
+        elif name == "execute_python":
+            return tool_execute_python(**args)
+        elif name == "compile_report":
+            return tool_compile_report(**args)
         else:
             return f"❌ 不明なツール: {name}"
     except TypeError as e:
@@ -1076,15 +1488,14 @@ def print_banner():
         for line in BANNER_LINES:
             print(f"{CYAN}{BOLD}{line}{RESET}")
 
-INITIAL_MESSAGE = """こんにちは！私は QIIME2 解析を支援するローカル AI エージェントです。
+INITIAL_MESSAGE = """こんにちは！私は QIIME2 + Python ダウンストリーム解析を支援するローカル AI エージェントです。
 
-あなたの生データを解析し、以下を自動生成します:
-  [1] 解析パイプラインスクリプト（run_pipeline.sh）
-  [2] 分類器セットアップスクリプト（setup_classifier.sh）
-  [3] マニフェスト・メタデータファイル
-  [4] このデータ専用の操作ガイド（ANALYSIS_README.md）
+対応している解析:
+  [QIIME2] インポート → DADA2 デノイジング → 分類 → 多様性解析 → 差次解析
+  [Python] 組成ヒートマップ / PCoA 図 / ランダムフォレスト判別 / ネットワーク解析
+  [レポート] 解析終了後に TeX / PDF レポートを日本語・英語で自動生成
 
-始めるために、以下の **3 つ** を教えてください:
+始めるために、以下を教えてください:
 
   1. データディレクトリのパス
      例: /Users/yourname/microbiome-data/
@@ -1094,7 +1505,10 @@ INITIAL_MESSAGE = """こんにちは！私は QIIME2 解析を支援するロー
          コントロール 5 サンプル vs 処理群 5 サンプル
 
   3. 行いたい解析
-     例: 分類組成の可視化 / α・β 多様性解析 / グループ間の差次解析
+     例: 分類組成の可視化 / α・β 多様性解析 / グループ間の差次解析 / 機械学習判別
+
+  4. 図のスタイル（省略可）
+     例: 白背景・色は青系 / ダーク系 / 論文向け高解像度（300 DPI）
 
 一度にまとめて教えてもらうと、より的確なパイプラインを生成できます。
 """
