@@ -641,7 +641,7 @@ TOOLS = [
                         "type": "integer",
                         "description": "タイトルのフォントサイズ（pt）"
                     },
-                    "format": {
+                    "fig_format": {
                         "type": "string",
                         "description": "保存フォーマット（pdf / png / svg）。デフォルトは pdf。"
                     }
@@ -1027,7 +1027,7 @@ def tool_set_plot_config(style: str = None, palette: str = None,
                           figsize_w: float = None, figsize_h: float = None,
                           dpi: int = None, font_size: int = None,
                           title_font_size: int = None,
-                          format: str = None) -> str:
+                          fig_format: str = None) -> str:
     """プロット設定を変更する"""
     changed = []
     if style is not None:
@@ -1050,15 +1050,15 @@ def tool_set_plot_config(style: str = None, palette: str = None,
     if title_font_size is not None:
         PLOT_CONFIG["title_font_size"] = title_font_size
         changed.append(f"title_font_size: {title_font_size}")
-    if format is not None:
-        fmt = format.lower().lstrip(".")
+    if fig_format is not None:
+        fmt = fig_format.lower().lstrip(".")
         if fmt in ("pdf", "png", "svg"):
             PLOT_CONFIG["format"] = fmt
             changed.append(f"format: {fmt}")
         else:
-            changed.append(f"format: 無効な値 '{format}' (pdf/png/svg のいずれかを指定)")
+            changed.append(f"format: 無効な値 '{fig_format}' (pdf/png/svg のいずれかを指定)")
     if changed:
-        lines = "\n".join(f"  {c}" for c in changed)
+        lines = "\n".join(f"  {item}" for item in changed)
         return f"✅ プロット設定を更新しました:\n{lines}"
     return "変更なし（有効なパラメータが指定されていません）"
 
@@ -1186,7 +1186,7 @@ def tool_compile_report(content_ja: str, content_en: str, output_dir: str = "") 
     """TeX レポートをコンパイルして PDF を生成する"""
     if not output_dir:
         if SESSION_FIGURE_DIR:
-            output_dir = str(Path(SESSION_FIGURE_DIR).parent / "report")
+            output_dir = str(Path(SESSION_FIGURE_DIR) / "report")
         else:
             output_dir = str(Path.home() / "seq2pipe_results" / "report")
 
