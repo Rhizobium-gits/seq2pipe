@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1087,6 +1088,9 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
         matched = 0
         unmatched = []
 
+        # r2_files を dict 化して O(1) ルックアップ（大量サンプル時の O(n²) を回避）
+        r2_dict = {f.name: f for f in r2_files}
+
         for r1 in r1_files:
             # サンプル名の推定
             sample_name = re.sub(r'_R1[_.].*$|_R1\.fastq.*$', '', r1.name)
@@ -1099,13 +1103,13 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
 
             # 対応する R2 を探す（最初の _R1_ / _R1. のみ置換し二重置換バグを防ぐ）
             r2_pattern = re.sub(r'_R1([_.])', r'_R2\1', r1.name, count=1)
-            r2_candidates = [f for f in r2_files if f.name == r2_pattern]
+            r2_match = r2_dict.get(r2_pattern)
 
             # コンテナ内パス
             container_r1 = f"{container_data_dir}/{r1.name}"
 
-            if r2_candidates:
-                container_r2 = f"{container_data_dir}/{r2_candidates[0].name}"
+            if r2_match:
+                container_r2 = f"{container_data_dir}/{r2_match.name}"
                 lines.append(f"{sample_name}\t{container_r1}\t{container_r2}")
                 matched += 1
             else:
@@ -1222,8 +1226,9 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
             return f"✅ 成功（終了コード 0）\n" + "\n".join(output_parts)
         else:
             return f"⚠️  終了コード {proc.returncode}\n" + "\n".join(output_parts)
-    except subprocess.TimeoutExpired:
-        return "⏱️  タイムアウト（1時間を超えました）"
+    except subprocess.TimeoutExpired as e:
+        e.process.kill() if e.process else None
+        return "⏱️  タイムアウト（1時間を超えました）。コマンドを強制終了しました。"
     except Exception as e:
         return f"❌ 実行エラー: {e}"
 
@@ -1385,8 +1390,9 @@ except ImportError as _e:
 
         return "\n".join(parts)
 
-    except subprocess.TimeoutExpired:
-        return "⏱️  タイムアウト（5分を超えました）"
+    except subprocess.TimeoutExpired as e:
+        e.process.kill() if e.process else None
+        return "⏱️  タイムアウト（5分を超えました）。Pythonプロセスを強制終了しました。"
     except Exception as e:
         return f"❌ 実行エラー: {e}"
     finally:
@@ -1801,11 +1807,17 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
             f"詳細: {e}"
         )
     except urllib.error.URLError as e:
+        # socket.timeout は URLError に包まれて届くため、reason で判定
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            raise ConnectionError(
+                f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
+            )
         raise ConnectionError(
             f"Ollama に接続できません（{OLLAMA_URL}）。\n"
             f"'ollama serve' を別ターミナルで実行してください。\n詳細: {e}"
         )
-    except TimeoutError as e:
+    except (socket.timeout, TimeoutError) as e:
+        # URLError に包まれずに直接 raise される稀なケース
         raise ConnectionError(
             f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
         )
@@ -1869,6 +1881,12 @@ def run_agent_loop(messages: list, model: str, max_steps: int = 30):
         print(f"\n{c('🤖 AI', CYAN + BOLD)}: ", end="", flush=True)
 
         response = call_ollama(messages, model, tools=TOOLS)
+
+        # content も tool_calls も空の場合はスキップして再試行（空メッセージで会話を汚染しない）
+        if not response["content"] and not response["tool_calls"]:
+            print(f"\n{c('⚠️  AI からの応答が空でした。再試行します...', YELLOW)}")
+            continue
+
         assistant_msg = {"role": "assistant", "content": response["content"]}
 
         # tool_calls があれば実行
@@ -2067,10 +2085,11 @@ def select_language() -> str:
         except (EOFError, KeyboardInterrupt):
             print(f"\n\n{c(ui('goodbye'), CYAN)}")
             sys.exit(0)
-        if choice in ("1", "ja", "JA", "japanese", "Japanese"):
+        choice_lower = choice.lower()
+        if choice_lower in ("1", "ja", "japanese"):
             LANG = "ja"
             break
-        elif choice in ("2", "en", "EN", "english", "English"):
+        elif choice_lower in ("2", "en", "english"):
             LANG = "en"
             break
         else:
