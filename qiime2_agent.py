@@ -25,16 +25,16 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-# ======================================================================
-# 設定
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 設定
+# 🍺 ======================================================================
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = os.environ.get("QIIME2_AI_MODEL", "qwen2.5-coder:7b")
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
-# ======================================================================
-# セッション状態（ダウンストリーム解析トラッキング）
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 セッション状態（ダウンストリーム解析トラッキング）
+# 🍺 ======================================================================
 ANALYSIS_LOG: list = []       # 実行した解析の記録
 SESSION_FIGURE_DIR: str = ""  # 図の出力先（初回 execute_python 呼び出し時に設定）
 PLOT_CONFIG: dict = {         # 図のデフォルトスタイル設定
@@ -47,9 +47,9 @@ PLOT_CONFIG: dict = {         # 図のデフォルトスタイル設定
     "format": "pdf",           # 保存フォーマット: pdf / png / svg
 }
 
-# ======================================================================
-# 言語設定（select_language() で起動時に設定）
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 言語設定（select_language() で起動時に設定）
+# 🍺 ======================================================================
 LANG: str = "ja"  # "ja" | "en"
 
 _UI: dict = {
@@ -114,9 +114,9 @@ def ui(key: str, *args) -> str:
     return tmpl.format(*args) if args else tmpl
 
 
-# ======================================================================
-# ANSI カラー
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 ANSI カラー
+# 🍺 ======================================================================
 RESET = "\033[0m"
 BOLD = "\033[1m"
 GREEN = "\033[32m"
@@ -132,9 +132,9 @@ def c(text, color):
     return f"{color}{text}{RESET}"
 
 
-# ======================================================================
-# システムプロンプト（QIIME2 ドメイン知識を埋め込み）
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 システムプロンプト（QIIME2 ドメイン知識を埋め込み）
+# 🍺 ======================================================================
 SYSTEM_PROMPT = """あなたは QIIME2（Quantitative Insights Into Microbial Ecology 2）の専門 AI アシスタントです。
 ユーザーのマイクロバイオームデータを解析し、最適な QIIME2 パイプラインを自動構築します。
 
@@ -599,9 +599,9 @@ build_report_tex(
 ```
 このツールは ANALYSIS_LOG を読んで図・統計結果を自動的に TeX に埋め込み、PDF を生成する。"""
 
-# ======================================================================
-# ツール定義（Ollama function calling 形式）
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 ツール定義（Ollama function calling 形式）
+# 🍺 ======================================================================
 TOOLS = [
     {
         "type": "function",
@@ -886,9 +886,9 @@ TOOLS = [
     }
 ]
 
-# ======================================================================
-# ツール実装
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 ツール実装
+# 🍺 ======================================================================
 
 def tool_inspect_directory(path: str, recursive: bool = False) -> str:
     """ディレクトリ内容を調査"""
@@ -933,7 +933,7 @@ def tool_inspect_directory(path: str, recursive: bool = False) -> str:
     scan(p)
     lines.append(f"\n合計ファイル数: {total_files}")
 
-    # QIIME2 データ判定のヒント
+    # 🐱 QIIME2 データ判定のヒント
     all_text = "\n".join(lines)
     hints = []
     if "_R1_" in all_text or "_R1." in all_text:
@@ -981,12 +981,12 @@ def tool_read_file(path: str, max_lines: int = 50) -> str:
 
 def _get_docker_cmd() -> Optional[str]:
     """クロスプラットフォームで Docker 実行ファイルを検出する"""
-    # macOS: Docker Desktop の固定パスを優先
+    # 🐱 macOS: Docker Desktop の固定パスを優先
     if sys.platform == "darwin":
         mac_path = "/Applications/Docker.app/Contents/Resources/bin/docker"
         if Path(mac_path).exists():
             return mac_path
-    # Windows / Linux: PATH から検索
+    # 🐱 Windows / Linux: PATH から検索
     return shutil.which("docker") or shutil.which("docker.exe")
 
 
@@ -994,7 +994,7 @@ def tool_check_system() -> str:
     """システム環境の確認"""
     results = ["[システム確認結果]\n"]
 
-    # Docker
+    # 🐱 Docker
     docker_cmd = _get_docker_cmd()
     if docker_cmd:
         try:
@@ -1015,7 +1015,7 @@ def tool_check_system() -> str:
     else:
         results.append("NG Docker: インストールされていません → Docker Desktop をインストールしてください")
 
-    # Ollama
+    # 🐱 Ollama
     try:
         req = urllib.request.Request("http://localhost:11434/api/tags")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -1029,10 +1029,10 @@ def tool_check_system() -> str:
     except Exception:
         results.append("❌ Ollama: 起動していません → 'ollama serve' を実行してください")
 
-    # Python
+    # 🐱 Python
     results.append(f"✅ Python: {sys.version.split()[0]}")
 
-    # ディスク容量
+    # 🐱 ディスク容量
     usage = shutil.disk_usage(Path.home())
     free_gb = usage.free / 1024**3
     results.append(f"💾 ディスク空き容量: {free_gb:.1f} GB {'✅' if free_gb > 30 else '⚠️  (推奨: 30GB 以上)'}")
@@ -1047,7 +1047,7 @@ def tool_write_file(path: str, content: str) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             f.write(content)
-        # シェルスクリプトなら実行権限を付与
+        # 🐱 シェルスクリプトなら実行権限を付与
         if p.suffix in [".sh", ".bash"]:
             p.chmod(p.stat().st_mode | 0o755)
             return f"✅ '{p}' を作成しました（実行権限付き）"
@@ -1060,13 +1060,13 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
                             paired_end: bool = True,
                             container_data_dir: str = "/data/output") -> str:
     """FASTQファイルからマニフェストを自動生成"""
-    # 末尾スラッシュを除去してパスの二重スラッシュを防ぐ
+    # 🐱 末尾スラッシュを除去してパスの二重スラッシュを防ぐ
     container_data_dir = container_data_dir.rstrip("/")
     d = Path(fastq_dir).expanduser()
     if not d.exists():
         return f"エラー: '{fastq_dir}' が存在しません。"
 
-    # FASTQファイルを収集
+    # 🐱 FASTQファイルを収集
     fastq_files = sorted(d.glob("*.fastq.gz")) + sorted(d.glob("*.fastq"))
 
     if not fastq_files:
@@ -1075,7 +1075,7 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
     out_path = Path(output_path).expanduser()
 
     if paired_end:
-        # R1/R2 ペアを検出
+        # 🐱 R1/R2 ペアを検出
         r1_files = [f for f in fastq_files
                     if re.search(r'_R1[_.]|_1\.fastq|_R1\.fastq', f.name)]
         r2_files = [f for f in fastq_files
@@ -1084,29 +1084,29 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
         if not r1_files:
             return "エラー: _R1_ パターンのファイルが見つかりません。ファイル名を確認してください。"
 
-        # サンプル名を抽出
+        # 🐱 サンプル名を抽出
         lines = ["sample-id\tforward-absolute-filepath\treverse-absolute-filepath"]
         matched = 0
         unmatched = []
 
-        # r2_files を dict 化して O(1) ルックアップ（大量サンプル時の O(n²) を回避）
+        # 🐱 r2_files を dict 化して O(1) ルックアップ（大量サンプル時の O(n²) を回避）
         r2_dict = {f.name: f for f in r2_files}
 
         for r1 in r1_files:
-            # サンプル名の推定
+            # 🐱 サンプル名の推定
             sample_name = re.sub(r'_R1[_.].*$|_R1\.fastq.*$', '', r1.name)
             sample_name = re.sub(r'\.fastq.*$', '', sample_name)
 
-            # 空サンプル名は QIIME2 が拒否するためスキップ
+            # 🐱 空サンプル名は QIIME2 が拒否するためスキップ
             if not sample_name:
                 unmatched.append(r1.name)
                 continue
 
-            # 対応する R2 を探す（最初の _R1_ / _R1. のみ置換し二重置換バグを防ぐ）
+            # 🐱 対応する R2 を探す（最初の _R1_ / _R1. のみ置換し二重置換バグを防ぐ）
             r2_pattern = re.sub(r'_R1([_.])', r'_R2\1', r1.name, count=1)
             r2_match = r2_dict.get(r2_pattern)
 
-            # コンテナ内パス
+            # 🐱 コンテナ内パス
             container_r1 = f"{container_data_dir}/{r1.name}"
 
             if r2_match:
@@ -1116,7 +1116,7 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
             else:
                 unmatched.append(r1.name)
 
-        # ペアが一件もない場合はファイルを書かずにエラーを返す
+        # 🐱 ペアが一件もない場合はファイルを書かずにエラーを返す
         if matched == 0:
             return (
                 "❌ エラー: ペアが1組も見つかりませんでした。\n"
@@ -1137,7 +1137,7 @@ def tool_generate_manifest(fastq_dir: str, output_path: str,
         return "\n".join(result)
 
     else:
-        # シングルエンド
+        # 🐱 シングルエンド
         lines = ["sample-id\tabsolute-filepath"]
         for f in fastq_files:
             sample_name = re.sub(r'\.fastq.*$', '', f.name)
@@ -1169,7 +1169,7 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
             content = f.read()
         count = content.count(old_str)
         if count == 0:
-            # 部分一致のヒントを提示
+            # 🐱 部分一致のヒントを提示
             snippet = old_str[:60].replace('\n', '\\n')
             return (f"エラー: 指定した文字列が '{p.name}' に見つかりません。\n"
                     f"検索文字列（先頭60字）: {snippet}\n"
@@ -1191,7 +1191,7 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
 
 def tool_run_command(command: str, description: str, working_dir: str = None) -> str:
     """シェルコマンドを実行（ユーザー確認付き）"""
-    # working_dir を事前検証（ユーザーに確認を求める前にエラーを返す）
+    # 🐱 working_dir を事前検証（ユーザーに確認を求める前にエラーを返す）
     if working_dir:
         cwd = Path(working_dir).expanduser()
         if not cwd.exists():
@@ -1230,7 +1230,7 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
         else:
             return f"⚠️  終了コード {proc.returncode}\n" + "\n".join(output_parts)
     except subprocess.TimeoutExpired:
-        # subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
+        # 🐱 subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
         return "⏱️  タイムアウト（1時間を超えました）。コマンドは強制終了されました。"
     except Exception as e:
         return f"❌ 実行エラー: {e}"
@@ -1281,7 +1281,7 @@ def tool_execute_python(code: str, description: str, output_dir: str = "",
     """Pythonコードを実行してダウンストリーム解析・可視化を行う"""
     global SESSION_FIGURE_DIR
 
-    # 出力ディレクトリの決定
+    # 🐱 出力ディレクトリの決定
     if not output_dir:
         if not SESSION_FIGURE_DIR:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1291,16 +1291,16 @@ def tool_execute_python(code: str, description: str, output_dir: str = "",
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # サブフォルダ対応（解析種別ごとに図を整理）
+    # 🐱 サブフォルダ対応（解析種別ごとに図を整理）
     safe_sub = re.sub(r'[^\w]', '_', subfolder).strip('_') if subfolder else ""
     figures_dir = (out_path / "figures" / safe_sub) if safe_sub else (out_path / "figures")
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    # プリアンブル: PLOT_CONFIG 変数 + 共通インポートを自動注入
+    # 🐱 プリアンブル: PLOT_CONFIG 変数 + 共通インポートを自動注入
     preamble = f"""import sys, os, warnings
 warnings.filterwarnings('ignore')
 
-# --- seq2pipe ビルトイン変数 ---
+# 🐱 --- seq2pipe ビルトイン変数 ---
 FIGURE_DIR = {repr(str(figures_dir))}
 OUTPUT_DIR = {repr(str(out_path))}
 PLOT_STYLE = {repr(PLOT_CONFIG['style'])}
@@ -1311,7 +1311,7 @@ FONT_SIZE = {PLOT_CONFIG['font_size']}
 TITLE_FONT_SIZE = {PLOT_CONFIG['title_font_size']}
 FIGURE_FORMAT = {repr(PLOT_CONFIG.get('format', 'pdf'))}
 
-# --- 共通インポート ---
+# 🐱 --- 共通インポート ---
 try:
     import numpy as np
     import pandas as pd
@@ -1331,7 +1331,7 @@ except ImportError as _e:
     print(f"[WARNING] パッケージ不足: {{_e}}")
     print("pip install numpy pandas matplotlib seaborn を実行してください")
 
-# --- ユーザーコード ---
+# 🐱 --- ユーザーコード ---
 """
 
     full_code = preamble + "\n" + code
@@ -1342,7 +1342,7 @@ except ImportError as _e:
         tmp_path = f.name
 
     try:
-        # 実行前の図ファイル一覧
+        # 🐱 実行前の図ファイル一覧
         existing_figs = set(figures_dir.glob("*.png")) | \
                         set(figures_dir.glob("*.pdf")) | \
                         set(figures_dir.glob("*.svg"))
@@ -1357,13 +1357,13 @@ except ImportError as _e:
         stdout = proc.stdout.strip()
         stderr = proc.stderr.strip()
 
-        # 新規生成された図を検出
+        # 🐱 新規生成された図を検出
         new_figs = (set(figures_dir.glob("*.png")) |
                     set(figures_dir.glob("*.pdf")) |
                     set(figures_dir.glob("*.svg"))) - existing_figs
         new_figs = sorted(new_figs)
 
-        # ANALYSIS_LOG に記録
+        # 🐱 ANALYSIS_LOG に記録
         ANALYSIS_LOG.append({
             "step": len(ANALYSIS_LOG) + 1,
             "description": description,
@@ -1374,7 +1374,7 @@ except ImportError as _e:
             "timestamp": datetime.datetime.now().isoformat(),
         })
 
-        # 結果テキスト構築
+        # 🐱 結果テキスト構築
         parts = []
         if proc.returncode == 0:
             parts.append(f"✅ 解析完了: {description}")
@@ -1394,7 +1394,7 @@ except ImportError as _e:
         return "\n".join(parts)
 
     except subprocess.TimeoutExpired:
-        # subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
+        # 🐱 subprocess.run() はタイムアウト時に自動でプロセスを kill してから再 raise する
         return "⏱️  タイムアウト（5分を超えました）。Pythonプロセスは強制終了されました。"
     except Exception as e:
         return f"❌ 実行エラー: {e}"
@@ -1402,7 +1402,7 @@ except ImportError as _e:
         Path(tmp_path).unlink(missing_ok=True)
 
 
-# サブフォルダ → セクション名 マッピング
+# 🐱 サブフォルダ → セクション名 マッピング
 _SECTION_JA = {
     "alpha_diversity":        "α多様性解析",
     "beta_diversity":         "β多様性解析",
@@ -1459,7 +1459,7 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
 
     L = []  # lines
 
-    # ── プリアンブル ──────────────────────────────────────────
+    # 🐱 ── プリアンブル ──────────────────────────────────────────
     if is_ja:
         L += [
             r"\documentclass[a4paper,12pt]{article}",
@@ -1485,7 +1485,7 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
         r"\newpage",
     ]
 
-    # ── 概要セクション ────────────────────────────────────────
+    # 🐱 ── 概要セクション ────────────────────────────────────────
     if is_ja:
         L += [
             r"\section{解析概要}",
@@ -1520,7 +1520,7 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
             L += [r"\vspace{1em}", r"\subsection{Experimental Setup}",
                   _tex_escape(experiment_summary)]
 
-    # ── 解析フェーズごとのセクション ─────────────────────────
+    # 🐱 ── 解析フェーズごとのセクション ─────────────────────────
     for sf in _SUBFOLDER_ORDER:
         if sf not in groups:
             continue
@@ -1537,7 +1537,7 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
 
             L.append(f"\n\\subsection{{{desc}}}")
 
-            # 統計出力の抜粋
+            # 🐱 統計出力の抜粋
             stat_lines = [line for line in out_summary.split("\n")
                           if any(kw in line.lower() for kw in
                                  ["p =", "p=", "p-value", "pvalue", "accuracy",
@@ -1550,10 +1550,10 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
                          if is_ja else
                          r"\textit{(This analysis did not complete due to an error)}")
 
-            # 図の挿入
+            # 🐱 図の挿入
             for fig_path in figs:
                 caption = desc
-                # report_dir からの相対パスを使用（tectonic のサンドボックス対策）
+                # 🐱 report_dir からの相対パスを使用（tectonic のサンドボックス対策）
                 if report_dir is not None:
                     try:
                         fig_include = os.path.relpath(fig_path, report_dir).replace("\\", "/")
@@ -1569,7 +1569,7 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
                     r"\end{figure}",
                 ]
 
-    # ── 解析ログ表 ────────────────────────────────────────────
+    # 🐱 ── 解析ログ表 ────────────────────────────────────────────
     log_title = "解析ログ" if is_ja else "Analysis Log"
     L += [
         f"\n\\section{{{log_title}}}",
@@ -1585,7 +1585,7 @@ def _build_tex_content(lang_code: str, title_ja: str, title_en: str,
         step = entry.get("step", "")
         desc = _tex_escape(entry.get("description", ""))
         n_figs = len(entry.get("figures", []))
-        # ✓/✗ ではなく ASCII 文字を使う（フォント依存を避けるため）
+        # 🐱 ✓/✗ ではなく ASCII 文字を使う（フォント依存を避けるため）
         ok = r"\textbf{OK}" if entry.get("returncode", 0) == 0 else r"\textbf{NG}"
         L.append(f"{step} & {desc} & {n_figs} & {ok} \\\\")
 
@@ -1601,7 +1601,7 @@ def tool_build_report_tex(title_ja: str, title_en: str,
     if not ANALYSIS_LOG:
         return "❌ ANALYSIS_LOG が空です。先に execute_python で解析を実行してください。"
 
-    # 出力先
+    # 🐱 出力先
     if SESSION_FIGURE_DIR:
         report_dir = Path(SESSION_FIGURE_DIR) / "report"
     else:
@@ -1737,9 +1737,9 @@ def dispatch_tool(name: str, args: dict) -> str:
         return f"❌ ツール実行エラー ({name}): {e}"
 
 
-# ======================================================================
-# Ollama API
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 Ollama API
+# 🍺 ======================================================================
 
 def call_ollama(messages: list, model: str, tools: list = None) -> dict:
     """Ollama /api/chat を呼び出す（ストリーミング有効）"""
@@ -1778,16 +1778,16 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
                 msg = chunk.get("message", {})
                 content = msg.get("content", "")
 
-                # thinking（推論ブロック、qwen3等）
+                # 🐱 thinking（推論ブロック、qwen3等）
                 if msg.get("thinking"):
                     thinking_content += msg["thinking"]
                     continue
 
-                # tool_calls が含まれる場合
+                # 🐱 tool_calls が含まれる場合
                 if msg.get("tool_calls"):
                     tool_calls.extend(msg["tool_calls"])
 
-                # コンテンツをストリーミング表示
+                # 🐱 コンテンツをストリーミング表示
                 if content:
                     print(content, end="", flush=True)
                     full_content += content
@@ -1810,7 +1810,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
             f"詳細: {e}"
         )
     except urllib.error.URLError as e:
-        # socket.timeout は URLError に包まれて届くため、reason で判定
+        # 🐱 socket.timeout は URLError に包まれて届くため、reason で判定
         if isinstance(e.reason, (socket.timeout, TimeoutError)):
             raise ConnectionError(
                 f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
@@ -1820,7 +1820,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
             f"'ollama serve' を別ターミナルで実行してください。\n詳細: {e}"
         )
     except (socket.timeout, TimeoutError) as e:
-        # URLError に包まれずに直接 raise される稀なケース
+        # 🐱 URLError に包まれずに直接 raise される稀なケース
         raise ConnectionError(
             f"Ollama への接続がタイムアウトしました（timeout=300s）。\n詳細: {e}"
         )
@@ -1838,7 +1838,7 @@ def check_python_deps() -> bool:
             print(f"   {c(ui('deps_ok'), GREEN)}")
             return True
         else:
-            # ImportError の場合 stderr からパッケージ名を抽出
+            # 🐱 ImportError の場合 stderr からパッケージ名を抽出
             missing = proc.stderr.strip().split("\n")[-1] if proc.stderr else "不明"
             print(f"   {c(ui('deps_warn', missing), YELLOW)}")
             print(f"   {ui('deps_hint')}")
@@ -1868,9 +1868,9 @@ def get_available_models() -> list:
         return []
 
 
-# ======================================================================
-# エージェントループ
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 エージェントループ
+# 🍺 ======================================================================
 
 def run_agent_loop(messages: list, model: str, max_steps: int = 30):
     """ツール呼び出しを含むエージェントループを実行"""
@@ -1885,14 +1885,14 @@ def run_agent_loop(messages: list, model: str, max_steps: int = 30):
 
         response = call_ollama(messages, model, tools=TOOLS)
 
-        # content も tool_calls も空の場合はスキップして再試行（空メッセージで会話を汚染しない）
+        # 🐱 content も tool_calls も空の場合はスキップして再試行（空メッセージで会話を汚染しない）
         if not response["content"] and not response["tool_calls"]:
             print(f"\n{c('⚠️  AI からの応答が空でした。再試行します...', YELLOW)}")
             continue
 
         assistant_msg = {"role": "assistant", "content": response["content"]}
 
-        # tool_calls があれば実行
+        # 🐱 tool_calls があれば実行
         if response["tool_calls"]:
             tool_results = []
             for tc in response["tool_calls"]:
@@ -1918,25 +1918,25 @@ def run_agent_loop(messages: list, model: str, max_steps: int = 30):
                     "content": result
                 })
 
-            # tool_calls を assistant メッセージに追加（重複チェック不要 — 外側の if で確認済み）
+            # 🐱 tool_calls を assistant メッセージに追加（重複チェック不要 — 外側の if で確認済み）
             assistant_msg["tool_calls"] = response["tool_calls"]
 
             messages.append(assistant_msg)
             messages.extend(tool_results)
 
-            # ツール実行後、続けて AI に応答させる
+            # 🐱 ツール実行後、続けて AI に応答させる
             continue
         else:
-            # ツールなし → 通常の応答で終了
+            # 🐱 ツールなし → 通常の応答で終了
             messages.append(assistant_msg)
             break
 
 
-# ======================================================================
-# バナー・UI
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 バナー・UI
+# 🍺 ======================================================================
 
-# バナー文字列（"2" を正しいシングル斜めで修正済み）
+# 🐱 バナー文字列（"2" を正しいシングル斜めで修正済み）
 BANNER_LINES = [
     " ███████╗███████╗ ██████╗ ██████╗",
     " ██╔════╝██╔════╝██╔═══██╗╚════██╗",
@@ -1953,7 +1953,7 @@ BANNER_LINES = [
     "      sequence -> pipeline",
 ]
 
-# シアン系グラデーション（256色）
+# 🐱 シアン系グラデーション（256色）
 _GRAD = [
     "\033[38;5;23m",   # dark teal
     "\033[38;5;30m",
@@ -1985,24 +1985,24 @@ def print_banner():
         return
 
     try:
-        # Phase 1: 暗いシアンで一瞬表示
+        # 🐱 Phase 1: 暗いシアンで一瞬表示
         for line in BANNER_LINES:
             sys.stdout.write(f"\033[38;5;23m{line}\033[0m\n")
         sys.stdout.flush()
         time.sleep(0.04)
 
-        # Phase 2: カーソルを先頭へ戻す
+        # 🐱 Phase 2: カーソルを先頭へ戻す
         sys.stdout.write(f"\033[{n}A\r")
         sys.stdout.flush()
 
-        # Phase 3: グラデーションカラーで下スイープ
+        # 🐱 Phase 3: グラデーションカラーで下スイープ
         for i, line in enumerate(BANNER_LINES):
             color = _GRAD[i % len(_GRAD)]
             sys.stdout.write(f"\033[2K{color}\033[1m{line}\033[0m\n")
             sys.stdout.flush()
             time.sleep(0.03)
 
-        # Phase 4: スパークル（ランダム行が白く光る × 3波）
+        # 🐱 Phase 4: スパークル（ランダム行が白く光る × 3波）
         for _ in range(3):
             sparks = set(random.sample(range(n), k=min(4, n)))
             sys.stdout.write(f"\033[{n}A\r")
@@ -2012,7 +2012,7 @@ def print_banner():
             sys.stdout.flush()
             time.sleep(0.09)
 
-        # Phase 5: グラデーション状態に落ち着く
+        # 🐱 Phase 5: グラデーション状態に落ち着く
         sys.stdout.write(f"\033[{n}A\r")
         for i, line in enumerate(BANNER_LINES):
             color = _GRAD[i % len(_GRAD)]
@@ -2021,7 +2021,7 @@ def print_banner():
         print()
 
     except Exception:
-        # アニメーション失敗時は静的表示にフォールバック
+        # 🐱 アニメーション失敗時は静的表示にフォールバック
         for line in BANNER_LINES:
             print(f"{CYAN}{BOLD}{line}{RESET}")
 
@@ -2103,7 +2103,7 @@ def select_language() -> str:
 
 def select_model(available_models: list) -> str:
     """使用するモデルを選択"""
-    # 環境変数 QIIME2_AI_MODEL が設定されている場合は最優先
+    # 🐱 環境変数 QIIME2_AI_MODEL が設定されている場合は最優先
     if DEFAULT_MODEL in available_models:
         return DEFAULT_MODEL
 
@@ -2113,7 +2113,7 @@ def select_model(available_models: list) -> str:
     for p in preferred:
         if p in available_models:
             return p
-        # プレフィックス一致
+        # 🐱 プレフィックス一致
         for m in available_models:
             if m.startswith(p.split(":")[0]):
                 return m
@@ -2123,29 +2123,29 @@ def select_model(available_models: list) -> str:
     return DEFAULT_MODEL
 
 
-# ======================================================================
-# メインエントリポイント
-# ======================================================================
+# 🍺 ======================================================================
+# 🐱 メインエントリポイント
+# 🍺 ======================================================================
 
 def main():
-    # Windows 10+ で ANSI エスケープコードを有効化
+    # 🐱 Windows 10+ で ANSI エスケープコードを有効化
     if sys.platform == "win32":
         os.system("")
 
     print_banner()
 
-    # セッションごとにグローバル状態をリセット（同一プロセスで複数回呼ばれた場合の混入防止）
+    # 🐱 セッションごとにグローバル状態をリセット（同一プロセスで複数回呼ばれた場合の混入防止）
     global ANALYSIS_LOG, SESSION_FIGURE_DIR
     ANALYSIS_LOG = []
     SESSION_FIGURE_DIR = ""
 
-    # 言語選択
+    # 🐱 言語選択
     select_language()
 
-    # Python 依存パッケージ確認（失敗しても続行、警告のみ）
+    # 🐱 Python 依存パッケージ確認（失敗しても続行、警告のみ）
     check_python_deps()
 
-    # Ollama 起動確認
+    # 🐱 Ollama 起動確認
     if not check_ollama_running():
         print(f"{c(ui('ollama_error'), RED)}")
         print(f"   {ui('ollama_hint')}")
@@ -2154,7 +2154,7 @@ def main():
         print(f"   {c('./setup.sh', CYAN)}")
         sys.exit(1)
 
-    # モデル選択
+    # 🐱 モデル選択
     available = get_available_models()
     if not available:
         print(f"{c(ui('no_model'), YELLOW)}")
@@ -2166,10 +2166,10 @@ def main():
     print(f"{c(ui('model_selected', model), GREEN)}")
     print(f"{c(ui('hint_exit'), DIM)}\n")
 
-    # 言語に応じたシステムプロンプトと初期メッセージを選択
+    # 🐱 言語に応じたシステムプロンプトと初期メッセージを選択
     if LANG == "en":
-        # SYSTEM_PROMPT の末尾に追記することで「最後の指示」として機能させる
-        # （LLM は後方の指示を優先する傾向があるため、先頭追記より確実）
+        # 🐱 SYSTEM_PROMPT の末尾に追記することで「最後の指示」として機能させる
+        # 🐱 （LLM は後方の指示を優先する傾向があるため、先頭追記より確実）
         lang_suffix = (
             "\n\n━━━ LANGUAGE OVERRIDE (highest priority) ━━━\n"
             "The user has selected English as the interface language.\n"
@@ -2182,7 +2182,7 @@ def main():
         lang_suffix = ""
         initial_msg = INITIAL_MESSAGE
 
-    # 会話履歴を初期化
+    # 🐱 会話履歴を初期化
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT + lang_suffix},
         {"role": "assistant", "content": initial_msg}
@@ -2190,7 +2190,7 @@ def main():
 
     print(f"{c('🤖 AI', CYAN + BOLD)}: {initial_msg}")
 
-    # メインループ
+    # 🐱 メインループ
     while True:
         try:
             user_input = input(f"\n{c(ui('prompt'), BOLD + GREEN)} > ").strip()
