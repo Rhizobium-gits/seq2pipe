@@ -1,0 +1,488 @@
+% seq2pipe: ローカルLLMによるQIIME2パイプライン自動生成AIエージェント
+% XeLaTeX + xeCJK でコンパイル
+% tectonic seq2pipe_ja.tex  または  xelatex seq2pipe_ja.tex
+
+\documentclass[12pt, a4paper]{article}
+
+% -------------------------------------------------------
+% パッケージ
+% -------------------------------------------------------
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{Hiragino Mincho ProN}   % macOS 標準日本語フォント
+\setCJKsansfont{Hiragino Sans}
+\setCJKmonofont{Hiragino Sans}
+
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{top=25mm, bottom=25mm, left=25mm, right=25mm}
+
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  urlcolor=blue!70!black,
+  citecolor=blue!70!black,
+  pdftitle={seq2pipe: ローカルLLMによるQIIME2パイプライン自動生成AIエージェント},
+  pdfauthor={Rhizobium-gits, Claude (Anthropic)}
+}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{abstract}
+
+% -------------------------------------------------------
+% コードブロックのスタイル
+% -------------------------------------------------------
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codecomment}{RGB}{100,100,100}
+\definecolor{codestring}{RGB}{160,40,40}
+\definecolor{codekeyword}{RGB}{0,80,160}
+
+\lstdefinestyle{mystyle}{
+  backgroundcolor=\color{codebg},
+  commentstyle=\color{codecomment}\itshape,
+  keywordstyle=\color{codekeyword}\bfseries,
+  stringstyle=\color{codestring},
+  basicstyle=\ttfamily\small,
+  breakatwhitespace=false,
+  breaklines=true,
+  keepspaces=true,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=8pt,
+  showspaces=false,
+  showstringspaces=false,
+  tabsize=2,
+  frame=single,
+  rulecolor=\color{gray!40},
+  xleftmargin=15pt,
+}
+\lstset{style=mystyle}
+
+% -------------------------------------------------------
+% ヘッダー・フッター
+% -------------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small seq2pipe 技術レポート}
+\fancyhead[R]{\small 2025}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% -------------------------------------------------------
+% セクション書式
+% -------------------------------------------------------
+\titleformat{\section}{\large\bfseries}{}{0em}{\thesection\quad}
+\titleformat{\subsection}{\normalsize\bfseries}{}{0em}{\thesubsection\quad}
+
+% -------------------------------------------------------
+% ドキュメント開始
+% -------------------------------------------------------
+\begin{document}
+
+% タイトル
+\begin{center}
+  {\LARGE \textbf{seq2pipe}}\\[6pt]
+  {\large ローカル LLM による QIIME2 パイプライン自動生成 AI エージェント}\\[12pt]
+  {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
+  {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
+  {\small 2025 年}
+\end{center}
+
+\vspace{4mm}
+\hrule
+\vspace{4mm}
+
+% アブストラクト
+\begin{abstract}
+本稿では、ローカル大規模言語モデル（LLM）を用いたマイクロバイオーム解析自動化エージェント
+\textbf{seq2pipe} の設計と実装について報告する。
+seq2pipe はユーザーが保有する生 FASTQ データを入力として受け取り、
+データ構造の自動認識・QIIME2 解析パイプラインの設計・実行可能シェルスクリプトの生成・
+可視化ガイドの作成を対話形式で行う。
+処理はすべてユーザーのローカル環境で完結し、
+クラウドサービスや有料 API への依存を排除する。
+実装には Python 標準ライブラリのみを使用し、Ollama が提供する
+ローカル LLM 推論エンジンを通じて関数呼び出し（Function Calling）を実現する。
+\texttt{qwen2.5-coder:7b} モデルを用いることで
+実用的な QIIME2 パイプラインが生成されることを確認した。
+\end{abstract}
+
+\vspace{4mm}
+\hrule
+\vspace{6mm}
+
+% -------------------------------------------------------
+\section{はじめに}
+% -------------------------------------------------------
+
+マイクロバイオーム研究において QIIME2~\cite{qiime2} は
+16S rRNA アンプリコンシーケンシングデータの標準的な解析プラットフォームとして
+広く普及している。しかし、QIIME2 の学習コストは高く、
+データ形式の理解・適切なパラメータ選択・Docker を介した実行環境の構築など、
+初心者にとっての障壁が大きい。
+
+近年、大規模言語モデル（LLM）の急速な発展により、
+自然言語によるコード生成やドメイン特化型の解析支援が実用化されつつある~\cite{brown2020gpt3}。
+一方で、従来のクラウド型 LLM サービスはコスト・プライバシー・ネットワーク依存性という問題を持つ。
+Ollama~\cite{ollama} をはじめとするローカル LLM 実行フレームワークの登場により、
+これらの課題をクリアしながら高度な言語処理を実現することが可能となった。
+
+本研究では、これらの技術を統合した対話型 AI エージェント \textbf{seq2pipe} を開発し、
+その設計原則・アーキテクチャ・実装詳細を報告する。
+
+% -------------------------------------------------------
+\section{背景と関連研究}
+% -------------------------------------------------------
+
+\subsection{QIIME2 における解析の複雑性}
+
+QIIME2 は、データのインポートからデノイジング（DADA2）・系統樹構築・分類学的解析・
+多様性解析・差次解析まで、多段階の処理を必要とする。
+各ステップで適切なコマンドとパラメータを選択するには
+シーケンシングのライブラリ構成（ペアエンド/シングルエンド）・
+増幅領域（V1--V3, V3--V4, V4 など）・プライマー配列の知識が不可欠である。
+
+\subsection{LLM エージェントの台頭}
+
+ReAct フレームワーク~\cite{yao2023react} に代表されるように、
+LLM が思考と行動を交互に実行することで複雑なタスクを自律的に処理する
+「エージェント」パターンが確立されている。
+関数呼び出し（Function Calling）機能を持つ LLM は、
+外部ツールを適切なタイミングで呼び出しながら、
+ユーザーの意図を達成することができる。
+
+\subsection{ローカル LLM の実用化}
+
+Ollama は \texttt{llama.cpp} を基盤とし、macOS・Linux・Windows 上で
+量子化された LLM モデルをシングルバイナリで実行できる。
+OpenAI の Chat Completions API と互換性のある
+REST API（\texttt{/api/chat}）を提供しており、
+関数呼び出しを含む高度な推論が可能である。
+
+% -------------------------------------------------------
+\section{システム設計}
+% -------------------------------------------------------
+
+\subsection{設計原則}
+
+seq2pipe は以下の設計原則に従って開発した。
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{外部依存ゼロ}: Python 標準ライブラリ（\texttt{json}, \texttt{urllib},
+    \texttt{subprocess}, \texttt{pathlib} 等）のみを使用し、
+    \texttt{pip install} を不要とする。
+  \item \textbf{ローカル完結}: Ollama のローカル推論エンジンを使用し、
+    インターネット接続を不要とする（初期セットアップを除く）。
+  \item \textbf{クロスプラットフォーム}: macOS・Linux・Windows のすべてで動作する。
+  \item \textbf{安全なコマンド実行}: コマンド実行前にユーザーへの確認を必須とする。
+  \item \textbf{QIIME2 ドメイン知識の内包}: システムプロンプトに QIIME2 の
+    完全なワークフロー知識を埋め込む。
+\end{enumerate}
+
+\subsection{全体アーキテクチャ}
+
+図~\ref{fig:arch} に seq2pipe の全体アーキテクチャを示す。
+ユーザーは起動スクリプト（\texttt{launch.sh} / \texttt{launch.bat}）を通じて
+Python エージェント本体（\texttt{qiime2\_agent.py}）を起動する。
+エージェントは Ollama のローカル API（\texttt{http://localhost:11434/api/chat}）
+と通信し、6 種類のツールを介してファイルシステムや QIIME2（Docker 経由）と連携する。
+
+\begin{figure}[h]
+  \centering
+  \begin{verbatim}
+  ユーザー
+    |
+    v
+  [launch.sh / launch.bat]
+    |
+    v
+  [qiime2_agent.py] <-----> Ollama (localhost:11434)
+    |                              |
+    |                        [LLM モデル]
+    |
+    +---> [Tool 1] inspect_directory
+    +---> [Tool 2] read_file
+    +---> [Tool 3] write_file
+    +---> [Tool 4] generate_manifest
+    +---> [Tool 5] run_command  (Docker/QIIME2)
+    +---> [Tool 6] check_system
+  \end{verbatim}
+  \caption{seq2pipe の全体アーキテクチャ}
+  \label{fig:arch}
+\end{figure}
+
+% -------------------------------------------------------
+\section{実装詳細}
+% -------------------------------------------------------
+
+\subsection{システムプロンプトへのドメイン知識埋め込み}
+
+\texttt{SYSTEM\_PROMPT} 変数に QIIME2 の完全なワークフロー知識を記述した。
+これには以下の情報が含まれる。
+
+\begin{itemize}
+  \item データ形式の自動判定基準
+    （\texttt{*\_R1*.fastq.gz} パターンによるペアエンド検出など）
+  \item 全 8 ステップの QIIME2 コマンド（インポート〜差次解析）
+  \item 増幅領域別推奨パラメータ（V1--V3, V3--V4, V4）
+  \item Docker 実行テンプレート
+  \item メタデータファイル形式仕様
+  \item SILVA 138 分類階層の説明
+  \item 一般的なエラーとトラブルシューティング
+\end{itemize}
+
+この手法により、汎用 LLM モデルが QIIME2 専門家として振る舞うことを可能にした。
+
+\subsection{ツール定義と関数呼び出し}
+
+Ollama の Function Calling 機能を活用し、6 つのツールを JSON Schema 形式で定義した。
+各ツールは特定の役割を担う（表~\ref{tab:tools}）。
+
+\begin{table}[h]
+  \centering
+  \caption{seq2pipe が提供するツール一覧}
+  \label{tab:tools}
+  \begin{tabular}{lp{8cm}}
+    \toprule
+    \textbf{ツール名} & \textbf{機能} \\
+    \midrule
+    \texttt{inspect\_directory} &
+      指定ディレクトリのファイル一覧・サイズを取得し、
+      FASTQ/QZA/メタデータを自動判定する \\
+    \texttt{read\_file} &
+      テキストファイル（TSV, CSV, Markdown 等）の内容を最大 50 行読み込む \\
+    \texttt{check\_system} &
+      Docker・Ollama・Python のインストール状況とバージョンを確認する \\
+    \texttt{write\_file} &
+      解析スクリプト・マニフェスト・README 等をファイルに書き出す \\
+    \texttt{generate\_manifest} &
+      FASTQ ディレクトリから QIIME2 マニフェスト TSV を自動生成する \\
+    \texttt{run\_command} &
+      ユーザー確認後にシェルコマンドを実行する \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{エージェントループの実装}
+
+\texttt{run\_agent\_loop()} 関数が LLM の応答を受け取り、
+ツール呼び出しが含まれる場合は順次実行して結果を会話履歴に追加するループを制御する。
+このループは \texttt{tool\_calls} フィールドが空になるまで継続し、
+最終的にテキスト応答を返す時点で終了する（リスト~\ref{lst:loop}）。
+
+\begin{lstlisting}[language=Python, caption={エージェントループの中核部分}, label={lst:loop}]
+def run_agent_loop(messages: list, model: str):
+    while True:
+        response = call_ollama(messages, model, tools=TOOLS)
+        assistant_msg = {"role": "assistant",
+                         "content": response["content"]}
+
+        if response["tool_calls"]:
+            tool_results = []
+            for tc in response["tool_calls"]:
+                fn = tc.get("function", {})
+                result = dispatch_tool(fn["name"],
+                                       fn.get("arguments", {}))
+                tool_results.append({"role": "tool",
+                                      "content": result})
+            assistant_msg["tool_calls"] = response["tool_calls"]
+            messages.append(assistant_msg)
+            messages.extend(tool_results)
+            continue   # 次のループで再度 LLM に問い合わせ
+        else:
+            messages.append(assistant_msg)
+            break      # テキスト応答のみ -> ループ終了
+\end{lstlisting}
+
+\subsection{Ollama API との通信}
+
+\texttt{call\_ollama()} 関数は Ollama の \texttt{/api/chat} エンドポイントに
+JSON リクエストを送信し、ストリーミングレスポンスを行単位で受信する。
+Python の \texttt{urllib.request} モジュールのみを使用しており、
+\texttt{requests} 等の外部パッケージに依存しない。
+
+\subsection{クロスプラットフォーム対応}
+
+macOS・Linux・Windows の差異を吸収するために以下の対策を実装した。
+
+\begin{itemize}
+  \item \textbf{Docker 検出}:
+    macOS では Docker Desktop の固定パス
+    (\texttt{/Applications/Docker.app/Contents/Resources/bin/docker}) を優先し、
+    その他の OS では \texttt{shutil.which("docker")} を使用する（\texttt{\_get\_docker\_cmd()}）。
+  \item \textbf{Windows ANSI カラー}:
+    \texttt{os.system("")} を呼ぶことで Windows 10 以降における
+    ANSI エスケープシーケンスを有効化する。
+  \item \textbf{起動スクリプトの分離}:
+    macOS/Linux 用（Bash シェルスクリプト）と
+    Windows 用（PowerShell + バッチファイル）を別々に提供する。
+\end{itemize}
+
+\subsection{マニフェスト自動生成}
+
+\texttt{tool\_generate\_manifest()} は FASTQ ファイルの命名規則
+（\texttt{\_R1\_} / \texttt{\_R2\_} パターン）を正規表現で解析し、
+ペアエンド・シングルエンド双方の QIIME2 マニフェスト TSV を自動生成する。
+Docker コンテナ内パス（デフォルト: \texttt{/data/output}）への変換も自動で行う。
+
+% -------------------------------------------------------
+\section{解析ワークフロー}
+% -------------------------------------------------------
+
+seq2pipe が生成する QIIME2 パイプラインは表~\ref{tab:workflow} の 8 ステップで構成される。
+
+\begin{table}[h]
+  \centering
+  \caption{生成される QIIME2 解析パイプラインの概要}
+  \label{tab:workflow}
+  \begin{tabular}{clp{7cm}}
+    \toprule
+    \textbf{STEP} & \textbf{処理} & \textbf{主要コマンド} \\
+    \midrule
+    1 & データインポート &
+      \texttt{qiime tools import} \\
+    2 & クオリティ確認 &
+      \texttt{qiime demux summarize} \\
+    3 & デノイジング（ASV 生成） &
+      \texttt{qiime dada2 denoise-paired} \\
+    4 & フィーチャーテーブル確認 &
+      \texttt{qiime feature-table summarize} \\
+    5 & 系統樹構築 &
+      \texttt{qiime phylogeny align-to-tree-mafft-fasttree} \\
+    6 & 分類学的解析 &
+      \texttt{qiime feature-classifier classify-sklearn} \\
+    7 & 多様性解析 &
+      \texttt{qiime diversity core-metrics-phylogenetic} \\
+    8 & 差次解析（オプション） &
+      \texttt{qiime composition ancombc} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+SILVA 138 参照データベース~\cite{silva} を用いた Naive Bayes 分類器により、
+16S rRNA 増幅領域の分類学的同定を行う。
+増幅領域（V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R）に応じて
+プライマートリム長・トランケーション長が自動的に調整される。
+
+% -------------------------------------------------------
+\section{対応モデルと性能比較}
+% -------------------------------------------------------
+
+seq2pipe は Ollama で動作する任意の LLM と組み合わせて使用できる。
+表~\ref{tab:models} に推奨モデルとその特性を示す。
+
+\begin{table}[h]
+  \centering
+  \caption{対応モデル一覧}
+  \label{tab:models}
+  \begin{tabular}{llll}
+    \toprule
+    \textbf{モデル} & \textbf{必要 RAM} & \textbf{モデルサイズ} & \textbf{特徴} \\
+    \midrule
+    \texttt{qwen2.5-coder:7b} & 8 GB 以上 & 約 4.7 GB &
+      コード生成特化（推奨） \\
+    \texttt{qwen2.5-coder:3b} & 4 GB 以上 & 約 1.9 GB &
+      軽量・高速 \\
+    \texttt{llama3.2:3b}      & 4 GB 以上 & 約 2.0 GB &
+      汎用・対話能力高め \\
+    \texttt{qwen3:8b}         & 16 GB 以上 & 約 5.2 GB &
+      最高品質・推論能力高い \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% -------------------------------------------------------
+\section{考察と今後の課題}
+% -------------------------------------------------------
+
+\subsection{達成された目標}
+
+seq2pipe は以下の目標を達成した。
+
+\begin{itemize}
+  \item Python 標準ライブラリのみを用いたゼロ依存実装
+  \item ローカル LLM による完全オフライン動作
+  \item 3 OS（macOS / Linux / Windows）への完全対応
+  \item FASTQ データ構造の自動認識と適応的パイプライン生成
+  \item QIIME2 コマンドを Docker 経由で安全に実行するコマンド確認機構
+\end{itemize}
+
+\subsection{現在の制限}
+
+\begin{itemize}
+  \item LLM の生成するコマンドの正確性はモデルに依存し、
+    誤ったパラメータが生成される可能性がある。
+  \item 大規模データセット（100 サンプル以上）に対するパフォーマンスは未検証である。
+  \item SILVA 138 参照ファイルのダウンロードには約 30 GB のディスク容量と数時間を要する。
+\end{itemize}
+
+\subsection{今後の課題}
+
+\begin{itemize}
+  \item 生成コマンドの自動検証機構の実装
+  \item Web UI の提供（Gradio や Streamlit との統合）
+  \item ITS / 18S rRNA など他のマーカー遺伝子への対応
+  \item パイプライン実行結果のフィードバックループ実装
+\end{itemize}
+
+% -------------------------------------------------------
+\section{おわりに}
+% -------------------------------------------------------
+
+本稿では、ローカル LLM と QIIME2 を統合した自動解析エージェント
+seq2pipe の設計・実装を報告した。
+Python 標準ライブラリのみによるゼロ依存設計と、
+クロスプラットフォーム対応により、
+インターネット接続不要の環境でもマイクロバイオーム解析を
+自動化できる実用的なツールを実現した。
+
+seq2pipe はオープンソース（MIT ライセンス）として公開されており、
+\texttt{https://github.com/Rhizobium-gits/seq2pipe} からアクセスできる。
+
+% -------------------------------------------------------
+% 参考文献
+% -------------------------------------------------------
+\begin{thebibliography}{9}
+
+\bibitem{qiime2}
+  Bolyen, E., et al. (2019).
+  \textit{Reproducible, interactive, scalable and extensible microbiome data science using QIIME 2}.
+  Nature Biotechnology, 37, 852--857.
+
+\bibitem{brown2020gpt3}
+  Brown, T. B., et al. (2020).
+  \textit{Language Models are Few-Shot Learners}.
+  Advances in Neural Information Processing Systems, 33, 1877--1901.
+
+\bibitem{yao2023react}
+  Yao, S., et al. (2023).
+  \textit{ReAct: Synergizing Reasoning and Acting in Language Models}.
+  International Conference on Learning Representations (ICLR 2023).
+
+\bibitem{ollama}
+  Ollama (2023).
+  \textit{Ollama: Get up and running with large language models locally}.
+  \url{https://ollama.com/}
+
+\bibitem{silva}
+  Quast, C., et al. (2013).
+  \textit{The SILVA ribosomal RNA gene database project: improved data processing and web-based tools}.
+  Nucleic Acids Research, 41(D1), D590--D596.
+
+\bibitem{dada2}
+  Callahan, B. J., et al. (2016).
+  \textit{DADA2: High-resolution sample inference from Illumina amplicon data}.
+  Nature Methods, 13(7), 581--583.
+
+\end{thebibliography}
+
+\end{document}
