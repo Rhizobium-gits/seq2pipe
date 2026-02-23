@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # coding: utf-8
 """
-QIIME2 Local AI Agent
+seq2pipe  —  sequence → pipeline
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ローカルLLM（Ollama）を使ったマイクロバイオーム解析支援ツール
+ローカルLLM（Ollama）を使ったマイクロバイオーム解析 AI エージェント
+生配列データを読み取り、QIIME2 パイプラインを自動生成します
 
 依存ライブラリ: Python 標準ライブラリのみ（外部パッケージ不要）
 必要ツール   : Ollama (setup.sh でインストール), Docker Desktop
@@ -905,7 +906,7 @@ def run_agent_loop(messages: list, model: str):
 
 BANNER = f"""{CYAN}{BOLD}
 ╔═══════════════════════════════════════════════════════════════╗
-║          QIIME2 Local AI Agent  🧬                           ║
+║          seq2pipe  —  sequence → pipeline  🧬                ║
 ║  ローカル LLM でマイクロバイオームデータを自動解析します     ║
 ╚═══════════════════════════════════════════════════════════════╝{RESET}
 """

@@ -1,6 +1,6 @@
-# QIIME2 Local AI Agent 🧬
+# seq2pipe 🧬
 
-ローカル LLM（Ollama）を使って、あなたのマイクロバイオームデータを自動解析する AI エージェントです。
+**sequence → pipeline** — ローカル LLM（Ollama）を使って、生配列データから QIIME2 解析パイプラインを自動生成する AI エージェントです。
 クラウド・API キー不要で、すべてあなたのマシン上で動作します。
 
 ---
