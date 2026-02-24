@@ -67,8 +67,9 @@ QIIME2_PYTHON: str = str(Path(QIIME2_CONDA_BIN) / "python3") if QIIME2_CONDA_BIN
 # 🍺 ======================================================================
 # 🐱 セッション状態（ダウンストリーム解析トラッキング）
 # 🍺 ======================================================================
-ANALYSIS_LOG: list = []       # 実行した解析の記録
-SESSION_FIGURE_DIR: str = ""  # 図の出力先（初回 execute_python 呼び出し時に設定）
+ANALYSIS_LOG: list = []        # 実行した解析の記録
+SESSION_OUTPUT_DIR: str = ""   # セッション全体の出力ルートディレクトリ（起動時に作成）
+SESSION_FIGURE_DIR: str = ""   # 図の出力先（SESSION_OUTPUT_DIR/figures/ に同期）
 PLOT_CONFIG: dict = {         # 図のデフォルトスタイル設定
     "style": "seaborn-v0_8-whitegrid",
     "palette": "Set2",
@@ -116,6 +117,8 @@ _UI: dict = {
         "pkg_hint":         "pip install numpy pandas matplotlib seaborn を実行してください",
         "select_error":     "1 か 2 を入力してください",
         "qiime2_python":    "QIIME2 conda Python を使用: {}",
+        "session_dir":      "📁 出力先ディレクトリ: {}",
+        "session_dir_hint": "   解析結果・図・レポートはすべてこのディレクトリに保存されます",
     },
     "en": {
         "model_selected":   "✅ Model: {}",
@@ -148,6 +151,8 @@ _UI: dict = {
         "pkg_hint":         "Please run: pip install numpy pandas matplotlib seaborn",
         "select_error":     "Please enter 1 or 2",
         "qiime2_python":    "Using QIIME2 conda Python: {}",
+        "session_dir":      "📁 Output directory: {}",
+        "session_dir_hint": "   All analysis results, figures, and reports will be saved here",
     },
 }
 
@@ -1268,6 +1273,10 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
 
 def tool_run_command(command: str, description: str, working_dir: str = None) -> str:
     """シェルコマンドを実行（ユーザー確認付き）"""
+    # 🐱 working_dir 未指定かつセッション出力ディレクトリが存在する場合はそこをデフォルトにする
+    if not working_dir and SESSION_OUTPUT_DIR:
+        working_dir = SESSION_OUTPUT_DIR
+
     # 🐱 working_dir を事前検証（ユーザーに確認を求める前にエラーを返す）
     if working_dir:
         cwd = Path(working_dir).expanduser()
@@ -2336,8 +2345,9 @@ def main():
     print_banner()
 
     # 🐱 セッションごとにグローバル状態をリセット（同一プロセスで複数回呼ばれた場合の混入防止）
-    global ANALYSIS_LOG, SESSION_FIGURE_DIR, LANG
+    global ANALYSIS_LOG, SESSION_OUTPUT_DIR, SESSION_FIGURE_DIR, LANG
     ANALYSIS_LOG = []
+    SESSION_OUTPUT_DIR = ""
     SESSION_FIGURE_DIR = ""
     LANG = "ja"  # 🐱 select_language() で上書きされる
 
@@ -2368,6 +2378,16 @@ def main():
     print(f"{c(ui('model_selected', model), GREEN)}")
     print(f"{c(ui('hint_exit'), DIM)}\n")
 
+    # 🐱 セッション出力ディレクトリを起動時に作成（タイムスタンプ付き）
+    _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _session_root = Path.home() / "seq2pipe_results" / _ts
+    _session_root.mkdir(parents=True, exist_ok=True)
+    SESSION_OUTPUT_DIR = str(_session_root)
+    SESSION_FIGURE_DIR = str(_session_root / "figures")
+    Path(SESSION_FIGURE_DIR).mkdir(parents=True, exist_ok=True)
+    print(f"{c(ui('session_dir', SESSION_OUTPUT_DIR), GREEN)}")
+    print(f"{c(ui('session_dir_hint'), DIM)}\n")
+
     # 🐱 言語に応じたシステムプロンプトと初期メッセージを選択
     if LANG == "en":
         # 🐱 SYSTEM_PROMPT の末尾に追記することで「最後の指示」として機能させる
@@ -2380,13 +2400,35 @@ def main():
             "Do NOT use Japanese in any output."
         )
         initial_msg = INITIAL_MESSAGE_EN
+        # 🐱 英語: セッションディレクトリの注入
+        session_suffix = (
+            f"\n\n━━━ SESSION OUTPUT DIRECTORY ━━━\n"
+            f"All outputs for this session (QIIME2 artifacts .qza/.qzv, scripts, reports, figures) "
+            f"MUST be saved under: {SESSION_OUTPUT_DIR}\n"
+            f"  - QIIME2 artifacts: {SESSION_OUTPUT_DIR}/<filename>.qza\n"
+            f"  - Figures: {SESSION_FIGURE_DIR}/<filename>.pdf\n"
+            f"  - Reports: {SESSION_OUTPUT_DIR}/report/\n"
+            f"run_command tool automatically runs in this directory, so relative paths work.\n"
+            f"Use relative paths in QIIME2 commands (e.g. --output-path table.qza)."
+        )
     else:
         lang_suffix = ""
         initial_msg = INITIAL_MESSAGE
+        # 🐱 日本語: セッションディレクトリの注入
+        session_suffix = (
+            f"\n\n━━━ セッション出力ディレクトリ ━━━\n"
+            f"このセッションのすべての出力（QIIME2 アーティファクト .qza/.qzv、スクリプト、レポート、図）は\n"
+            f"以下のディレクトリに保存してください: {SESSION_OUTPUT_DIR}\n"
+            f"  - QIIME2 アーティファクト: {SESSION_OUTPUT_DIR}/<ファイル名>.qza\n"
+            f"  - 図・グラフ: {SESSION_FIGURE_DIR}/<ファイル名>.pdf\n"
+            f"  - レポート: {SESSION_OUTPUT_DIR}/report/\n"
+            f"run_command ツールは自動的にこのディレクトリで実行されます（相対パスが使えます）。\n"
+            f"QIIME2 コマンドでは相対パスを使ってください（例: --output-path table.qza）。"
+        )
 
     # 🐱 会話履歴を初期化
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + lang_suffix},
+        {"role": "system", "content": SYSTEM_PROMPT + lang_suffix + session_suffix},
         {"role": "assistant", "content": initial_msg}
     ]
 
