@@ -2135,94 +2135,337 @@ def tool_run_qiime2_pipeline(
                     "STEP 7c: β多様性グループ比較（UniFrac）"
                 )
 
-    # ── 自動ビジュアライゼーション ───────────────────────────────────────
+    # ── STEP 8: QZA → TSV/BIOM エクスポート ─────────────────────────────
+    # QIIME2 artifacts を標準フォーマットに変換して Python で直接解析できるようにする
+    export_dir = str(Path(out_dir) / "exported")
+    Path(export_dir).mkdir(parents=True, exist_ok=True)
+
+    # Feature table (BIOM → TSV)
+    _exec(
+        f"qiime tools export --input-path table.qza --output-path {export_dir}/table/ && "
+        f"biom convert -i {export_dir}/table/feature-table.biom "
+        f"-o {export_dir}/feature-table.tsv --to-tsv",
+        "STEP 8a: Feature table (ASV counts) を TSV にエクスポート"
+    )
+    # Taxonomy
+    if has_taxonomy:
+        _exec(
+            f"qiime tools export --input-path taxonomy.qza --output-path {export_dir}/taxonomy/",
+            "STEP 8b: Taxonomy を TSV にエクスポート"
+        )
+    # DADA2 denoising stats
+    _exec(
+        f"qiime tools export --input-path denoising-stats.qza --output-path {export_dir}/denoising_stats/",
+        "STEP 8c: DADA2 denoising stats を TSV にエクスポート"
+    )
+    # Representative sequences
+    _exec(
+        f"qiime tools export --input-path rep-seqs.qza --output-path {export_dir}/rep-seqs/",
+        "STEP 8d: 代表配列 (rep-seqs) を FASTA にエクスポート"
+    )
+    # Alpha diversity metrics
+    for _metric in ["shannon_vector", "faith_pd_vector", "evenness_vector", "observed_features_vector"]:
+        _qza = str(Path(out_dir) / "core-metrics-results" / f"{_metric}.qza")
+        if Path(_qza).exists():
+            _exec(
+                f"qiime tools export --input-path core-metrics-results/{_metric}.qza "
+                f"--output-path {export_dir}/alpha/{_metric}/",
+                f"STEP 8e: {_metric} をエクスポート"
+            )
+    # Beta diversity distance matrices
+    for _mat in ["unweighted_unifrac_distance_matrix", "weighted_unifrac_distance_matrix",
+                 "bray_curtis_distance_matrix", "jaccard_distance_matrix"]:
+        _qza = str(Path(out_dir) / "core-metrics-results" / f"{_mat}.qza")
+        if Path(_qza).exists():
+            _exec(
+                f"qiime tools export --input-path core-metrics-results/{_mat}.qza "
+                f"--output-path {export_dir}/beta/{_mat}/",
+                f"STEP 8f: {_mat} をエクスポート"
+            )
+
+    # ── STEP 9: Python による本格解析・可視化 ────────────────────────────
     fig_dir = SESSION_FIGURE_DIR if SESSION_FIGURE_DIR else str(Path(out_dir) / "figures")
     Path(fig_dir).mkdir(parents=True, exist_ok=True)
-    _auto_viz_code = f"""
-import io, os, zipfile
+
+    _analysis_code = f"""
+import io, os, glob, zipfile
+from pathlib import Path
+import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import pandas as pd
+import seaborn as sns
+from scipy import stats
 
-session_dir = {repr(out_dir)}
-fig_dir = {repr(fig_dir)}
-os.makedirs(fig_dir, exist_ok=True)
+session_dir = Path({repr(out_dir)})
+export_dir  = Path({repr(export_dir)})
+fig_dir     = Path({repr(fig_dir)})
+fig_dir.mkdir(parents=True, exist_ok=True)
 
-dpi = {PLOT_CONFIG.get('dpi', 300)}
-plt.rcParams.update({{'figure.dpi': dpi, 'font.size': {PLOT_CONFIG.get('font_size', 12)}}})
+dpi       = {PLOT_CONFIG.get('dpi', 300)}
+font_size = {PLOT_CONFIG.get('font_size', 12)}
+plt.rcParams.update({{
+    'figure.dpi'       : dpi,
+    'font.size'        : font_size,
+    'axes.spines.top'  : False,
+    'axes.spines.right': False,
+    'savefig.dpi'      : dpi,
+}})
+warnings_list = []
 
-def _read_tsv_from_qza(qza_path, target_suffix):
-    \"\"\"QZAファイル（zip）内の target_suffix で終わる TSV を DataFrame で返す\"\"\"
+# ══════════════════════════════════════════════════════════════════════
+# 1. Feature table (ASV counts) を読み込む
+# ══════════════════════════════════════════════════════════════════════
+asv_table = None
+table_tsv = export_dir / "feature-table.tsv"
+if table_tsv.exists():
+    asv_table = pd.read_csv(table_tsv, sep='\\t', skiprows=1, index_col=0)
+    asv_table = asv_table.astype(float)
+    print(f"✅ ASV table: {{asv_table.shape[0]}} ASV x {{asv_table.shape[1]}} サンプル")
+    asv_table.to_csv(fig_dir / "asv_counts.csv")
+else:
+    warnings_list.append("⚠️ feature-table.tsv が見つかりません（table.qza のエクスポートを確認）")
+
+# ══════════════════════════════════════════════════════════════════════
+# 2. Taxonomy を読み込む
+# ══════════════════════════════════════════════════════════════════════
+taxonomy = None
+tax_tsv = export_dir / "taxonomy" / "taxonomy.tsv"
+if tax_tsv.exists():
+    taxonomy = pd.read_csv(tax_tsv, sep='\\t', index_col=0)
+    print(f"✅ Taxonomy: {{len(taxonomy)}} ASV の分類情報")
+
+# ══════════════════════════════════════════════════════════════════════
+# 3. 属レベル集計・相対存在量・積み上げ棒グラフ
+# ══════════════════════════════════════════════════════════════════════
+genus_rel = None
+if asv_table is not None and taxonomy is not None:
+    def _parse_level(taxon_str, prefix):
+        if not isinstance(taxon_str, str):
+            return "Unclassified"
+        for part in taxon_str.split(';'):
+            part = part.strip()
+            if part.startswith(prefix + '__'):
+                val = part[len(prefix) + 2:].strip()
+                return val if val else f"Unclassified {{prefix}}"
+        return "Unclassified"
+
+    taxonomy['Phylum'] = taxonomy['Taxon'].apply(lambda x: _parse_level(x, 'p'))
+    taxonomy['Family'] = taxonomy['Taxon'].apply(lambda x: _parse_level(x, 'f'))
+    taxonomy['Genus']  = taxonomy['Taxon'].apply(lambda x: _parse_level(x, 'g'))
+    taxonomy.to_csv(fig_dir / "taxonomy_parsed.csv")
+
+    merged = asv_table.join(taxonomy[['Phylum', 'Family', 'Genus']])
+
+    # 属レベル集計
+    sample_cols = asv_table.columns.tolist()
+    genus_counts = merged.groupby('Genus')[sample_cols].sum()
+    genus_counts.to_csv(fig_dir / "genus_counts.csv")
+
+    # 相対存在量 (%)
+    genus_rel = genus_counts.div(genus_counts.sum(axis=0), axis=1) * 100
+    genus_rel.to_csv(fig_dir / "genus_relative_abundance.csv")
+    print(f"✅ 属レベル集計: {{genus_counts.shape[0]}} 属")
+
+    # 積み上げ棒グラフ（Top 10 + Other）
+    top_n = 10
+    top_genera = genus_rel.mean(axis=1).sort_values(ascending=False).head(top_n).index.tolist()
+    plot_df = genus_rel.loc[top_genera].copy()
+    plot_df.loc['Other'] = genus_rel.drop(index=top_genera).sum(axis=0)
+    plot_df = plot_df.T  # 行=サンプル, 列=属
+
+    colors = list(plt.cm.tab20.colors[:top_n]) + [(0.75, 0.75, 0.75)]
+    fig, ax = plt.subplots(figsize=(max(10, len(plot_df) * 0.9), 6))
+    plot_df.plot(kind='bar', stacked=True, ax=ax, color=colors,
+                 width=0.8, edgecolor='white', linewidth=0.3)
+    ax.set_xlabel('Sample ID', fontsize=font_size)
+    ax.set_ylabel('Relative abundance (%)', fontsize=font_size)
+    ax.set_title('Genus-level composition (Top 10)', fontsize=font_size + 2, fontweight='bold')
+    ax.tick_params(axis='x', rotation=45)
+    ax.legend(title='Genus', bbox_to_anchor=(1.01, 1), loc='upper left', fontsize=font_size - 2)
+    ax.set_ylim(0, 100)
+    plt.tight_layout()
+    plt.savefig(fig_dir / 'genus_composition_stacked.pdf', bbox_inches='tight')
+    plt.close()
+    print('✅ 属レベル積み上げ棒グラフ: genus_composition_stacked.pdf')
+
+    # 門レベルも集計・保存
+    phylum_counts = merged.groupby('Phylum')[sample_cols].sum()
+    phylum_rel    = phylum_counts.div(phylum_counts.sum(axis=0), axis=1) * 100
+    phylum_rel.to_csv(fig_dir / "phylum_relative_abundance.csv")
+
+# ══════════════════════════════════════════════════════════════════════
+# 4. DADA2 デノイジング統計
+# ══════════════════════════════════════════════════════════════════════
+stats_files = list((export_dir / "denoising_stats").glob("*.tsv")) \
+              if (export_dir / "denoising_stats").exists() else []
+if not stats_files:
+    # フォールバック: QZA から直接読む
+    stats_qza = session_dir / "denoising-stats.qza"
+    if stats_qza.exists():
+        try:
+            with zipfile.ZipFile(stats_qza, 'r') as z:
+                for name in z.namelist():
+                    if name.endswith('stats.tsv'):
+                        with z.open(name) as f:
+                            stats_files = [io.BytesIO(f.read())]
+                        break
+        except Exception as e:
+            warnings_list.append(f"DADA2統計読み込み失敗: {{e}}")
+
+if stats_files:
     try:
-        with zipfile.ZipFile(qza_path, 'r') as z:
-            for name in z.namelist():
-                if name.endswith(target_suffix):
-                    with z.open(name) as f:
-                        return pd.read_csv(f, sep='\\t', index_col=0)
-    except Exception:
-        pass
-    return None
-
-# ── DADA2 デノイジング統計 ────────────────────────────────────────────
-stats_qza = os.path.join(session_dir, 'denoising-stats.qza')
-if os.path.exists(stats_qza):
-    df = _read_tsv_from_qza(stats_qza, 'stats.tsv')
-    if df is not None and 'input' in df.columns and 'non-chimeric' in df.columns:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        axes[0].bar(range(len(df)), df['input'], label='Input', alpha=0.7, color='steelblue')
-        axes[0].bar(range(len(df)), df['non-chimeric'], label='Non-chimeric', alpha=0.7, color='tomato')
-        axes[0].set_xticks(range(len(df)))
-        axes[0].set_xticklabels(df.index, rotation=45, ha='right')
-        axes[0].set_xlabel('Sample ID')
-        axes[0].set_ylabel('Reads')
-        axes[0].set_title('DADA2: リード数')
-        axes[0].legend()
-        retention = df['non-chimeric'] / df['input'] * 100
-        axes[1].bar(range(len(df)), retention, color='mediumseagreen')
-        axes[1].set_xticks(range(len(df)))
-        axes[1].set_xticklabels(df.index, rotation=45, ha='right')
-        axes[1].set_xlabel('Sample ID')
-        axes[1].set_ylabel('Retention (%)')
-        axes[1].set_title('DADA2: リード保持率 (%)')
-        axes[1].set_ylim(0, 100)
-        plt.tight_layout()
-        plt.savefig(os.path.join(fig_dir, 'dada2_stats.pdf'), bbox_inches='tight')
-        plt.close()
-        print('✅ DADA2統計図を保存: dada2_stats.pdf')
-
-# ── α多様性（Shannon） ─────────────────────────────────────────────
-for metric, label in [('shannon_vector', 'Shannon Diversity'), ('faith_pd_vector', "Faith's PD"), ('evenness_vector', 'Pielou Evenness')]:
-    qza_path = os.path.join(session_dir, 'core-metrics-results', metric + '.qza')
-    if os.path.exists(qza_path):
-        df = _read_tsv_from_qza(qza_path, 'alpha-diversity.tsv')
-        if df is not None and len(df.columns) >= 1:
-            fig, ax = plt.subplots(figsize=(10, 5))
-            vals = df.iloc[:, 0]
-            ax.bar(range(len(vals)), vals, color='steelblue')
-            ax.set_xticks(range(len(vals)))
-            ax.set_xticklabels(vals.index, rotation=45, ha='right')
-            ax.set_xlabel('Sample ID')
-            ax.set_ylabel(label)
-            ax.set_title(f'α多様性: {{label}}')
+        stats_df = pd.read_csv(stats_files[0], sep='\\t', index_col=0)
+        req_cols = ['input', 'non-chimeric']
+        if all(c in stats_df.columns for c in req_cols):
+            stats_df.to_csv(fig_dir / "dada2_stats.csv")
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            x = range(len(stats_df))
+            axes[0].bar(x, stats_df['input'],        label='Input',       alpha=0.8, color='#4C72B0')
+            axes[0].bar(x, stats_df.get('filtered', stats_df['non-chimeric']),
+                                                      label='Filtered',    alpha=0.8, color='#DD8452')
+            axes[0].bar(x, stats_df['non-chimeric'], label='Non-chimeric', alpha=0.8, color='#55A868')
+            axes[0].set_xticks(list(x))
+            axes[0].set_xticklabels(stats_df.index, rotation=45, ha='right')
+            axes[0].set_xlabel('Sample ID')
+            axes[0].set_ylabel('Read count')
+            axes[0].set_title('DADA2: リード数の変化', fontweight='bold')
+            axes[0].legend()
+            retention = stats_df['non-chimeric'] / stats_df['input'] * 100
+            axes[1].bar(x, retention, color='#55A868', alpha=0.85)
+            axes[1].set_xticks(list(x))
+            axes[1].set_xticklabels(stats_df.index, rotation=45, ha='right')
+            axes[1].set_xlabel('Sample ID')
+            axes[1].set_ylabel('Retention (%)')
+            axes[1].set_title('DADA2: リード保持率', fontweight='bold')
+            axes[1].set_ylim(0, 100)
+            axes[1].axhline(70, ls='--', color='tomato', lw=1, label='70%基準線')
+            axes[1].legend()
             plt.tight_layout()
-            plt.savefig(os.path.join(fig_dir, f'alpha_{{metric}}.pdf'), bbox_inches='tight')
+            plt.savefig(fig_dir / 'dada2_stats.pdf', bbox_inches='tight')
             plt.close()
-            print(f'✅ α多様性図を保存: alpha_{{metric}}.pdf')
+            print('✅ DADA2統計グラフ: dada2_stats.pdf')
+    except Exception as e:
+        warnings_list.append(f'DADA2統計グラフ生成失敗: {{e}}')
 
-print('\\n✅ 自動ビジュアライゼーション完了')
-print(f'📁 図の保存先: {{fig_dir}}')
+# ══════════════════════════════════════════════════════════════════════
+# 5. α多様性の読み込み・可視化・統計
+# ══════════════════════════════════════════════════════════════════════
+alpha_dir = export_dir / "alpha"
+alpha_data = {{}}
+metric_labels = {{
+    'shannon_vector'           : 'Shannon diversity index',
+    'faith_pd_vector'          : "Faith's phylogenetic diversity",
+    'evenness_vector'          : 'Pielou evenness',
+    'observed_features_vector' : 'Observed features (ASVs)',
+}}
+if alpha_dir.exists():
+    for metric_dir in sorted(alpha_dir.iterdir()):
+        tsv_files = list(metric_dir.glob("*.tsv"))
+        if tsv_files:
+            try:
+                df = pd.read_csv(tsv_files[0], sep='\\t', index_col=0)
+                if len(df.columns) >= 1:
+                    alpha_data[metric_dir.name] = df.iloc[:, 0]
+                    print(f"✅ α多様性 {{metric_dir.name}}: {{len(df)}} サンプル")
+            except Exception as e:
+                warnings_list.append(f"α多様性読み込み失敗 ({{metric_dir.name}}): {{e}}")
+
+if alpha_data:
+    alpha_df = pd.DataFrame(alpha_data)
+    alpha_df.to_csv(fig_dir / "alpha_diversity.csv")
+
+    n = len(alpha_df.columns)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5), squeeze=False)
+    for i, col in enumerate(alpha_df.columns):
+        ax = axes[0][i]
+        vals = alpha_df[col].dropna()
+        ax.bar(range(len(vals)), vals.values, color='steelblue', alpha=0.85, edgecolor='white')
+        ax.set_xticks(range(len(vals)))
+        ax.set_xticklabels(vals.index, rotation=45, ha='right', fontsize=font_size - 2)
+        ax.set_ylabel(metric_labels.get(col, col), fontsize=font_size)
+        ax.set_title(metric_labels.get(col, col), fontsize=font_size + 1, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(fig_dir / 'alpha_diversity.pdf', bbox_inches='tight')
+    plt.close()
+    print('✅ α多様性グラフ: alpha_diversity.pdf')
+
+# ══════════════════════════════════════════════════════════════════════
+# 6. β多様性 PCoA（距離行列から numpy で計算）
+# ══════════════════════════════════════════════════════════════════════
+beta_dir = export_dir / "beta"
+if beta_dir.exists():
+    for matrix_dir in sorted(beta_dir.iterdir()):
+        tsv_files = list(matrix_dir.glob("*.tsv"))
+        if not tsv_files:
+            continue
+        try:
+            dist_df = pd.read_csv(tsv_files[0], sep='\\t', index_col=0)
+            n = len(dist_df)
+            D = dist_df.values.astype(float)
+            # Double centering (classical MDS / PCoA)
+            J = np.eye(n) - np.ones((n, n)) / n
+            B = -0.5 * J @ (D ** 2) @ J
+            eigvals, eigvecs = np.linalg.eigh(B)
+            idx = np.argsort(eigvals)[::-1]
+            eigvals, eigvecs = eigvals[idx], eigvecs[:, idx]
+            pos = eigvals > 1e-10
+            coords = eigvecs[:, pos] * np.sqrt(eigvals[pos])
+            var_exp = eigvals[pos] / eigvals[pos].sum() * 100
+
+            n_pcs = min(3, coords.shape[1])
+            pcoa_df = pd.DataFrame(
+                coords[:, :n_pcs],
+                index=dist_df.index,
+                columns=[f'PC{{i+1}}' for i in range(n_pcs)]
+            )
+            pcoa_df.to_csv(fig_dir / f"pcoa_{{matrix_dir.name}}.csv")
+
+            fig, ax = plt.subplots(figsize=(7, 6))
+            sc = ax.scatter(pcoa_df['PC1'], pcoa_df['PC2'],
+                            s=120, alpha=0.85, color='steelblue',
+                            edgecolors='white', linewidths=0.6)
+            for sid, row in pcoa_df.iterrows():
+                ax.annotate(str(sid), (row['PC1'], row['PC2']),
+                            textcoords='offset points', xytext=(6, 4),
+                            fontsize=font_size - 3)
+            ax.set_xlabel(f"PC1 ({{var_exp[0]:.1f}}%)", fontsize=font_size)
+            ax.set_ylabel(f"PC2 ({{var_exp[1]:.1f}}%)" if len(var_exp) > 1 else "PC2", fontsize=font_size)
+            title = matrix_dir.name.replace('_distance_matrix', '').replace('_', ' ').title()
+            ax.set_title(f'PCoA – {{title}}', fontsize=font_size + 1, fontweight='bold')
+            plt.tight_layout()
+            plt.savefig(fig_dir / f'pcoa_{{matrix_dir.name}}.pdf', bbox_inches='tight')
+            plt.close()
+            print(f'✅ PCoA: pcoa_{{matrix_dir.name}}.pdf')
+        except Exception as e:
+            warnings_list.append(f'PCoA失敗 ({{matrix_dir.name}}): {{e}}')
+
+# ══════════════════════════════════════════════════════════════════════
+# 完了サマリー
+# ══════════════════════════════════════════════════════════════════════
+print('\\n' + '='*60)
+print('✅ Python 解析・可視化 完了')
+print(f'📁 出力先: {{fig_dir}}')
+for f in sorted(fig_dir.glob('*.pdf')):
+    print(f'  📊 {{f.name}}')
+for f in sorted(fig_dir.glob('*.csv')):
+    print(f'  📋 {{f.name}}')
+if warnings_list:
+    print('\\n⚠️ 警告:')
+    for w in warnings_list:
+        print(f'  {{w}}')
 """
-    print(f"\n{c('[PIPELINE] 自動ビジュアライゼーション', CYAN + BOLD)}")
+    print(f"\n{c('[PIPELINE] STEP 9: Python による ASV 解析・可視化', CYAN + BOLD)}")
     viz_result = tool_execute_python(
-        code=_auto_viz_code,
-        description="パイプライン完了後の自動可視化（DADA2統計・α多様性）",
+        code=_analysis_code,
+        description="QIIME2出力（ASV counts / taxonomy / alpha / beta）をPythonで解析・可視化",
         output_dir=fig_dir,
     )
     if "✅" in viz_result:
-        completed.append("✅ 自動ビジュアライゼーション（DADA2統計・α多様性）")
+        completed.append("✅ STEP 8-9: エクスポート + Python解析（属組成・α/β多様性・PCoA）")
     else:
-        failed.append(f"⚠️ ビジュアライゼーション: {viz_result[:200]}")
+        failed.append(f"⚠️ Python解析: {viz_result[:300]}")
 
     # ── サマリー ────────────────────────────────────────────────────────
     sep = "═" * 56
