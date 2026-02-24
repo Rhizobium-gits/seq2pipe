@@ -110,6 +110,12 @@ _UI: dict = {
         "deps_warn":        "⚠️  Pythonパッケージが不足しています: {}",
         "deps_hint":        "execute_python ツールが正しく動作しないことがあります。",
         "deps_hint2":       "インストール方法: {}",
+        "auto_approve":     "[自律モード] コマンドを自動承認します",
+        "empty_response":   "⚠️  AI からの応答が空でした。再試行します...",
+        "pkg_warning":      "[警告] パッケージ不足: {}",
+        "pkg_hint":         "pip install numpy pandas matplotlib seaborn を実行してください",
+        "select_error":     "1 か 2 を入力してください",
+        "qiime2_python":    "QIIME2 conda Python を使用: {}",
     },
     "en": {
         "model_selected":   "✅ Model: {}",
@@ -136,6 +142,12 @@ _UI: dict = {
         "deps_warn":        "⚠️  Missing Python packages: {}",
         "deps_hint":        "The execute_python tool may not work correctly.",
         "deps_hint2":       "To install: {}",
+        "auto_approve":     "[Auto mode] Command approved automatically",
+        "empty_response":   "⚠️  Empty response from AI. Retrying...",
+        "pkg_warning":      "[WARNING] Missing package: {}",
+        "pkg_hint":         "Please run: pip install numpy pandas matplotlib seaborn",
+        "select_error":     "Please enter 1 or 2",
+        "qiime2_python":    "Using QIIME2 conda Python: {}",
     },
 }
 
@@ -1272,7 +1284,7 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
 
     # 🐱 issue #31: SEQ2PIPE_AUTO_YES=1 の場合はユーザー確認をスキップ（自律モード）
     if AUTO_YES:
-        print(f"\n{c('[自律モード] コマンドを自動承認します', DIM)}")
+        print(f"\n{c(ui('auto_approve'), DIM)}")
     else:
         print(f"\n{c(ui('cmd_confirm'), DIM)}", end=" > ")
         try:
@@ -1411,8 +1423,8 @@ try:
     matplotlib.rcParams['axes.titlesize'] = TITLE_FONT_SIZE
     matplotlib.rcParams['figure.dpi'] = PLOT_DPI
 except ImportError as _e:
-    print(f"[WARNING] パッケージ不足: {{_e}}")
-    print("pip install numpy pandas matplotlib seaborn を実行してください")
+    print("{ui('pkg_warning').replace('{}', '')}" + str(_e))
+    print("{ui('pkg_hint')}")
 
 # 🐱 --- ユーザーコード ---
 """
@@ -1962,7 +1974,7 @@ def check_python_deps() -> bool:
     # 🐱 QIIME2 conda Python を優先使用
     py_exec = QIIME2_PYTHON if Path(QIIME2_PYTHON).exists() else sys.executable
     if py_exec != sys.executable:
-        print(f"   {c(f'QIIME2 conda Python を使用: {py_exec}', DIM)}")
+        print(f"   {c(ui('qiime2_python', py_exec), DIM)}")
     check_code = "; ".join(f"import {pkg}" for pkg, _ in required_pkgs)
     try:
         proc = subprocess.run(
@@ -2026,7 +2038,7 @@ def run_agent_loop(messages: list, model: str, max_steps: int = None):
 
         # 🐱 content も tool_calls も空の場合はスキップして再試行（空メッセージで会話を汚染しない）
         if not response["content"] and not response["tool_calls"]:
-            print(f"\n{c('⚠️  AI からの応答が空でした。再試行します...', YELLOW)}")
+            print(f"\n{c(ui('empty_response'), YELLOW)}")
             continue
 
         assistant_msg = {"role": "assistant", "content": response["content"]}
