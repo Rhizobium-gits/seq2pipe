@@ -41,6 +41,29 @@ MAX_AGENT_STEPS = int(os.environ.get("SEQ2PIPE_MAX_STEPS", "100"))
 AUTO_YES = os.environ.get("SEQ2PIPE_AUTO_YES", "0") == "1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
+# 🐱 QIIME2 conda 環境の自動検出
+def _find_qiime2_conda_bin() -> str:
+    """QIIME2 conda 環境の bin ディレクトリを自動検出する"""
+    candidates = [
+        Path.home() / "miniforge3/envs/qiime2/bin",
+        Path.home() / "miniconda3/envs/qiime2/bin",
+        Path.home() / "anaconda3/envs/qiime2/bin",
+        Path.home() / "mambaforge/envs/qiime2/bin",
+        Path("/opt/miniconda3/envs/qiime2/bin"),
+        Path("/opt/miniforge3/envs/qiime2/bin"),
+    ]
+    # 環境変数で上書き可
+    env_override = os.environ.get("QIIME2_CONDA_BIN", "")
+    if env_override and Path(env_override).exists():
+        return env_override
+    for p in candidates:
+        if p.exists() and (p / "qiime").exists():
+            return str(p)
+    return ""
+
+QIIME2_CONDA_BIN: str = _find_qiime2_conda_bin()
+QIIME2_PYTHON: str = str(Path(QIIME2_CONDA_BIN) / "python3") if QIIME2_CONDA_BIN else sys.executable
+
 # 🍺 ======================================================================
 # 🐱 セッション状態（ダウンストリーム解析トラッキング）
 # 🍺 ======================================================================
@@ -1060,6 +1083,13 @@ def tool_check_system() -> str:
     except Exception:
         results.append("❌ Ollama: 起動していません → 'ollama serve' を実行してください")
 
+    # 🐱 QIIME2 conda 環境
+    if QIIME2_CONDA_BIN:
+        results.append(f"✅ QIIME2 conda: {QIIME2_CONDA_BIN}")
+        results.append(f"   Python: {QIIME2_PYTHON}")
+    else:
+        results.append("⚠️  QIIME2 conda 環境が見つかりません（Docker モードで動作）")
+
     # 🐱 Python
     results.append(f"✅ Python: {sys.version.split()[0]}")
 
@@ -1254,9 +1284,13 @@ def tool_run_command(command: str, description: str, working_dir: str = None) ->
             return ui("cmd_cancelled")
 
     try:
+        # 🐱 QIIME2 conda bin を PATH の先頭に追加
+        run_env = os.environ.copy()
+        if QIIME2_CONDA_BIN:
+            run_env["PATH"] = QIIME2_CONDA_BIN + ":" + run_env.get("PATH", "")
         proc = subprocess.run(
             command, shell=True, capture_output=True, text=True,
-            timeout=3600, cwd=cwd
+            timeout=3600, cwd=cwd, env=run_env
         )
         output_parts = []
         if proc.stdout:
@@ -1396,8 +1430,10 @@ except ImportError as _e:
                         set(figures_dir.glob("*.pdf")) | \
                         set(figures_dir.glob("*.svg"))
 
+        # 🐱 QIIME2 conda Python を優先使用（numpy/pandas/matplotlib 等が入っている）
+        py_exec = QIIME2_PYTHON if Path(QIIME2_PYTHON).exists() else sys.executable
         proc = subprocess.run(
-            [sys.executable, tmp_path],
+            [py_exec, tmp_path],
             capture_output=True, text=True,
             timeout=PYTHON_EXEC_TIMEOUT,  # 🐱 issue #32: 環境変数 SEQ2PIPE_PYTHON_TIMEOUT で上書き可
             cwd=str(out_path)
@@ -1911,7 +1947,7 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
 
 
 def check_python_deps() -> bool:
-    """必須 Python パッケージが sys.executable でインポートできるか確認"""
+    """必須 Python パッケージが QIIME2_PYTHON でインポートできるか確認"""
     # 🐱 issue #34: scipy/sklearn/statsmodels/biom-format を追加
     required_pkgs = [
         ("numpy", "numpy"),
@@ -1923,10 +1959,14 @@ def check_python_deps() -> bool:
         ("statsmodels", "statsmodels"),
         ("biom", "biom-format"),
     ]
+    # 🐱 QIIME2 conda Python を優先使用
+    py_exec = QIIME2_PYTHON if Path(QIIME2_PYTHON).exists() else sys.executable
+    if py_exec != sys.executable:
+        print(f"   {c(f'QIIME2 conda Python を使用: {py_exec}', DIM)}")
     check_code = "; ".join(f"import {pkg}" for pkg, _ in required_pkgs)
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", check_code],
+            [py_exec, "-c", check_code],
             capture_output=True, text=True, timeout=10
         )
         if proc.returncode == 0:
@@ -1938,7 +1978,7 @@ def check_python_deps() -> bool:
             print(f"   {c(ui('deps_warn', missing), YELLOW)}")
             print(f"   {ui('deps_hint')}")
             pip_pkgs = " ".join(pip for _, pip in required_pkgs)
-            install_cmd = f"{sys.executable} -m pip install {pip_pkgs}"
+            install_cmd = f"{py_exec} -m pip install {pip_pkgs}"
             print(f"   {ui('deps_hint2', c(install_cmd, CYAN))}")
             return False
     except Exception:
