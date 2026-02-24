@@ -2020,6 +2020,47 @@ def get_available_models() -> list:
 # 🐱 エージェントループ
 # 🍺 ======================================================================
 
+def _extract_tool_calls_from_text(content: str) -> list:
+    """
+    テキスト内の JSON ツール呼び出しをフォールバック解析する。
+    qwen2.5-coder 等、ネイティブ function calling を使わずにテキスト内に
+    JSON を埋め込むモデル向けのパーサー。
+    対応フォーマット:
+      - ```json\n{"name": "...", "arguments": {...}}\n```
+      - {"name": "...", "arguments": {...}}
+      - [{"name": "...", "arguments": {...}}, ...]
+    """
+    found = []
+
+    # 1. ```json ... ``` または ``` ... ``` ブロックを優先抽出
+    blocks = re.findall(r'```(?:json)?\s*([\[\{].*?[\]\}])\s*```', content, re.DOTALL)
+
+    if not blocks:
+        # 2. コードブロックなし: "name" と "arguments" を両方含む {} を探す
+        blocks = re.findall(
+            r'(\{[^`<>]*?"name"\s*:\s*"[^"]+?"[^`<>]*?"arguments"\s*:\s*\{.*?\}[^`<>]*?\})',
+            content, re.DOTALL
+        )
+
+    for raw in blocks:
+        try:
+            parsed = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            continue
+
+        items = parsed if isinstance(parsed, list) else [parsed]
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            args = item.get("arguments", {})
+            if name and isinstance(args, dict):
+                found.append({"function": {"name": name, "arguments": args}})
+
+    return found
+
+
 def run_agent_loop(messages: list, model: str, max_steps: int = None):
     # 🐱 issue #33: デフォルト 30 → MAX_AGENT_STEPS(100), 環境変数 SEQ2PIPE_MAX_STEPS で上書き可
     if max_steps is None:
@@ -2040,6 +2081,15 @@ def run_agent_loop(messages: list, model: str, max_steps: int = None):
         if not response["content"] and not response["tool_calls"]:
             print(f"\n{c(ui('empty_response'), YELLOW)}")
             continue
+
+        # 🐱 フォールバック: ネイティブ tool_calls がなくてもテキスト内にJSON があれば解析
+        # （qwen2.5-coder 等、関数呼び出しをテキスト中に埋め込むモデル向け）
+        if not response["tool_calls"] and response["content"]:
+            _fallback = _extract_tool_calls_from_text(response["content"])
+            if _fallback:
+                print(f"\n{c('[フォールバック] テキストからツール呼び出しを検出しました', YELLOW)}")
+                response["tool_calls"] = _fallback
+                response["content"] = ""  # ツール実行フェーズに移行するのでコンテンツはクリア
 
         assistant_msg = {"role": "assistant", "content": response["content"]}
 
