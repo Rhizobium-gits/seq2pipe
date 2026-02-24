@@ -47,8 +47,9 @@
 |---|---|---|---|
 | Python | 3.9 以上 | 3.9 以上 | 3.9 以上 |
 | Ollama | `setup.sh` で自動 | `setup.sh` で自動 | `setup.bat` で自動 |
-| Docker | Docker Desktop | Docker Engine | Docker Desktop |
-| Python 解析パッケージ | `setup.sh` で自動 | `setup.sh` で自動 | 手動 pip |
+| QIIME2 | conda 環境（推奨）または Docker | conda 環境または Docker Engine | Docker Desktop |
+| Docker | 任意（QIIME2 conda env があれば不要） | 任意 | Docker Desktop |
+| Python 解析パッケージ | QIIME2 conda env に含まれる | QIIME2 conda env に含まれる | 手動 pip |
 | RAM | 8 GB 以上推奨 | 8 GB 以上推奨 | 8 GB 以上推奨 |
 | ディスク | 約 10 GB（LLM + QIIME2） | 約 10 GB | 約 10 GB |
 
@@ -294,6 +295,26 @@ AI: Shannon 多様性の violin plot を生成しました。
 
 ---
 
+## 環境変数
+
+| 変数 | デフォルト | 説明 |
+|---|---|---|
+| `QIIME2_AI_MODEL` | `qwen2.5-coder:7b` | 使用する Ollama モデル |
+| `SEQ2PIPE_AUTO_YES` | `0` | `1` にするとコマンド確認をスキップ（自律モード） |
+| `SEQ2PIPE_MAX_STEPS` | `100` | エージェントループの最大ステップ数 |
+| `SEQ2PIPE_PYTHON_TIMEOUT` | `600` | `execute_python` のタイムアウト秒数 |
+| `QIIME2_CONDA_BIN` | 自動検出 | QIIME2 conda 環境の bin ディレクトリ（手動指定用） |
+
+```bash
+# 例: 自律モードで起動（確認なし）
+SEQ2PIPE_AUTO_YES=1 ./launch.sh
+
+# 例: QIIME2 conda env を手動指定
+QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
+```
+
+---
+
 ## 使用モデル
 
 | モデル | RAM | 特徴 |
@@ -345,7 +366,7 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
           +-- write_file         (スクリプト・READMEの書き出し)
           +-- edit_file          (生成済みスクリプトの部分修正)
           +-- generate_manifest  (QIIME2 マニフェスト生成)
-          +-- run_command        (Docker 経由で QIIME2 実行)
+          +-- run_command        (QIIME2 実行: conda env 自動検出 / Docker fallback)
           +-- check_system       (環境確認)
           |
           +-- set_plot_config    (図スタイル・色・解像度・形式の設定)
@@ -381,12 +402,26 @@ Start-Process ollama -ArgumentList "serve"
 </details>
 
 <details>
+<summary>QIIME2 conda 環境が自動検出されない</summary>
+
+`QIIME2_CONDA_BIN` で明示的に指定してください:
+
+```bash
+QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
+```
+
+自動検出される候補: `~/miniforge3/envs/qiime2/bin`, `~/miniconda3/envs/qiime2/bin`, `~/anaconda3/envs/qiime2/bin`
+
+</details>
+
+<details>
 <summary>Docker が見つからない / 起動していない</summary>
+
+QIIME2 conda 環境が検出されている場合、Docker は不要です。
+conda 環境がない場合のみ Docker が必要になります。
 
 - macOS / Windows: Docker Desktop を起動してください
 - Linux: `sudo systemctl start docker`
-
-QIIME2 コマンドを実際に実行しない場合（スクリプト生成のみ）、Docker は不要です。
 
 </details>
 
@@ -551,8 +586,9 @@ Everything runs **on your machine**. No cloud, no paid API, no internet required
 |---|---|---|---|
 | Python | 3.9+ | 3.9+ | 3.9+ |
 | Ollama | auto via `setup.sh` | auto via `setup.sh` | auto via `setup.bat` |
-| Docker | Docker Desktop | Docker Engine | Docker Desktop |
-| Python analysis packages | auto via `setup.sh` | auto via `setup.sh` | manual pip |
+| QIIME2 | conda env (recommended) or Docker | conda env or Docker Engine | Docker Desktop |
+| Docker | Optional (not needed if QIIME2 conda env exists) | Optional | Docker Desktop |
+| Python analysis packages | included in QIIME2 conda env | included in QIIME2 conda env | manual pip |
 | RAM | 8 GB+ recommended | 8 GB+ recommended | 8 GB+ recommended |
 | Disk | ~10 GB (LLM + QIIME2) | ~10 GB | ~10 GB |
 
@@ -781,6 +817,26 @@ You > Switch to publication quality — 300 DPI PNG
 
 ---
 
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `QIIME2_AI_MODEL` | `qwen2.5-coder:7b` | Ollama model to use |
+| `SEQ2PIPE_AUTO_YES` | `0` | Set to `1` to skip command confirmation (autonomous mode) |
+| `SEQ2PIPE_MAX_STEPS` | `100` | Maximum agent loop steps |
+| `SEQ2PIPE_PYTHON_TIMEOUT` | `600` | Timeout in seconds for `execute_python` |
+| `QIIME2_CONDA_BIN` | auto-detected | Path to QIIME2 conda env bin directory (manual override) |
+
+```bash
+# Example: autonomous mode (no confirmation prompts)
+SEQ2PIPE_AUTO_YES=1 ./launch.sh
+
+# Example: manually specify QIIME2 conda env
+QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
+```
+
+---
+
 ## Models
 
 | Model | RAM | Description |
@@ -832,7 +888,7 @@ You
           +-- write_file         (write scripts & README)
           +-- edit_file          (patch generated scripts)
           +-- generate_manifest  (create QIIME2 manifest)
-          +-- run_command        (run QIIME2 via Docker)
+          +-- run_command        (run QIIME2: auto-detects conda env / Docker fallback)
           +-- check_system       (verify environment)
           |
           +-- set_plot_config    (style / palette / DPI / format)
@@ -868,12 +924,26 @@ Start-Process ollama -ArgumentList "serve"
 </details>
 
 <details>
+<summary>QIIME2 conda env not detected automatically</summary>
+
+Specify it manually with `QIIME2_CONDA_BIN`:
+
+```bash
+QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
+```
+
+Auto-detected paths: `~/miniforge3/envs/qiime2/bin`, `~/miniconda3/envs/qiime2/bin`, `~/anaconda3/envs/qiime2/bin`
+
+</details>
+
+<details>
 <summary>Docker not found / not running</summary>
+
+Docker is not required if a QIIME2 conda env is detected.
+Docker is only needed as a fallback when no conda env is available.
 
 - macOS / Windows: Start Docker Desktop
 - Linux: `sudo systemctl start docker`
-
-Docker is only needed to actually run QIIME2 commands. Script generation works without Docker.
 
 </details>
 

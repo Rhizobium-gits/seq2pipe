@@ -204,7 +204,7 @@ seq2pipe は以下の設計原則に従って開発した。
 ユーザーは起動スクリプト（\texttt{launch.sh} / \texttt{launch.bat}）を通じて
 Python エージェント本体（\texttt{qiime2\_agent.py}）を起動する。
 エージェントは Ollama のローカル API（\texttt{http://localhost:11434/api/chat}）
-と通信し、11 種類のツールを介してファイルシステム・QIIME2（Docker 経由）・
+と通信し、11 種類のツールを介してファイルシステム・QIIME2（conda 環境を自動検出、fallback で Docker）・
 Python 解析エンジンと連携する。
 
 \begin{figure}[h]
@@ -225,7 +225,7 @@ Python 解析エンジンと連携する。
     +---> [Tool  3] write_file         (スクリプト書き出し)
     +---> [Tool  4] edit_file          (スクリプト部分修正)
     +---> [Tool  5] generate_manifest  (マニフェスト生成)
-    +---> [Tool  6] run_command        (Docker/QIIME2 実行)
+    +---> [Tool  6] run_command        (QIIME2 実行: conda env 自動検出 / Docker fallback)
     +---> [Tool  7] check_system       (環境確認)
     +---> [Tool  8] set_plot_config    (図スタイル設定)
     +---> [Tool  9] execute_python     (Python 解析・可視化)
@@ -295,7 +295,10 @@ Ollama の Function Calling 機能を活用し、11 のツールを JSON Schema 
     \texttt{generate\_manifest} &
       FASTQ ディレクトリから QIIME2 マニフェスト TSV を自動生成する \\
     \texttt{run\_command} &
-      ユーザー確認後にシェルコマンドを実行する \\
+      ユーザー確認後にシェルコマンドを実行する。
+      QIIME2 conda 環境（\texttt{miniforge3/envs/qiime2} 等）を自動検出し
+      PATH に追加するため、Docker なしでも QIIME2 コマンドが実行可能。
+      \texttt{SEQ2PIPE\_AUTO\_YES=1} で確認をスキップする自律モードに対応 \\
     \texttt{check\_system} &
       Docker・Ollama・Python のインストール状況とディスク容量を確認する \\
     \texttt{set\_plot\_config} &
@@ -307,8 +310,8 @@ Ollama の Function Calling 機能を活用し、11 のツールを JSON Schema 
     \texttt{build\_report\_tex} &
       \texttt{ANALYSIS\_LOG} から TeX を自動構築し、
       tectonic で日英 PDF レポートをコンパイルする \\
-    \texttt{compile\_report} &
-      LLM が記述した TeX を受け取りコンパイルする（旧方式） \\
+    \texttt{log\_analysis\_step} &
+      \texttt{run\_command} 経由の QIIME2 操作を \texttt{ANALYSIS\_LOG} に手動登録する \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -360,7 +363,8 @@ Python の \texttt{urllib.request} モジュールのみを使用しており、
 エラー処理として以下を実装した。
 \begin{itemize}
   \item \texttt{urllib.error.HTTPError}: Ollama サーバーの HTTP エラー（4xx/5xx）
-  \item \texttt{urllib.error.URLError + socket.timeout}: タイムアウト（300 秒）と
+  \item \texttt{urllib.error.URLError + socket.timeout}: タイムアウト（600 秒、
+    環境変数 \texttt{SEQ2PIPE\_PYTHON\_TIMEOUT} で変更可）と
     サーバー未起動（\texttt{Connection refused}）を区別して表示
   \item \texttt{socket.timeout / TimeoutError}: ソケットレベルのタイムアウト
 \end{itemize}

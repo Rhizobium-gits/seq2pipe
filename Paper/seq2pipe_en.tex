@@ -222,7 +222,8 @@ The user launches the Python agent (\texttt{qiime2\_agent.py})
 via platform-specific launch scripts.
 The agent communicates with the local Ollama API endpoint
 (\texttt{http://localhost:11434/api/chat}) and coordinates
-11 specialized tools to interact with the filesystem, QIIME2 (via Docker),
+11 specialized tools to interact with the filesystem,
+QIIME2 (auto-detects conda environment; falls back to Docker),
 and Python analysis libraries.
 
 \begin{figure}[h]
@@ -243,12 +244,12 @@ and Python analysis libraries.
     +---> [Tool  3] write_file         (write scripts / manifests)
     +---> [Tool  4] edit_file          (partial file editing)
     +---> [Tool  5] generate_manifest  (QIIME2 manifest generation)
-    +---> [Tool  6] run_command        (Docker / QIIME2 execution)
+    +---> [Tool  6] run_command        (QIIME2: auto-detects conda env / Docker fallback)
     +---> [Tool  7] check_system       (environment check)
     +---> [Tool  8] set_plot_config    (figure style / DPI / format)
     +---> [Tool  9] execute_python     (Python analysis & visualization)
     +---> [Tool 10] build_report_tex   (TeX/PDF report generation)
-    +---> [Tool 11] compile_report     (LLM-written TeX compilation)
+    +---> [Tool 11] log_analysis_step  (manually log QIIME2 steps to ANALYSIS_LOG)
   \end{verbatim}
   \caption{Overall architecture of seq2pipe}
   \label{fig:arch}
@@ -318,7 +319,11 @@ summarizes the tools and their roles.
     \texttt{generate\_manifest} &
       Auto-generates a QIIME2 manifest TSV from a FASTQ directory \\
     \texttt{run\_command} &
-      Executes shell commands after explicit user confirmation \\
+      Executes shell commands after explicit user confirmation.
+      Automatically detects and prepends the QIIME2 conda environment bin
+      (\texttt{miniforge3/envs/qiime2/bin} etc.) to PATH, enabling QIIME2
+      execution without Docker. Supports autonomous mode via
+      \texttt{SEQ2PIPE\_AUTO\_YES=1} \\
     \texttt{check\_system} &
       Verifies Docker, Ollama, Python, and available disk space \\
     \texttt{set\_plot\_config} &
@@ -329,8 +334,10 @@ summarizes the tools and their roles.
     \texttt{build\_report\_tex} &
       Programmatically builds TeX from \texttt{ANALYSIS\_LOG} and compiles
       bilingual Japanese/English PDF reports via tectonic \\
-    \texttt{compile\_report} &
-      Receives LLM-written TeX source and compiles it to PDF (legacy mode) \\
+    \texttt{log\_analysis\_step} &
+      Manually registers a QIIME2 step executed via \texttt{run\_command}
+      into \texttt{ANALYSIS\_LOG}, enabling \texttt{build\_report\_tex}
+      to include it in the final report \\
     \bottomrule
   \end{tabular}
 \end{table}
