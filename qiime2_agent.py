@@ -2188,7 +2188,7 @@ def tool_run_qiime2_pipeline(
     Path(fig_dir).mkdir(parents=True, exist_ok=True)
 
     _analysis_code = f"""
-import io, os, glob, zipfile
+import io, os, sys, glob, zipfile
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -2197,6 +2197,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
+
+# stdout を UTF-8 に統一（絵文字・日本語を安全に出力するため）
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 session_dir = Path({repr(out_dir)})
 export_dir  = Path({repr(export_dir)})
@@ -2212,6 +2216,14 @@ plt.rcParams.update({{
     'axes.spines.right': False,
     'savefig.dpi'      : dpi,
 }})
+
+import matplotlib.font_manager as _fm
+_jp_candidates = ['Hiragino Sans', 'Hiragino Maru Gothic Pro', 'AppleGothic', 'IPAexGothic']
+for _fc in _jp_candidates:
+    if any(f.name == _fc for f in _fm.fontManager.ttflist):
+        plt.rcParams['font.family'] = _fc
+        break
+
 warnings_list = []
 
 # ══════════════════════════════════════════════════════════════════════
