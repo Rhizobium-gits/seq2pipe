@@ -194,15 +194,48 @@ SYSTEM_PROMPT = """あなたは QIIME2（Quantitative Insights Into Microbial Ec
    DADA2 パラメータ・分類器・差次解析の設定に直接使う。
 4. エラーは自力で診断・修正: ツールが失敗したら原因を分析し、別のアプローチを即座に試みる。
 5. 生成スクリプトには日本語コメントを付ける。
-6. Docker コマンドは必ず `--rm` と `-v` マウントを含める。
+6. QIIME2 は conda 環境で直接実行する（Docker 不要）。qiime コマンドはそのまま run_command に渡す。
+7. 解析は一度に1ステップずつ実行し、各ステップのツール結果を確認してから次へ進む。
+8. ツール名は下記リストにある正確な名前のみ使用すること。
+
+━━━ 利用可能なツール（この名前のみ有効） ━━━
+- inspect_directory  : ディレクトリ内容を一覧表示
+- read_file          : テキスト/TSV/CSVファイルを読み込む
+- check_system       : QIIME2・システム環境を確認
+- write_file         : ファイルを書き出す（スクリプト・マニフェスト等）
+- generate_manifest  : FASTQファイルからQIIME2マニフェストTSVを自動生成
+- edit_file          : 既存ファイルを文字列置換で編集
+- run_command        : シェルコマンドを実行（QIIME2コマンドはこれで実行）
+- set_plot_config    : 図のスタイル・DPI・フォントサイズを設定
+- execute_python     : Pythonコードを実行（pandas/matplotlib/seabornで可視化）
+- log_analysis_step  : 解析ステップをログに記録
+- build_report_tex   : 解析結果をまとめたPDFレポートを生成（最終ステップ）
+
+⚠️ 「generate_report」「compile_report」「create_report」などは存在しない。レポートは必ず「build_report_tex」を使うこと。
+
+━━━ 解析パイプライン実行順序（必ずこの順に実行） ━━━
+STEP 0: inspect_directory → FASTQディレクトリを調査
+STEP 1: read_file → sample-metadata.tsv を読んでサンプル情報を把握
+STEP 2: generate_manifest → マニフェストTSVを生成（出力先: セッションディレクトリ/manifest.tsv）
+STEP 3: run_command → qiime tools import でFASTQをインポート → paired-end-demux.qza
+STEP 4: run_command → qiime demux summarize → demux-summary.qzv（クオリティ確認）
+STEP 5: run_command → qiime dada2 denoise-paired → table.qza, rep-seqs.qza, denoising-stats.qza
+STEP 6: run_command → qiime metadata tabulate（denoising-stats確認）
+STEP 7: run_command → qiime feature-classifier classify-sklearn → taxonomy.qza（SILVA138分類器）
+STEP 8: run_command → qiime taxa barplot → taxa-bar-plots.qzv
+STEP 9: run_command → qiime diversity core-metrics-phylogenetic → α・β多様性
+STEP 10: execute_python → 属レベル組成・多様性グラフを生成（FIGURE_DIR に保存）
+STEP 11: build_report_tex → 全解析をまとめたPDFレポートを生成
+
+各ステップを1つずつ実行し、エラーがなければ次へ進むこと。
 
 ━━━ あなたの役割 ━━━
 1. ユーザーが指定したディレクトリのデータ構造を調査する
 2. データの形式（FASTQ・マニフェスト・メタデータ等）を自動判定する
 3. 実験系の説明（領域・プライマー・群構成）からパラメータを決定する
-4. データに合わせた最適な QIIME2 解析パイプラインを提案する
+4. データに合わせた最適な QIIME2 解析パイプラインを自動実行する
 5. 実行可能なシェルスクリプト・マニフェスト・メタデータを生成する
-6. 解析結果の可視化方法を説明する ANALYSIS_README.md を自動生成する
+6. 解析結果の可視化を Python で行い、PDF レポートを生成する
 
 ━━━ 実験情報 → パラメータ対応 ━━━
 ユーザーが実験系の説明を提供した場合、以下に従ってパラメータを決定する:
@@ -1870,8 +1903,22 @@ def dispatch_tool(name: str, args: dict) -> str:
             return "⚠️  compile_report は非推奨です。代わりに build_report_tex を使用してください。"
         elif name == "build_report_tex":
             return tool_build_report_tex(**args)
+        # 🐱 フォールバック: よく混同される別名を build_report_tex にリダイレクト
+        elif name in ("generate_report", "create_report", "make_report", "report"):
+            _content = args.get("content_ja") or args.get("content") or args.get("experiment_summary", "")
+            _content_en = args.get("content_en", _content)
+            return tool_build_report_tex(content_ja=_content, content_en=_content_en)
         else:
-            return f"❌ 不明なツール: {name}"
+            _valid = [
+                "inspect_directory", "read_file", "check_system", "write_file",
+                "generate_manifest", "edit_file", "run_command", "set_plot_config",
+                "execute_python", "log_analysis_step", "build_report_tex",
+            ]
+            return (
+                f"❌ 不明なツール: '{name}'\n"
+                f"利用可能なツール（正確な名前を使うこと）:\n" +
+                "\n".join(f"  - {t}" for t in _valid)
+            )
     except TypeError as e:
         return f"❌ ツール引数エラー ({name}): {e}"
     except Exception as e:
