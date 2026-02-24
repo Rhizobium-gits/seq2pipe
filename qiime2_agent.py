@@ -199,35 +199,33 @@ SYSTEM_PROMPT = """あなたは QIIME2（Quantitative Insights Into Microbial Ec
 8. ツール名は下記リストにある正確な名前のみ使用すること。
 
 ━━━ 利用可能なツール（この名前のみ有効） ━━━
-- inspect_directory  : ディレクトリ内容を一覧表示
-- read_file          : テキスト/TSV/CSVファイルを読み込む
-- check_system       : QIIME2・システム環境を確認
-- write_file         : ファイルを書き出す（スクリプト・マニフェスト等）
-- generate_manifest  : FASTQファイルからQIIME2マニフェストTSVを自動生成
-- edit_file          : 既存ファイルを文字列置換で編集
-- run_command        : シェルコマンドを実行（QIIME2コマンドはこれで実行）
-- set_plot_config    : 図のスタイル・DPI・フォントサイズを設定
-- execute_python     : Pythonコードを実行（pandas/matplotlib/seabornで可視化）
-- log_analysis_step  : 解析ステップをログに記録
-- build_report_tex   : 解析結果をまとめたPDFレポートを生成（最終ステップ）
+- inspect_directory    : ディレクトリ内容を一覧表示
+- read_file            : テキスト/TSV/CSVファイルを読み込む
+- check_system         : QIIME2・システム環境を確認
+- write_file           : ファイルを書き出す（スクリプト・マニフェスト等）
+- generate_manifest    : FASTQファイルからQIIME2マニフェストTSVを自動生成
+- edit_file            : 既存ファイルを文字列置換で編集
+- run_command          : 単発シェルコマンドを実行（追加・修正が必要な場合のみ）
+- run_qiime2_pipeline  : ★ QIIME2解析パイプライン全体を一括自動実行（メインツール）
+- set_plot_config      : 図のスタイル・DPI・フォントサイズを設定
+- execute_python       : Pythonコードを実行（pandas/matplotlib/seabornで可視化）
+- log_analysis_step    : 解析ステップをログに記録
+- build_report_tex     : 解析結果をまとめたPDFレポートを生成（最終ステップ）
 
 ⚠️ 「generate_report」「compile_report」「create_report」などは存在しない。レポートは必ず「build_report_tex」を使うこと。
 
-━━━ 解析パイプライン実行順序（必ずこの順に実行） ━━━
-STEP 0: inspect_directory → FASTQディレクトリを調査
-STEP 1: read_file → sample-metadata.tsv を読んでサンプル情報を把握
-STEP 2: generate_manifest → マニフェストTSVを生成（出力先: セッションディレクトリ/manifest.tsv）
-STEP 3: run_command → qiime tools import でFASTQをインポート → paired-end-demux.qza
-STEP 4: run_command → qiime demux summarize → demux-summary.qzv（クオリティ確認）
-STEP 5: run_command → qiime dada2 denoise-paired → table.qza, rep-seqs.qza, denoising-stats.qza
-STEP 6: run_command → qiime metadata tabulate（denoising-stats確認）
-STEP 7: run_command → qiime feature-classifier classify-sklearn → taxonomy.qza（SILVA138分類器）
-STEP 8: run_command → qiime taxa barplot → taxa-bar-plots.qzv
-STEP 9: run_command → qiime diversity core-metrics-phylogenetic → α・β多様性
-STEP 10: execute_python → 属レベル組成・多様性グラフを生成（FIGURE_DIR に保存）
-STEP 11: build_report_tex → 全解析をまとめたPDFレポートを生成
+━━━ 解析パイプライン実行手順（この順に実行） ━━━
+STEP 1: inspect_directory → FASTQディレクトリを調査
+STEP 2: read_file → sample-metadata.tsv を読んでサンプル情報・列名を把握
+STEP 3: set_plot_config → 論文向け設定（dpi=300, style=whitegrid等）を適用
+STEP 4: run_qiime2_pipeline → QIIME2パイプライン全体を一括実行
+         （インポート→DADA2→系統発生ツリー→分類→多様性解析を全て自動実行）
+STEP 5: execute_python → 属レベル組成・α多様性グラフを生成（FIGURE_DIR に保存）
+STEP 6: build_report_tex → 全解析をまとめたPDFレポートを生成
 
-各ステップを1つずつ実行し、エラーがなければ次へ進むこと。
+★ run_qiime2_pipeline は QIIME2の全コアステップを内部で自動実行する。
+  個別に run_command で qiime コマンドを呼ぶ必要はない。
+  inspector の結果とメタデータを読んだらすぐに run_qiime2_pipeline を呼ぶこと。
 
 ━━━ あなたの役割 ━━━
 1. ユーザーが指定したディレクトリのデータ構造を調査する
@@ -985,6 +983,67 @@ TOOLS = [
                     }
                 },
                 "required": ["title_ja", "title_en", "experiment_summary"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_qiime2_pipeline",
+            "description": (
+                "QIIME2 解析パイプライン全体を自動実行する。"
+                "マニフェスト生成→FASTQインポート→demux→DADA2→系統発生ツリー→分類（オプション）→多様性解析を一括実行する。"
+                "ユーザーがデータパスと実験情報を提供したら、このツールを最初に呼び出すこと。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fastq_dir": {
+                        "type": "string",
+                        "description": "FASTQファイルが入ったディレクトリの絶対パス"
+                    },
+                    "paired_end": {
+                        "type": "boolean",
+                        "description": "ペアエンドデータか（true: ペアエンド, false: シングルエンド）。デフォルト: true"
+                    },
+                    "trim_left_f": {
+                        "type": "integer",
+                        "description": "フォワードリードのプライマーカット長。V3-V4(341F): 17, V4(515F): 19, V1-V3(27F): 19"
+                    },
+                    "trim_left_r": {
+                        "type": "integer",
+                        "description": "リバースリードのプライマーカット長。V3-V4(806R): 21, V4(806R): 20, V1-V3(338R): 20"
+                    },
+                    "trunc_len_f": {
+                        "type": "integer",
+                        "description": "フォワードリードのトランケーション位置。2×300bpではV3-V4: 270, 2×250bpではV3-V4: 250"
+                    },
+                    "trunc_len_r": {
+                        "type": "integer",
+                        "description": "リバースリードのトランケーション位置。2×300bpではV3-V4: 220, 2×250bpではV3-V4: 200"
+                    },
+                    "metadata_path": {
+                        "type": "string",
+                        "description": "QIIME2メタデータTSVファイルの絶対パス（sample-metadata.tsv 等）"
+                    },
+                    "classifier_path": {
+                        "type": "string",
+                        "description": "SILVA138分類器（.qza）の絶対パス。未指定の場合は分類をスキップ"
+                    },
+                    "n_threads": {
+                        "type": "integer",
+                        "description": "使用するCPUスレッド数。デフォルト: 4"
+                    },
+                    "sampling_depth": {
+                        "type": "integer",
+                        "description": "多様性解析のサブサンプリング深度。denoising-stats を確認して最小リード数を参考に設定。デフォルト: 5000"
+                    },
+                    "group_column": {
+                        "type": "string",
+                        "description": "β多様性グループ比較に使うメタデータの列名（例: group, treatment）"
+                    }
+                },
+                "required": ["fastq_dir"]
             }
         }
     }
@@ -1875,6 +1934,318 @@ def tool_compile_report(content_ja: str, content_en: str, output_dir: str = "") 
     return "\n".join(results)
 
 
+def tool_run_qiime2_pipeline(
+    fastq_dir: str,
+    paired_end: bool = True,
+    trim_left_f: int = 17,
+    trim_left_r: int = 21,
+    trunc_len_f: int = 270,
+    trunc_len_r: int = 220,
+    metadata_path: str = "",
+    classifier_path: str = "",
+    n_threads: int = 4,
+    sampling_depth: int = 5000,
+    group_column: str = "",
+) -> str:
+    """
+    標準 QIIME2 パイプライン（インポート→DADA2→分類→多様性解析）を全自動実行する。
+    各ステップはセッション出力ディレクトリで順次実行し、結果を返す。
+    """
+    out_dir = SESSION_OUTPUT_DIR if SESSION_OUTPUT_DIR else str(Path.home() / "seq2pipe_results" / "pipeline")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    run_env = os.environ.copy()
+    if QIIME2_CONDA_BIN:
+        run_env["PATH"] = QIIME2_CONDA_BIN + ":" + run_env.get("PATH", "")
+
+    completed = []
+    failed = []
+
+    def _exec(cmd: str, step: str) -> tuple:
+        """コマンドを実行してステップ結果を返す"""
+        print(f"\n{c(f'[PIPELINE] {step}', CYAN + BOLD)}")
+        print(f"{c(cmd, DIM)}")
+        try:
+            proc = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                timeout=7200, cwd=out_dir, env=run_env
+            )
+            stdout = proc.stdout[:2000] if proc.stdout else ""
+            stderr = proc.stderr[:1000] if proc.stderr else ""
+            if proc.returncode == 0:
+                print(f"{c('✅ ' + step, GREEN)}")
+                tool_log_analysis_step(description=step, subfolder="pipeline")
+                completed.append(f"✅ {step}")
+                return True, stdout
+            else:
+                print(f"{c('❌ ' + step, RED)}")
+                print(stderr)
+                failed.append(f"❌ {step}")
+                return False, stderr
+        except subprocess.TimeoutExpired:
+            failed.append(f"⏱️ {step}: タイムアウト（2時間超過）")
+            return False, "タイムアウト"
+        except Exception as e:
+            failed.append(f"❌ {step}: {e}")
+            return False, str(e)
+
+    # ── STEP 0: マニフェスト生成 ─────────────────────────────────────────
+    manifest_path = str(Path(out_dir) / "manifest.tsv")
+    manifest_result = tool_generate_manifest(
+        fastq_dir=fastq_dir,
+        output_path=manifest_path,
+        paired_end=paired_end,
+    )
+    if "❌" in manifest_result:
+        return f"❌ マニフェスト生成に失敗しました:\n{manifest_result}"
+    completed.append("✅ STEP 0: マニフェスト生成")
+    print(f"{c('✅ STEP 0: マニフェスト生成', GREEN)}")
+
+    # ── STEP 1: FASTQ インポート ────────────────────────────────────────
+    if paired_end:
+        import_cmd = (
+            "qiime tools import"
+            " --type 'SampleData[PairedEndSequencesWithQuality]'"
+            " --input-path manifest.tsv"
+            " --output-path paired-end-demux.qza"
+            " --input-format PairedEndFastqManifestPhred33V2"
+        )
+        demux_file = "paired-end-demux.qza"
+    else:
+        import_cmd = (
+            "qiime tools import"
+            " --type 'SampleData[SequencesWithQuality]'"
+            " --input-path manifest.tsv"
+            " --output-path single-end-demux.qza"
+            " --input-format SingleEndFastqManifestPhred33V2"
+        )
+        demux_file = "single-end-demux.qza"
+
+    ok, out = _exec(import_cmd, "STEP 1: FASTQ インポート")
+    if not ok:
+        return f"❌ インポート失敗:\n{out}\n\n完了済み:\n" + "\n".join(completed)
+
+    # ── STEP 2: デマルチプレックスサマリー ──────────────────────────────
+    _exec(
+        f"qiime demux summarize --i-data {demux_file} --o-visualization demux-summary.qzv",
+        "STEP 2: demux サマリー（クオリティ確認）"
+    )
+
+    # ── STEP 3: DADA2 デノイジング ──────────────────────────────────────
+    if paired_end:
+        dada2_cmd = (
+            f"qiime dada2 denoise-paired"
+            f" --i-demultiplexed-seqs {demux_file}"
+            f" --p-trim-left-f {trim_left_f}"
+            f" --p-trim-left-r {trim_left_r}"
+            f" --p-trunc-len-f {trunc_len_f}"
+            f" --p-trunc-len-r {trunc_len_r}"
+            f" --p-n-threads {n_threads}"
+            f" --o-table table.qza"
+            f" --o-representative-sequences rep-seqs.qza"
+            f" --o-denoising-stats denoising-stats.qza"
+        )
+    else:
+        dada2_cmd = (
+            f"qiime dada2 denoise-single"
+            f" --i-demultiplexed-seqs {demux_file}"
+            f" --p-trim-left {trim_left_f}"
+            f" --p-trunc-len {trunc_len_f}"
+            f" --p-n-threads {n_threads}"
+            f" --o-table table.qza"
+            f" --o-representative-sequences rep-seqs.qza"
+            f" --o-denoising-stats denoising-stats.qza"
+        )
+
+    ok, out = _exec(dada2_cmd, "STEP 3: DADA2 デノイジング")
+    if not ok:
+        return f"❌ DADA2 失敗:\n{out}\n\n完了済み:\n" + "\n".join(completed)
+
+    # ── STEP 4: デノイジング統計の視覚化 ────────────────────────────────
+    if metadata_path and Path(metadata_path).exists():
+        _exec(
+            f"qiime metadata tabulate"
+            f" --m-input-file denoising-stats.qza"
+            f" --o-visualization denoising-stats.qzv",
+            "STEP 4: デノイジング統計の確認"
+        )
+
+    # ── STEP 5: 系統発生ツリー ───────────────────────────────────────────
+    ok_tree, _ = _exec(
+        "qiime phylogeny align-to-tree-mafft-fasttree"
+        " --i-sequences rep-seqs.qza"
+        " --o-alignment aligned-rep-seqs.qza"
+        " --o-masked-alignment masked-aligned-rep-seqs.qza"
+        " --o-tree unrooted-tree.qza"
+        " --o-rooted-tree rooted-tree.qza",
+        "STEP 5: 系統発生ツリー生成"
+    )
+
+    # ── STEP 6: 分類学的注釈（SILVA138分類器） ──────────────────────────
+    has_taxonomy = False
+    if classifier_path and Path(classifier_path).exists():
+        ok_tax, _ = _exec(
+            f"qiime feature-classifier classify-sklearn"
+            f" --i-classifier {classifier_path}"
+            f" --i-reads rep-seqs.qza"
+            f" --p-n-jobs {n_threads}"
+            f" --o-classification taxonomy.qza",
+            "STEP 6: 分類学的注釈（SILVA138）"
+        )
+        has_taxonomy = ok_tax
+        if has_taxonomy and metadata_path and Path(metadata_path).exists():
+            _exec(
+                "qiime taxa barplot"
+                " --i-table table.qza"
+                " --i-taxonomy taxonomy.qza"
+                f" --m-metadata-file {metadata_path}"
+                " --o-visualization taxa-bar-plots.qzv",
+                "STEP 6b: タクサバープロット生成"
+            )
+    else:
+        completed.append("⚠️ STEP 6: 分類器が未指定のためスキップ（classifier_path を指定してください）")
+
+    # ── STEP 7: コア多様性解析 ───────────────────────────────────────────
+    if metadata_path and Path(metadata_path).exists() and ok_tree:
+        ok_div, _ = _exec(
+            f"qiime diversity core-metrics-phylogenetic"
+            f" --i-phylogeny rooted-tree.qza"
+            f" --i-table table.qza"
+            f" --p-sampling-depth {sampling_depth}"
+            f" --m-metadata-file {metadata_path}"
+            f" --output-dir core-metrics-results/",
+            "STEP 7: α・β多様性（core-metrics-phylogenetic）"
+        )
+        if ok_div:
+            for metric in ["faith_pd", "evenness", "shannon"]:
+                _exec(
+                    f"qiime diversity alpha-group-significance"
+                    f" --i-alpha-diversity core-metrics-results/{metric}_vector.qza"
+                    f" --m-metadata-file {metadata_path}"
+                    f" --o-visualization core-metrics-results/{metric}-group-significance.qzv",
+                    f"STEP 7b: α多様性グループ比較 ({metric})"
+                )
+            if group_column:
+                _exec(
+                    f"qiime diversity beta-group-significance"
+                    f" --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza"
+                    f" --m-metadata-file {metadata_path}"
+                    f" --m-metadata-column {group_column}"
+                    f" --o-visualization core-metrics-results/unweighted-unifrac-beta-significance.qzv",
+                    "STEP 7c: β多様性グループ比較（UniFrac）"
+                )
+
+    # ── 自動ビジュアライゼーション ───────────────────────────────────────
+    fig_dir = SESSION_FIGURE_DIR if SESSION_FIGURE_DIR else str(Path(out_dir) / "figures")
+    Path(fig_dir).mkdir(parents=True, exist_ok=True)
+    _auto_viz_code = f"""
+import io, os, zipfile
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
+
+session_dir = {repr(out_dir)}
+fig_dir = {repr(fig_dir)}
+os.makedirs(fig_dir, exist_ok=True)
+
+dpi = {PLOT_CONFIG.get('dpi', 300)}
+plt.rcParams.update({{'figure.dpi': dpi, 'font.size': {PLOT_CONFIG.get('font_size', 12)}}})
+
+def _read_tsv_from_qza(qza_path, target_suffix):
+    \"\"\"QZAファイル（zip）内の target_suffix で終わる TSV を DataFrame で返す\"\"\"
+    try:
+        with zipfile.ZipFile(qza_path, 'r') as z:
+            for name in z.namelist():
+                if name.endswith(target_suffix):
+                    with z.open(name) as f:
+                        return pd.read_csv(f, sep='\\t', index_col=0)
+    except Exception:
+        pass
+    return None
+
+# ── DADA2 デノイジング統計 ────────────────────────────────────────────
+stats_qza = os.path.join(session_dir, 'denoising-stats.qza')
+if os.path.exists(stats_qza):
+    df = _read_tsv_from_qza(stats_qza, 'stats.tsv')
+    if df is not None and 'input' in df.columns and 'non-chimeric' in df.columns:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        axes[0].bar(range(len(df)), df['input'], label='Input', alpha=0.7, color='steelblue')
+        axes[0].bar(range(len(df)), df['non-chimeric'], label='Non-chimeric', alpha=0.7, color='tomato')
+        axes[0].set_xticks(range(len(df)))
+        axes[0].set_xticklabels(df.index, rotation=45, ha='right')
+        axes[0].set_xlabel('Sample ID')
+        axes[0].set_ylabel('Reads')
+        axes[0].set_title('DADA2: リード数')
+        axes[0].legend()
+        retention = df['non-chimeric'] / df['input'] * 100
+        axes[1].bar(range(len(df)), retention, color='mediumseagreen')
+        axes[1].set_xticks(range(len(df)))
+        axes[1].set_xticklabels(df.index, rotation=45, ha='right')
+        axes[1].set_xlabel('Sample ID')
+        axes[1].set_ylabel('Retention (%)')
+        axes[1].set_title('DADA2: リード保持率 (%)')
+        axes[1].set_ylim(0, 100)
+        plt.tight_layout()
+        plt.savefig(os.path.join(fig_dir, 'dada2_stats.pdf'), bbox_inches='tight')
+        plt.close()
+        print('✅ DADA2統計図を保存: dada2_stats.pdf')
+
+# ── α多様性（Shannon） ─────────────────────────────────────────────
+for metric, label in [('shannon_vector', 'Shannon Diversity'), ('faith_pd_vector', "Faith's PD"), ('evenness_vector', 'Pielou Evenness')]:
+    qza_path = os.path.join(session_dir, 'core-metrics-results', metric + '.qza')
+    if os.path.exists(qza_path):
+        df = _read_tsv_from_qza(qza_path, 'alpha-diversity.tsv')
+        if df is not None and len(df.columns) >= 1:
+            fig, ax = plt.subplots(figsize=(10, 5))
+            vals = df.iloc[:, 0]
+            ax.bar(range(len(vals)), vals, color='steelblue')
+            ax.set_xticks(range(len(vals)))
+            ax.set_xticklabels(vals.index, rotation=45, ha='right')
+            ax.set_xlabel('Sample ID')
+            ax.set_ylabel(label)
+            ax.set_title(f'α多様性: {{label}}')
+            plt.tight_layout()
+            plt.savefig(os.path.join(fig_dir, f'alpha_{{metric}}.pdf'), bbox_inches='tight')
+            plt.close()
+            print(f'✅ α多様性図を保存: alpha_{{metric}}.pdf')
+
+print('\\n✅ 自動ビジュアライゼーション完了')
+print(f'📁 図の保存先: {{fig_dir}}')
+"""
+    print(f"\n{c('[PIPELINE] 自動ビジュアライゼーション', CYAN + BOLD)}")
+    viz_result = tool_execute_python(
+        code=_auto_viz_code,
+        description="パイプライン完了後の自動可視化（DADA2統計・α多様性）",
+        output_dir=fig_dir,
+    )
+    if "✅" in viz_result:
+        completed.append("✅ 自動ビジュアライゼーション（DADA2統計・α多様性）")
+    else:
+        failed.append(f"⚠️ ビジュアライゼーション: {viz_result[:200]}")
+
+    # ── サマリー ────────────────────────────────────────────────────────
+    sep = "═" * 56
+    summary_lines = [
+        sep,
+        "🏁  QIIME2 パイプライン + 可視化 完了",
+        sep,
+        *completed,
+    ]
+    if failed:
+        summary_lines += ["", "⚠️  失敗したステップ:", *failed]
+    summary_lines += [
+        "",
+        f"📁 出力ディレクトリ: {out_dir}",
+        f"🖼️  図の保存先: {fig_dir}",
+        "",
+        "━━━ 次のステップ ━━━",
+        "次は build_report_tex を呼び出して PDF レポートを生成してください。",
+        "引数: title_ja, title_en, experiment_summary を指定すること。",
+    ]
+    return "\n".join(summary_lines)
+
+
 def dispatch_tool(name: str, args: dict) -> str:
     """ツール名とパラメータからツール関数を呼び出す"""
     try:
@@ -1903,6 +2274,8 @@ def dispatch_tool(name: str, args: dict) -> str:
             return "⚠️  compile_report は非推奨です。代わりに build_report_tex を使用してください。"
         elif name == "build_report_tex":
             return tool_build_report_tex(**args)
+        elif name == "run_qiime2_pipeline":
+            return tool_run_qiime2_pipeline(**args)
         # 🐱 フォールバック: よく混同される別名を build_report_tex にリダイレクト
         elif name in ("generate_report", "create_report", "make_report", "report"):
             _content = args.get("content_ja") or args.get("content") or args.get("experiment_summary", "")
