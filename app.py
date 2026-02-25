@@ -11,10 +11,15 @@ seq2pipe Streamlit GUI アプリケーション。
 
 import sys
 import time
+import queue
+import tempfile
 import threading
 from pathlib import Path
 
 import streamlit as st
+
+# スレッドセーフなログキュー（バックグラウンドスレッド → メインスレッド）
+_log_queue: queue.Queue = queue.Queue()
 
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
@@ -47,12 +52,20 @@ def _init_state():
         "last_export_dir": "",
         "pending_install_pkg": None,
         "install_approved": None,
+        "metadata_temp_path": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 _init_state()
+
+# キューに溜まったログを session_state へ移す（毎 rerun で実行）
+while not _log_queue.empty():
+    try:
+        st.session_state["log_lines"].append(_log_queue.get_nowait())
+    except queue.Empty:
+        break
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,9 +83,24 @@ with st.sidebar:
         placeholder="/path/to/fastq/",
         help="シングルエンドまたはペアエンドの FASTQ ファイルが入ったディレクトリ",
     )
-    metadata_path = st.text_input(
+    metadata_file = st.file_uploader(
         "メタデータ (TSV)",
+        type=["tsv", "txt", "csv"],
+        help="サンプルメタデータファイルをアップロードするか、パスで指定してください",
+    )
+    if metadata_file is not None:
+        # アップロードされたファイルを一時ディレクトリに保存
+        tmp_dir = Path(tempfile.gettempdir()) / "seq2pipe"
+        tmp_dir.mkdir(exist_ok=True)
+        tmp_path = str(tmp_dir / metadata_file.name)
+        with open(tmp_path, "wb") as _f:
+            _f.write(metadata_file.getvalue())
+        st.session_state["metadata_temp_path"] = tmp_path
+        st.caption(f"✅ {metadata_file.name} を読み込みました")
+    metadata_path = st.session_state.get("metadata_temp_path", "") or st.text_input(
+        "またはパスで指定",
         placeholder="/path/to/sample-metadata.tsv",
+        label_visibility="collapsed",
     )
     classifier_path = st.text_input(
         "分類器 (.qza、省略可)",
@@ -157,6 +185,17 @@ with tab_run:
             use_container_width=True,
             help="既にパイプラインを実行済みの場合、コード生成・実行のみ行います",
         )
+
+    # コード生成のみモード用: エクスポートディレクトリの直接指定
+    _last_export = st.session_state.get("last_export_dir", "")
+    _code_only_dir_input = st.text_input(
+        "エクスポートディレクトリ（コード生成のみモード用）",
+        value=_last_export,
+        placeholder="/path/to/seq2pipe_results/20240101_120000/exported/",
+        help="パイプライン実行済みの exported/ ディレクトリを直接指定できます",
+    )
+    if _code_only_dir_input:
+        st.session_state["_code_only_export_dir"] = _code_only_dir_input
 
     # ── 実行状態インジケータ ──────────────────────────────────────────
     if st.session_state["running"]:
@@ -305,8 +344,8 @@ with tab_fig:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _log(line: str):
-    """スレッドセーフなログ追記"""
-    st.session_state["log_lines"].append(str(line))
+    """バックグラウンドスレッドからキューにログを追記（スレッドセーフ）"""
+    _log_queue.put(str(line))
 
 
 def _make_install_callback():
@@ -444,10 +483,11 @@ if run_full and not st.session_state["running"]:
     st.rerun()
 
 if run_code_only and not st.session_state["running"]:
-    export_dir = st.session_state.get("last_export_dir", "")
+    export_dir = st.session_state.get("last_export_dir", "") or st.session_state.get("_code_only_export_dir", "")
     if not export_dir:
         st.error(
-            "コード生成のみモードを使用するには、先にパイプラインを実行してください。"
+            "エクスポートディレクトリが指定されていません。"
+            "パイプラインを先に実行するか、下の入力欄にパスを入力してください。"
         )
     else:
         st.session_state["running"] = True
