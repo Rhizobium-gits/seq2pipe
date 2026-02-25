@@ -133,20 +133,20 @@ _BANNER_LINES = [
     r" ╚═╝     ╚═╝╚═╝     ╚══════╝",
 ]
 
-# SEQ2（上6行）: 赤→黄  /  PIPE（下6行）: シアン→青
+# 12 行を上から虹色グラデーション（赤→橙→黄→緑→シアン→青→マゼンタ）
 _LINE_COLORS = [
     "\033[91m",   # bright red
-    "\033[91m",   # bright red
+    "\033[33m",   # orange
     "\033[93m",   # bright yellow
-    "\033[93m",   # bright yellow
-    "\033[91m",   # bright red
-    "\033[91m",   # bright red
+    "\033[92m",   # bright green
+    "\033[92m",   # bright green
     "\033[96m",   # bright cyan
     "\033[96m",   # bright cyan
     "\033[94m",   # bright blue
     "\033[94m",   # bright blue
-    "\033[96m",   # bright cyan
-    "\033[96m",   # bright cyan
+    "\033[95m",   # bright magenta
+    "\033[95m",   # bright magenta
+    "\033[91m",   # bright red (wrap)
 ]
 
 
