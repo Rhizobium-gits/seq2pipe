@@ -151,6 +151,7 @@ _LINE_COLORS = [
 
 def _print_banner():
     import time
+    import random
 
     RESET = "\033[0m"
     BOLD  = "\033[1m"
@@ -159,55 +160,79 @@ def _print_banner():
     SHOW  = "\033[?25h"
     CLR   = "\033[J"
 
-    def _mono(color: str) -> str:
-        """全行を同じ色で描画した文字列"""
-        return "\n" + "".join(f"{color}{l}{RESET}\n" for l in _BANNER_LINES)
-
-    def _colorful() -> str:
-        """行ごとに色を変えた最終フレーム"""
-        return "\n" + "".join(
-            f"\033[1m{col}{l}{RESET}\n"
-            for l, col in zip(_BANNER_LINES, _LINE_COLORS)
-        )
-
-    DARK   = "\033[90m"    # 暗いグレー（消灯）
-    BRIGHT = "\033[96;1m"  # 明るいシアン（点灯）
-    DIMMED = "\033[2;96m"  # 薄いシアン
-
-    # チカチカフレーム: (描画文字列, 秒数)  最後は None = 待たない
-    _FLICKER = [
-        (_mono(DARK),   0.09),
-        (_mono(BRIGHT), 0.07),
-        (_mono(DARK),   0.05),
-        (_mono(BRIGHT), 0.08),
-        (_mono(DARK),   0.04),
-        (_mono(DIMMED), 0.05),
-        (_mono(BRIGHT), 0.06),
-        (_mono(DARK),   0.03),
-        (_colorful(),   None),   # 最終フレーム: カラフルで安定
+    # 空白以外の全セル (row, col) を収集
+    all_cells = [
+        (i, j)
+        for i, line in enumerate(_BANNER_LINES)
+        for j, ch in enumerate(line)
+        if ch != ' '
     ]
+
+    def _render(revealed: set, colored: set) -> str:
+        """
+        revealed: 表示済み（シアン白）
+        colored : 最終色に移行済み
+        """
+        parts = ["\n"]
+        for i, (line, line_color) in enumerate(zip(_BANNER_LINES, _LINE_COLORS)):
+            row = ""
+            for j, ch in enumerate(line):
+                if ch == ' ':
+                    row += ' '
+                elif (i, j) in colored:
+                    row += f"\033[1m{line_color}{ch}{RESET}"
+                elif (i, j) in revealed:
+                    row += f"\033[97;1m{ch}{RESET}"   # 白く光る
+                else:
+                    row += f"\033[90m·{RESET}"          # 未表示は暗いドット
+            parts.append(row + "\n")
+        return "".join(parts)
+
+    n_up = len(_BANNER_LINES) + 1
+    UP   = f"\033[{n_up}A"
 
     is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
     if not is_tty:
-        sys.stdout.write(_colorful())
+        sys.stdout.write(
+            "\n" + "".join(
+                f"\033[1m{col}{l}{RESET}\n"
+                for l, col in zip(_BANNER_LINES, _LINE_COLORS)
+            )
+        )
         sys.stdout.flush()
     else:
-        n_up = len(_BANNER_LINES) + 1   # content行 + 先頭の \n 分
-        UP   = f"\033[{n_up}A"
-
         sys.stdout.write(HIDE)
         sys.stdout.flush()
         try:
-            sys.stdout.write(_mono(DARK))
+            # ── Phase 1: 暗いドット状態で開始 ────────────────────────
+            revealed: set = set()
+            colored:  set = set()
+            sys.stdout.write(_render(revealed, colored))
             sys.stdout.flush()
+            time.sleep(0.12)
+
+            # ── Phase 2: ランダム散布でドットが出現（白く光る）──────
+            scatter = list(all_cells)
+            random.shuffle(scatter)
+            batch = max(1, len(scatter) // 30)   # 約30フレームで全点灯
+            for start in range(0, len(scatter), batch):
+                revealed.update(scatter[start : start + batch])
+                sys.stdout.write(UP + CLR + _render(revealed, colored))
+                sys.stdout.flush()
+                time.sleep(0.035)
+
             time.sleep(0.08)
 
-            for frame, delay in _FLICKER:
-                sys.stdout.write(UP + CLR + frame)
+            # ── Phase 3: 斜め波でカラー化（左上→右下へコロコロ）────
+            wave_order = sorted(all_cells, key=lambda rc: rc[0] + rc[1])
+            batch = max(1, len(wave_order) // 25)   # 約25フレームで色づく
+            for start in range(0, len(wave_order), batch):
+                colored.update(wave_order[start : start + batch])
+                sys.stdout.write(UP + CLR + _render(revealed, colored))
                 sys.stdout.flush()
-                if delay:
-                    time.sleep(delay)
+                time.sleep(0.028)
+
         except Exception:
             pass
         finally:
