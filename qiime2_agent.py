@@ -2579,6 +2579,8 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
     full_content = ""
     tool_calls = []
     thinking_content = ""
+    _max_content_chars = 20000  # 無限ループ防止: 20KB 超で打ち切り
+    _repeat_detector: list = []  # 直近トークンの繰り返し検出用
 
     try:
         with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
@@ -2607,6 +2609,21 @@ def call_ollama(messages: list, model: str, tools: list = None) -> dict:
                 if content:
                     print(content, end="", flush=True)
                     full_content += content
+
+                    # 無限繰り返し検出: 直近 500 文字が同じパターンを繰り返していたら打ち切る
+                    if len(full_content) > 2000:
+                        tail = full_content[-500:]
+                        chunk_size = 50
+                        chunks = [tail[i:i+chunk_size] for i in range(0, len(tail), chunk_size)]
+                        if len(chunks) >= 4 and len(set(chunks[-4:])) == 1:
+                            print("\n[⚠️  繰り返し検出 — 生成を中断]", flush=True)
+                            full_content = full_content[:-500] + "\n[TRUNCATED: repetition detected]"
+                            break
+
+                    # 最大文字数超過で打ち切り
+                    if len(full_content) > _max_content_chars:
+                        print(f"\n[⚠️  応答が {_max_content_chars} 文字を超えたため打ち切り]", flush=True)
+                        break
 
                 if chunk.get("done"):
                     break

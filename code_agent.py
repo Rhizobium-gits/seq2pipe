@@ -1092,6 +1092,161 @@ def _exec_tool(
         return f"ERROR: unknown tool '{tool_name}'", []
 
 
+def _parse_text_tool_calls(content: str) -> list:
+    """
+    tool_calls が空のとき、テキスト content から JSON ツール呼び出しを抽出する。
+    qwen2.5-coder 等、ツール API に非対応なモデル向けフォールバック。
+
+    対応フォーマット:
+      {"name": "...", "arguments": {...}}
+      [{"name": "...", "arguments": {...}}, ...]
+    """
+    if not content:
+        return []
+
+    tool_calls = []
+
+    # パターン1: ツール呼び出し JSON が複数行にわたる場合も含め全体を検索
+    # ```json ... ``` ブロック内を優先
+    for block in re.findall(r'```(?:json)?\s*([\s\S]*?)```', content):
+        try:
+            obj = json.loads(block.strip())
+            items = obj if isinstance(obj, list) else [obj]
+            for item in items:
+                if isinstance(item, dict) and "name" in item and (
+                    "arguments" in item or "parameters" in item
+                ):
+                    args = item.get("arguments") or item.get("parameters") or {}
+                    tool_calls.append({
+                        "function": {"name": item["name"], "arguments": args}
+                    })
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if tool_calls:
+        return tool_calls
+
+    # パターン2: content 全体が JSON (単一ツール呼び出し)
+    try:
+        obj = json.loads(content.strip())
+        items = obj if isinstance(obj, list) else [obj]
+        for item in items:
+            if isinstance(item, dict) and "name" in item:
+                args = item.get("arguments") or item.get("parameters") or {}
+                tool_calls.append({
+                    "function": {"name": item["name"], "arguments": args}
+                })
+        if tool_calls:
+            return tool_calls
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # パターン3: テキスト内に埋め込まれた JSON オブジェクトをスキャン
+    for match in re.finditer(r'\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*\}', content):
+        try:
+            obj = json.loads(match.group(0))
+            if "name" in obj:
+                args = obj.get("arguments") or obj.get("parameters") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                tool_calls.append({
+                    "function": {"name": obj["name"], "arguments": args}
+                })
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # パターン4a: name なし JSON をヒューリスティックで推論
+    # モデルが {"path": "...", "content": "..."} を出力した場合に write_file として解釈
+    if not tool_calls:
+        try:
+            obj = json.loads(content.strip())
+            if isinstance(obj, dict) and "name" not in obj:
+                if "path" in obj and "content" in obj:
+                    tool_calls.append({"function": {"name": "write_file", "arguments": obj}})
+                elif "path" in obj and str(obj.get("path", "")).endswith(".py"):
+                    tool_calls.append({"function": {"name": "run_python", "arguments": obj}})
+                elif "directory" in obj:
+                    tool_calls.append({"function": {"name": "list_files", "arguments": obj}})
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if tool_calls:
+        return tool_calls
+
+    # パターン4b: ```json コードブロック内の name なし JSON にも同様に適用
+    if not tool_calls:
+        for block in re.findall(r'```(?:json)?\s*([\s\S]*?)```', content):
+            try:
+                obj = json.loads(block.strip())
+                if isinstance(obj, dict) and "name" not in obj:
+                    if "path" in obj and "content" in obj:
+                        tool_calls.append({"function": {"name": "write_file", "arguments": obj}})
+                        break
+                    elif "path" in obj and str(obj.get("path", "")).endswith(".py"):
+                        tool_calls.append({"function": {"name": "run_python", "arguments": obj}})
+                        break
+                    elif "directory" in obj:
+                        tool_calls.append({"function": {"name": "list_files", "arguments": obj}})
+                        break
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    if tool_calls:
+        return tool_calls
+
+    # パターン4: 壊れた JSON を寛容にパース（name/arguments を正規表現で抽出）
+    if not tool_calls:
+        m_name = re.search(r'"name"\s*:\s*"([^"]+)"', content)
+        m_path = re.search(r'"path"\s*:\s*"([^"]+)"', content)
+        m_dir  = re.search(r'"directory"\s*:\s*"([^"]+)"', content)
+        m_pkg  = re.search(r'"package"\s*:\s*"([^"]+)"', content)
+        if m_name:
+            name = m_name.group(1)
+            if name in ("read_file", "write_file", "run_python", "list_files", "install_package"):
+                args: dict = {}
+                if m_path:
+                    args["path"] = m_path.group(1)
+                if m_dir:
+                    args["directory"] = m_dir.group(1)
+                if m_pkg:
+                    args["package"] = m_pkg.group(1)
+                # write_file の content は JSON 破損しやすいので別途抽出
+                if name == "write_file" and '"content"' in content:
+                    # content の開始位置を特定
+                    cm = re.search(r'"content"\s*:\s*"', content)
+                    if cm:
+                        start = cm.end()
+                        # エスケープシーケンスを処理しつつ content を抽出
+                        raw = content[start:]
+                        extracted = []
+                        i = 0
+                        while i < len(raw):
+                            c = raw[i]
+                            if c == '\\' and i + 1 < len(raw):
+                                nc = raw[i + 1]
+                                if nc == 'n': extracted.append('\n')
+                                elif nc == 't': extracted.append('\t')
+                                elif nc == '"': extracted.append('"')
+                                elif nc == '\\': extracted.append('\\')
+                                else: extracted.append(c + nc)
+                                i += 2
+                            elif c == '"':
+                                break  # content 文字列の終端
+                            else:
+                                extracted.append(c)
+                                i += 1
+                        file_content = "".join(extracted)
+                        if len(file_content) > 10:
+                            args["content"] = file_content
+                if args or name in ("list_files",):
+                    tool_calls.append({"function": {"name": name, "arguments": args}})
+
+    return tool_calls
+
+
 def run_coding_agent(
     export_files: dict,
     user_prompt: str,
@@ -1284,19 +1439,18 @@ def run_coding_agent(
     task = user_prompt.strip() if user_prompt.strip() else auto_task
 
     initial_content = "\n".join([
-        "## Available QIIME2-exported data files",
+        "## Available QIIME2-exported data files (exact paths)",
         *file_lines,
         "",
-        f"## FIGURE_DIR (save all figures here): {figure_dir}",
-        f"## Working directory: {output_dir}",
-        f"## Script path suggestion: {output_dir}/analysis.py",
+        f"## FIGURE_DIR: {figure_dir}",
+        f"## Script path: {output_dir}/analysis.py",
         "",
         "## Your task",
         task,
         "",
-        "## Start now",
-        "Call list_files first to explore the directory, then read_file on data files.",
-        "Do NOT write any code until you have confirmed the file formats.",
+        "## Start",
+        "Call list_files first, then read_file on key data files, then write_file to create",
+        f"analysis.py at {output_dir}/analysis.py, then call run_python to execute it.",
     ])
 
     messages = [
@@ -1309,12 +1463,28 @@ def run_coding_agent(
     final_error    = ""
     success        = False
     total_steps    = 0
+    _run_python_count = 0   # run_python が実行された回数（進捗確認用）
 
     _log("🤖 コーディングエージェント起動（tool-calling モード）")
     _log(f"   最大 {max_steps} ステップ  |  Ctrl+C で中断")
     _log("")
 
     for step in range(1, max_steps + 1):
+        # ── フォールバック判定: 5 ステップ経過して run_python すら呼ばれていない ──
+        if step == 6 and _run_python_count == 0 and not all_figs:
+            _log("  ⚠️  ツール呼び出しループが進捗しません。1ショット生成にフォールバックします...")
+            fallback = run_code_agent(
+                export_files=export_files,
+                user_prompt=user_prompt,
+                output_dir=output_dir,
+                figure_dir=figure_dir,
+                metadata_path=metadata_path,
+                model=model,
+                max_retries=3,
+                log_callback=log_callback,
+                install_callback=install_callback,
+            )
+            return fallback
         total_steps = step
         _log(f"[step {step}/{max_steps}] 送信中...")
 
@@ -1338,12 +1508,41 @@ def run_coding_agent(
         messages.append(assistant_msg)
 
         if not tool_calls:
-            # ツール呼び出しなし → エージェントが完了と判断
-            if content:
-                _log(f"エージェント応答: {content[:300]}")
-            _log("✅ エージェントがタスクを完了しました。")
-            success = True
-            break
+            # フォールバック: テキスト内 JSON をツール呼び出しとして解釈
+            parsed = _parse_text_tool_calls(content)
+            if parsed:
+                _log(f"  ℹ️  テキストからツール呼び出し {len(parsed)} 件を解析しました")
+                # assistant メッセージを tool_calls 付きで上書き
+                messages[-1]["tool_calls"] = parsed
+                tool_calls = parsed
+            else:
+                # 図がまだ生成されていない場合は継続を促す
+                _ran_python = any(
+                    m.get("role") == "tool" and m.get("name") == "run_python"
+                    for m in messages
+                )
+                if not all_figs and not _ran_python and step < max_steps - 2:
+                    if content:
+                        _log(f"  ← モデル応答（データ出力と判断）: {content[:80]}...")
+                    _log("  ℹ️  まだ図が生成されていません。スクリプト作成を促します...")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have read the data. Now proceed to the next step:\n"
+                            "1. Call write_file to create the analysis script at "
+                            f"{output_dir}/analysis.py\n"
+                            "2. Call run_python to execute it.\n"
+                            "Do NOT output data or summaries — call write_file NOW."
+                        ),
+                    })
+                    continue
+
+                # ツール呼び出しなし → エージェントが完了と判断
+                if content:
+                    _log(f"エージェント応答: {content[:300]}")
+                _log("✅ エージェントがタスクを完了しました。")
+                success = True
+                break
 
         # ── 各ツール呼び出しを実行 ────────────────────────────────────────
         for tc in tool_calls:
@@ -1374,6 +1573,8 @@ def run_coding_agent(
                 log_callback, install_callback,
             )
             all_figs.extend(new_figs)
+            if tool_name == "run_python":
+                _run_python_count += 1
 
             # run_python 成功時: 最後のスクリプトのコードを保存
             if tool_name == "run_python" and "EXIT CODE: 0" in tool_result:
@@ -1391,6 +1592,66 @@ def run_coding_agent(
                 "name":    tool_name,
                 "content": tool_result[:4000],
             })
+
+            # write_file で .py ファイルを書いた後、run_python を即時注入
+            if (
+                tool_name == "write_file"
+                and "OK: wrote" in tool_result
+                and tool_args.get("path", "").endswith(".py")
+            ):
+                script_path = tool_args.get("path", "")
+                _log(f"  → auto-injecting run_python for {Path(script_path).name}")
+                # run_python ツールを直接実行
+                run_result, run_figs = _exec_tool(
+                    "run_python", {"path": script_path},
+                    output_dir, figure_dir,
+                    log_callback, install_callback,
+                )
+                all_figs.extend(run_figs)
+                if "EXIT CODE: 0" in run_result and run_figs:
+                    success = True
+                    try:
+                        final_code = Path(script_path).read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+                # 実行結果を会話に追加
+                messages.append({
+                    "role":    "tool",
+                    "name":    "run_python",
+                    "content": run_result[:4000],
+                })
+
+            # run_python が exit 0 でも図が生成されていない場合は継続
+            if (
+                tool_name == "run_python"
+                and "EXIT CODE: 0" in tool_result
+                and not new_figs
+                and not all_figs
+                and step < max_steps - 2
+            ):
+                _log("  ℹ️  スクリプトは成功しましたが図が未生成です。本番コードの作成を促します...")
+                # 正確なファイルパスを再掲する
+                _file_refs = "\n".join(
+                    f"  [{cat}] {p}"
+                    for cat, paths in export_files.items()
+                    for p in paths
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "The script ran with EXIT CODE: 0 but NO figures were saved to FIGURE_DIR.\n"
+                        "The script was likely empty or a stub.\n\n"
+                        "CORRECT FILE PATHS — use these EXACT paths in your script:\n"
+                        f"{_file_refs}\n\n"
+                        f"FIGURE_DIR = r'{figure_dir}'\n"
+                        f"Script path: {output_dir}/analysis.py\n\n"
+                        "Call write_file NOW with a COMPLETE Python analysis script that:\n"
+                        "  1. Reads the exact paths listed above\n"
+                        "  2. Generates figures fig01–fig14 as described in the task\n"
+                        "  3. Saves each with plt.savefig() to FIGURE_DIR\n"
+                        "Use only the exact paths listed above. Do NOT guess paths."
+                    ),
+                })
 
     return CodeExecutionResult(
         success=success,
