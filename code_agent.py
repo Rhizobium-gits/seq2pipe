@@ -1608,6 +1608,7 @@ def run_coding_agent(
                     log_callback, install_callback,
                 )
                 all_figs.extend(run_figs)
+                _run_python_count += 1  # auto-inject 分もカウント
                 if "EXIT CODE: 0" in run_result and run_figs:
                     success = True
                     try:
