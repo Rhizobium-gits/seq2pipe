@@ -32,9 +32,11 @@
 - データ構造を自動で調査（FASTQ / メタデータ / 既存 QZA）
 - データに合った QIIME2 コマンドをゼロから組み立てる
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
+- **2 つの操作モード**: モード 1（自然言語でやりたい解析を指定）・モード 2（AI が自律的に全解析を設計・実行・`--auto` フラグ）
+- **ツール呼び出し型コード生成エージェント（vibe-local 方式）**: LLM がまず `read_file` でデータの列名・形式を確認してからコードを生成するため精度が高く、エラーが出ても `NEVER GIVE UP` で自動修正を繰り返す
 - QIIME2 の出力を **Python（pandas / scipy / scikit-learn / matplotlib）で高度解析**
 - 解析図をすべて **PDF として自動保存**（view.qiime2.org 不要）
-- **自律探索モード**: α多様性・β多様性・分類組成・差次解析・機械学習を AI が自動で順番に実行
+- **AI 自律解析（モード 2）**: 5 フェーズ・14 種類の図を全自動で生成（PCA / PCoA / NMDS / レアファクション曲線 / 分類組成 heatmap / サンプル相関行列 など）
 - 解析終了後に **日本語・英語の TeX / PDF レポートを自動生成**（`build_report_tex` が ANALYSIS_LOG から自動構築）
 
 すべて **あなたのマシン上** で完結。クラウドや有料 API は一切使いません。
@@ -142,77 +144,79 @@ AI: V3-V4 パイプラインを生成します。
     -> manifest.tsv, run_pipeline.sh, setup_classifier.sh, ANALYSIS_README.md
 ```
 
-### 自律探索モード（推奨）
+### 自律エージェントモード（モード 2 / --auto）
 
-QIIME2 解析後、AI が自動で 5 フェーズの探索を実行します。ユーザーは確認不要です。
-
-```
-あなた > /data/results/ を使って全ての基本解析を自動で探索して
-
-AI: 自律探索モードを開始します。5 フェーズを順番に実行します。
-
-[Phase 1: α多様性] -----
-[ツール実行: execute_python | subfolder=alpha_diversity]
-  -> Shannon / Simpson / Chao1 指数を計算
-  -> Mann-Whitney U / Kruskal-Wallis 検定
-  -> ~/seq2pipe_results/20260223/figures/alpha_diversity/ に保存
-
-[Phase 2: β多様性] -----
-[ツール実行: execute_python | subfolder=beta_diversity]
-  -> Bray-Curtis PCoA + 信頼楕円
-  -> PERMANOVA (R²、p 値)
-  -> ~/seq2pipe_results/20260223/figures/beta_diversity/ に保存
-
-[Phase 3: 分類組成] -----
-[ツール実行: execute_python | subfolder=taxonomy]
-  -> 門・属レベルの stacked bar chart + heatmap
-  -> ~/seq2pipe_results/20260223/figures/taxonomy/ に保存
-
-[Phase 4: 差次存在量] -----
-[ツール実行: execute_python | subfolder=differential_abundance]
-  -> 全 ASV に Mann-Whitney U、Benjamini-Hochberg 補正
-  -> volcano plot（FDR < 0.05 を赤でハイライト）
-  -> ~/seq2pipe_results/20260223/figures/differential_abundance/ に保存
-
-[Phase 5: 機械学習] -----
-[ツール実行: execute_python | subfolder=machine_learning]
-  -> Random Forest 5-fold CV (AUC, accuracy)
-  -> 重要特徴量 top 20 の horizontal bar chart
-  -> ~/seq2pipe_results/20260223/figures/machine_learning/ に保存
-
-[ツール実行: build_report_tex]
-  -> ANALYSIS_LOG から TeX を自動構築（LLM 不使用）
-  -> report_ja.pdf / report_en.pdf を生成
-  -> ~/seq2pipe_results/20260223/report/ に保存
-```
-
-### Python ダウンストリーム解析（手動）
-
-QIIME2 の結果を受け取ったら、そのまま Python 解析を続けられます。
+QIIME2 解析後、AI が自律的に 5 フェーズ・14 種類の図を全自動で生成します。ユーザーの指示は不要です。
+**vibe-local 方式**: LLM がまずファイルを `read_file` で読んで列名・形式を把握してからコードを書くため、フォーマットミスによるエラーが極めて少ない。
+エラーが出ても `write_file` で修正 → `run_python` で再実行を EXIT CODE: 0 になるまで繰り返します。
 
 ```
-あなた > shannon 多様性をグループ別に violin plot で比較して、
-         Mann-Whitney U 検定の p 値も表示して
+$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --auto --manifest manifest.tsv
 
-[ツール実行: execute_python]
-  -> QIIME2 出力から shannon_vector.qza を読み込み
-  -> violin plot 生成、統計検定実行
-  -> ~/seq2pipe_results/20260223/figures/shannon_violin.pdf に保存
+  [虹色バナーアニメーション]
 
-AI: Shannon 多様性の violin plot を生成しました。
-    Treatment 群で有意に高く、p = 0.023（Mann-Whitney U）
+  モード: 自律エージェント（最大 40 ステップ）
 
-あなた > Bray-Curtis の PCoA を PERMANOVA 結果付きで出して
+  🚀 STEP 1/2: QIIME2 パイプライン実行中
+    -> dada2 denoise-paired, classify-sklearn, core-metrics-phylogenetic...
+  ✅ パイプライン完了 → ~/seq2pipe_results/20260225_120000/
 
-[ツール実行: execute_python]
-  -> PCoA scatter plot + ellipse 生成
-  -> ~/seq2pipe_results/20260223/figures/pcoa_bray_curtis.pdf に保存
+  🤖 STEP 2/2: 自律エージェント（tool-calling ループ）
 
-あなた > 全解析のレポートを日本語と英語で PDF 出力して
+  [list_files] エクスポートファイルを一覧
+    -> feature_table: 1 件 / taxonomy: 1 件 / alpha: 4 件 / beta: 4 件
 
-[ツール実行: build_report_tex]
-  -> ANALYSIS_LOG から TeX を自動構築
-  -> report_ja.pdf / report_en.pdf を生成
+  [Phase 0: クオリティ確認]
+  [read_file] denoising/stats.tsv を読む（列名確認）
+  [write_file] quality_plot.py を生成
+  [run_python] EXIT CODE: 0 → denoising_stats.pdf 保存
+
+  [Phase 1: α多様性]
+  [read_file] alpha/shannon_vector.tsv を読む（列名確認）
+  [write_file] alpha_diversity.py を生成
+  [run_python] EXIT CODE: 0 → alpha_diversity.pdf（Shannon/Chao1/Simpson/Faith's PD）
+
+  [Phase 2: β多様性]
+  [read_file] beta/bray_curtis_pcoa_results.tsv を読む
+  [write_file] beta_diversity.py を生成（PCoA + CLR-PCA + NMDS + レアファクション）
+  [run_python] EXIT CODE: 0 → beta_pcoa.pdf / beta_clr_pca.pdf / beta_nmds.pdf / rarefaction.pdf
+
+  [Phase 3: 分類組成]
+  [read_file] taxonomy/taxonomy.tsv + feature-table.tsv を読む
+  [write_file] taxonomy_plot.py を生成（phylum stacked bar + genus heatmap + CLR bar）
+  [run_python] EXIT CODE: 0 → taxonomy_barplot.pdf / taxonomy_heatmap.pdf / taxonomy_clr.pdf
+
+  [Phase 4: サンプル相関]
+  [write_file] correlation_plot.py を生成
+  [run_python] EXIT CODE: 0 → sample_correlation.pdf
+
+  ✅ 自律解析完了！（5 フェーズ / 14 件の図）
+```
+
+### 解析モード（モード 1）- 自然言語でリクエスト
+
+QIIME2 の結果を受け取ったら、やりたい解析を自然言語で指定できます。
+LLM がファイルを先に読んでから正確なコードを生成し、エラーが出ると自動修正します。
+
+```
+$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_results/20260225_120000/exported/
+
+モードを選択してください:
+  1. 解析モード        やりたい解析を自然言語で指定
+  2. 自律エージェント  AI が自分でファイルを調べて全解析を全自動実行
+
+選択 (1/2) [1]: 1
+やりたい解析を入力してください: Shannon 多様性をグループ別に violin plot で比較して、Mann-Whitney U 検定の p 値も表示
+
+[list_files] エクスポートファイルを一覧
+[read_file]  alpha/shannon_vector.tsv の先頭を確認（列名: sample-id, shannon_entropy）
+[write_file] analysis.py を生成（violin plot + 統計検定）
+[run_python] EXIT CODE: 0
+  -> ~/seq2pipe_results/20260225_120000/figures/shannon_violin.pdf 保存
+
+✅ 解析完了！
+📊 生成された図 (1 件):
+   /Users/yourname/seq2pipe_results/20260225_120000/figures/shannon_violin.pdf
 ```
 
 ### 図のスタイル変更
@@ -282,16 +286,16 @@ AI: Shannon 多様性の violin plot を生成しました。
 | α・β 多様性 | `qiime diversity core-metrics-phylogenetic` |
 | 差次解析 ANCOM-BC | `qiime composition ancombc` |
 
-### Python ダウンストリーム解析
-| フェーズ | 解析 | パッケージ |
+### Python ダウンストリーム解析（code_agent.py — ツール呼び出し型エージェント）
+| フェーズ | 解析手法 | パッケージ |
 |---|---|---|
-| Phase 1 (alpha_diversity) | Shannon / Simpson / Chao1 + 統計検定 | pandas, scipy, seaborn |
-| Phase 2 (beta_diversity) | Bray-Curtis PCoA + PERMANOVA | pandas, matplotlib, scipy |
-| Phase 3 (taxonomy) | 分類組成 stacked bar + heatmap（門・属） | pandas, seaborn |
-| Phase 4 (differential_abundance) | 全 ASV 差次解析 + BH 補正 + volcano plot | scipy, statsmodels |
-| Phase 5 (machine_learning) | Random Forest 5-fold CV + feature importance | scikit-learn |
-| 手動 | co-occurrence ネットワーク | networkx, scipy |
-| レポート | ANALYSIS_LOG → TeX → PDF 自動構築 | tectonic（TeX → PDF） |
+| Phase 0 (quality) | デノイジング統計（入力 / フィルタリング / デノイジング / 非キメラ） | pandas, matplotlib |
+| Phase 1 (alpha) | Shannon / Chao1 / Simpson / Faith's PD + Mann-Whitney U + Kruskal-Wallis | pandas, scipy, seaborn |
+| Phase 2 (beta) | Bray-Curtis PCoA・UniFrac PCoA + CLR 変換 PCA + NMDS + レアファクション曲線 | pandas, sklearn, scipy |
+| Phase 3 (taxonomy) | 門レベル stacked bar + 属レベル heatmap + CLR 変換 phylum bar | pandas, seaborn |
+| Phase 4 (correlation) | サンプル間相関行列 + 階層クラスタリング heatmap | pandas, seaborn, scipy |
+| モード 1 | ユーザー指示の任意解析（自然言語 → read_file で形式把握 → コード生成 → 自動修正） | 動的インストール対応 |
+| レポート | ANALYSIS_LOG → TeX → PDF 自動構築（LLM 不使用、高速） | tectonic（TeX → PDF） |
 
 ---
 
@@ -342,46 +346,52 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
 あなた
   |
   v
-[ launch.sh / launch.bat ]
-  |
-  v
-[ qiime2_agent.py ]
-  |
-  +---> Ollama (localhost:11434)  <-- ローカル LLM
-  |       |
-  |       v
-  |     [ LLM: qwen2.5-coder など ]
-  |         |
-  |         v（自律探索モード）
-  |       Phase 1: alpha_diversity
-  |       Phase 2: beta_diversity
-  |       Phase 3: taxonomy
-  |       Phase 4: differential_abundance
-  |       Phase 5: machine_learning
-  |
-  +---> ツール実行
-          |
-          +-- inspect_directory  (データ構造の調査)
-          +-- read_file          (ファイル内容の確認)
-          +-- write_file         (スクリプト・READMEの書き出し)
-          +-- edit_file          (生成済みスクリプトの部分修正)
-          +-- generate_manifest  (QIIME2 マニフェスト生成)
-          +-- run_command        (QIIME2 実行: conda env 自動検出 / Docker fallback)
-          +-- check_system       (環境確認)
-          |
-          +-- set_plot_config    (図スタイル・色・解像度・形式の設定)
-          +-- execute_python     (pandas/scipy/sklearn/matplotlib で解析実行)
-          |     |- PLOT_CONFIG 自動注入（FIGURE_DIR, FIGURE_FORMAT 等）
-          |     |- subfolder パラメータでフェーズ別ディレクトリに保存
-          |     |- 生成図を PDF で自動保存
-          |     `- ANALYSIS_LOG にステップ・図・統計を記録
-          +-- build_report_tex   (ANALYSIS_LOG から TeX/PDF を自動構築)
-          |     |- Python で TeX を完全生成（LLM 不使用・高速）
-          |     |- フェーズ別セクション（α多様性 / β多様性 / ...）
-          |     |- tectonic でコンパイル
-          |     |- 日本語版（xeCJK + Hiragino フォント）
-          |     `- 英語版（標準 LaTeX）
-          +-- compile_report     (旧レポート生成：LLM が TeX を書く方式)
+[ launch.sh / launch.bat ]  →  [ cli.py ]  ← エントリーポイント（虹色バナー・モード選択）
+                                    |
+          ┌─────────────────────────┼──────────────────────────┐
+          |                         |                          |
+          v                         v                          v
+  モード 1: 解析モード      [ pipeline_runner.py ]     モード 2: 自律エージェント
+  （自然言語でリクエスト）   QIIME2 パイプライン実行      （--auto フラグ）
+                             + 結果エクスポート
+          |                         |                          |
+          v                         v                          v
+  [ code_agent.py ]  ←─────────────┘────────────→  [ code_agent.py ]
+    ツール呼び出し型コード生成エージェント
+    |
+    +---> Ollama (localhost:11434)  <-- ローカル LLM
+    |       TOOL FIRST: 先にデータを読んでからコードを書く
+    |       NEVER GIVE UP: エラーが出たら write_file で修正 → run_python で再実行
+    |
+    +-- list_files      (エクスポートディレクトリのファイル一覧)
+    +-- read_file       (ファイル内容を LLM に渡す → 列名・形式を把握してから書く)
+    +-- write_file      (atomic write: mkstemp+replace で安全な Python スクリプト生成)
+    +-- run_python      (QIIME2 conda Python で実行 → exit code 確認)
+    `-- install_package (ModuleNotFoundError 検出 → pip install + ユーザー承認確認)
+
+  自動解析タスク（モード 2）: 5 フェーズ・14 種類の図
+    Phase 0: クオリティ確認（デノイジング統計）
+    Phase 1: α多様性（Shannon / Chao1 / Simpson / Faith's PD + 統計検定）
+    Phase 2: β多様性（Bray-Curtis PCoA / UniFrac PCoA / CLR-PCA / NMDS / レアファクション曲線）
+    Phase 3: 分類組成（phylum stacked bar / genus heatmap / CLR phylum bar）
+    Phase 4: サンプル相関（相関行列 + 階層クラスタリング）
+
+  ─────────────────────────────────────────────────────
+  [ qiime2_agent.py ]  QIIME2 パイプライン生成（pipeline_runner.py 内部で使用）
+    |
+    +---> Ollama (localhost:11434)  <-- ローカル LLM
+    +---> 11 ツール
+            +-- inspect_directory  (データ構造の調査)
+            +-- read_file          (ファイル内容の確認)
+            +-- write_file         (スクリプト書き出し)
+            +-- edit_file          (部分修正)
+            +-- generate_manifest  (QIIME2 マニフェスト生成)
+            +-- run_command        (QIIME2 実行: conda env 自動検出 / Docker fallback)
+            +-- check_system       (環境確認)
+            +-- set_plot_config    (図スタイル設定)
+            +-- execute_python     (Python 解析実行)
+            +-- build_report_tex   (ANALYSIS_LOG → TeX/PDF 自動生成)
+            `-- log_analysis_step  (QIIME2 ステップを ANALYSIS_LOG に記録)
 ```
 
 ---
@@ -494,7 +504,10 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 ```
 seq2pipe/
-├── qiime2_agent.py   # AI エージェント本体
+├── cli.py            # エントリーポイント（虹色バナー・モード選択・CLI 引数）
+├── qiime2_agent.py   # QIIME2 パイプライン生成エージェント（11 ツール）
+├── pipeline_runner.py # QIIME2 実行ラッパー + 結果エクスポート
+├── code_agent.py     # ツール呼び出し型コード生成エージェント（5 ツール、vibe-local 方式）
 ├── launch.sh         # macOS / Linux 起動スクリプト
 ├── launch.ps1        # Windows 起動スクリプト（PowerShell）
 ├── launch.bat        # Windows 起動スクリプト（ダブルクリック用）
@@ -571,9 +584,11 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - Inspects your data structure automatically (FASTQ / metadata / existing QZA)
 - Builds the right QIIME2 commands from scratch for your dataset
 - Writes ready-to-run `.sh` / `.ps1` scripts
+- **Two operation modes**: Mode 1 (specify your analysis in natural language) · Mode 2 (AI autonomously designs and runs all analyses, `--auto` flag)
+- **Tool-calling code generation agent (vibe-local style)**: LLM first calls `read_file` to understand column names and data format before writing code — far fewer format errors; if an error occurs, `NEVER GIVE UP` — it rewrites and retries until EXIT CODE: 0
 - Runs **Python downstream analysis** (pandas / scipy / scikit-learn / matplotlib) on QIIME2 outputs
 - **Auto-saves all figures as PDF** — no need for view.qiime2.org
-- **Autonomous exploration mode**: AI automatically runs all 5 analysis phases (alpha diversity → beta diversity → taxonomy → differential abundance → machine learning) without user confirmation
+- **Autonomous analysis (Mode 2)**: Automatically generates 14 figures across 5 phases (PCA / PCoA / NMDS / rarefaction curves / taxonomy heatmap / sample correlation matrix / and more)
 - **Auto-generates Japanese and English TeX / PDF reports** (`build_report_tex` programmatically builds TeX from ANALYSIS_LOG — no LLM context needed)
 
 Everything runs **on your machine**. No cloud, no paid API, no internet required during analysis.
@@ -674,69 +689,77 @@ AI: Generating V3-V4 pipeline.
     -> manifest.tsv, run_pipeline.sh, setup_classifier.sh, ANALYSIS_README.md
 ```
 
-### Autonomous exploration mode (recommended)
+### Autonomous agent mode (Mode 2 / --auto)
 
-After QIIME2, the AI automatically runs all 5 analysis phases without prompting.
-
-```
-You > Use /data/results/ and run all basic analyses automatically
-
-AI: Starting autonomous exploration mode. Running 5 phases in sequence.
-
-[Phase 1: Alpha diversity] -----
-[Tool: execute_python | subfolder=alpha_diversity]
-  -> Compute Shannon / Simpson / Chao1
-  -> Mann-Whitney U / Kruskal-Wallis test
-  -> Saved: ~/seq2pipe_results/20260223/figures/alpha_diversity/
-
-[Phase 2: Beta diversity] -----
-[Tool: execute_python | subfolder=beta_diversity]
-  -> Bray-Curtis PCoA + confidence ellipses
-  -> PERMANOVA (R², p-value)
-  -> Saved: ~/seq2pipe_results/20260223/figures/beta_diversity/
-
-[Phase 3: Taxonomy] -----
-[Tool: execute_python | subfolder=taxonomy]
-  -> Stacked bar chart + heatmap at phylum / genus level
-  -> Saved: ~/seq2pipe_results/20260223/figures/taxonomy/
-
-[Phase 4: Differential abundance] -----
-[Tool: execute_python | subfolder=differential_abundance]
-  -> Mann-Whitney U on all ASVs, Benjamini-Hochberg FDR
-  -> Volcano plot (FDR < 0.05 highlighted in red)
-  -> Saved: ~/seq2pipe_results/20260223/figures/differential_abundance/
-
-[Phase 5: Machine learning] -----
-[Tool: execute_python | subfolder=machine_learning]
-  -> Random Forest 5-fold CV (AUC, accuracy)
-  -> Top 20 feature importance bar chart
-  -> Saved: ~/seq2pipe_results/20260223/figures/machine_learning/
-
-[Tool: build_report_tex]
-  -> Build TeX from ANALYSIS_LOG (no LLM — pure Python, fast)
-  -> report_ja.pdf / report_en.pdf
-  -> Saved: ~/seq2pipe_results/20260223/report/
-```
-
-### Python downstream analysis (manual)
+After QIIME2, the AI autonomously generates 14 figures across 5 phases — no user prompts needed.
+**Vibe-local style**: The LLM first calls `read_file` to inspect column names and file format before writing code. If an error occurs, it rewrites and retries until EXIT CODE: 0.
 
 ```
-You > Show Shannon diversity by group as a violin plot
-      with Mann-Whitney U p-values
+$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --auto --manifest manifest.tsv
 
-[Tool: execute_python]
-  -> Read shannon_vector.qza from QIIME2 output
-  -> Generate violin plot + statistical test
-  -> Saved: ~/seq2pipe_results/20260223/figures/shannon_violin.pdf
+  [Rainbow banner animation]
 
-AI: Shannon diversity violin plot saved.
-    Treatment group significantly higher, p = 0.023 (Mann-Whitney U)
+  Mode: Autonomous agent (max 40 steps)
 
-You > Generate a report in Japanese and English
+  🚀 STEP 1/2: Running QIIME2 pipeline
+    -> dada2 denoise-paired, classify-sklearn, core-metrics-phylogenetic...
+  ✅ Pipeline complete → ~/seq2pipe_results/20260225_120000/
 
-[Tool: build_report_tex]
-  -> Build TeX from ANALYSIS_LOG
-  -> report_ja.pdf / report_en.pdf generated
+  🤖 STEP 2/2: Autonomous agent (tool-calling loop)
+
+  [list_files] Enumerate exported files
+    -> feature_table: 1 / taxonomy: 1 / alpha: 4 / beta: 4
+
+  [Phase 0: Quality check]
+  [read_file]  denoising/stats.tsv (verify column names)
+  [write_file] quality_plot.py
+  [run_python] EXIT CODE: 0 → denoising_stats.pdf
+
+  [Phase 1: Alpha diversity]
+  [read_file]  alpha/shannon_vector.tsv (column: sample-id, shannon_entropy)
+  [write_file] alpha_diversity.py
+  [run_python] EXIT CODE: 0 → alpha_diversity.pdf (Shannon/Chao1/Simpson/Faith's PD)
+
+  [Phase 2: Beta diversity]
+  [read_file]  beta/bray_curtis_pcoa_results.tsv
+  [write_file] beta_diversity.py (PCoA + CLR-PCA + NMDS + rarefaction curves)
+  [run_python] EXIT CODE: 0 → beta_pcoa.pdf / beta_clr_pca.pdf / beta_nmds.pdf / rarefaction.pdf
+
+  [Phase 3: Taxonomy]
+  [read_file]  taxonomy/taxonomy.tsv + feature-table.tsv
+  [write_file] taxonomy_plot.py (phylum stacked bar + genus heatmap + CLR bar)
+  [run_python] EXIT CODE: 0 → taxonomy_barplot.pdf / taxonomy_heatmap.pdf / taxonomy_clr.pdf
+
+  [Phase 4: Sample correlation]
+  [write_file] correlation_plot.py
+  [run_python] EXIT CODE: 0 → sample_correlation.pdf
+
+  ✅ Autonomous analysis complete! (5 phases / 14 figures)
+```
+
+### Analysis mode (Mode 1) — natural language requests
+
+Specify the analysis you want in natural language. The LLM reads the files first to understand the format, then generates accurate code.
+
+```
+$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_results/20260225_120000/exported/
+
+Select mode:
+  1. Analysis mode     Specify what you want in natural language
+  2. Autonomous agent  AI automatically runs all analyses
+
+Choice (1/2) [1]: 1
+Enter your request: Shannon diversity violin plot by group with Mann-Whitney U p-values
+
+[list_files] List exported files
+[read_file]  alpha/shannon_vector.tsv  (columns: sample-id, shannon_entropy)
+[write_file] analysis.py (violin plot + statistical test)
+[run_python] EXIT CODE: 0
+  -> ~/seq2pipe_results/20260225_120000/figures/shannon_violin.pdf
+
+✅ Analysis complete!
+📊 Generated figures (1):
+   /Users/yourname/seq2pipe_results/20260225_120000/figures/shannon_violin.pdf
 ```
 
 ### Figure style control
@@ -804,16 +827,16 @@ You > Switch to publication quality — 300 DPI PNG
 | Alpha & beta diversity | `qiime diversity core-metrics-phylogenetic` |
 | Differential abundance ANCOM-BC | `qiime composition ancombc` |
 
-### Python downstream
+### Python downstream (code_agent.py — tool-calling agent)
 | Phase | Analysis | Packages |
 |---|---|---|
-| Phase 1 (alpha_diversity) | Shannon / Simpson / Chao1 + stats | pandas, scipy, seaborn |
-| Phase 2 (beta_diversity) | Bray-Curtis PCoA + PERMANOVA | pandas, matplotlib, scipy |
-| Phase 3 (taxonomy) | Stacked bar chart + heatmap (phylum/genus) | pandas, seaborn |
-| Phase 4 (differential_abundance) | All-ASV test + BH correction + volcano | scipy, statsmodels |
-| Phase 5 (machine_learning) | Random Forest 5-fold CV + feature importance | scikit-learn |
-| Manual | Co-occurrence network | networkx, scipy |
-| Report | ANALYSIS_LOG → TeX → PDF (pure Python, no LLM) | tectonic (TeX → PDF) |
+| Phase 0 (quality) | Denoising statistics (input / filtered / denoised / non-chimeric) | pandas, matplotlib |
+| Phase 1 (alpha) | Shannon / Chao1 / Simpson / Faith's PD + Mann-Whitney U + Kruskal-Wallis | pandas, scipy, seaborn |
+| Phase 2 (beta) | Bray-Curtis PCoA · UniFrac PCoA + CLR-PCA + NMDS + rarefaction curves | pandas, sklearn, scipy |
+| Phase 3 (taxonomy) | Phylum stacked bar + genus heatmap + CLR-transformed phylum bar | pandas, seaborn |
+| Phase 4 (correlation) | Sample correlation matrix + hierarchical clustering heatmap | pandas, seaborn, scipy |
+| Mode 1 | Any user-requested analysis (natural language → read_file → codegen → auto-fix) | dynamic install support |
+| Report | ANALYSIS_LOG → TeX → PDF (pure Python, no LLM, fast) | tectonic (TeX → PDF) |
 
 ---
 
@@ -864,46 +887,52 @@ $env:QIIME2_AI_MODEL = "qwen2.5-coder:3b"; .\launch.ps1
 You
   |
   v
-[ launch.sh / launch.bat ]
-  |
-  v
-[ qiime2_agent.py ]
-  |
-  +---> Ollama (localhost:11434)  <-- Local LLM
-  |       |
-  |       v
-  |     [ LLM: qwen2.5-coder etc. ]
-  |         |
-  |         v  (autonomous exploration mode)
-  |       Phase 1: alpha_diversity
-  |       Phase 2: beta_diversity
-  |       Phase 3: taxonomy
-  |       Phase 4: differential_abundance
-  |       Phase 5: machine_learning
-  |
-  +---> Tool execution
-          |
-          +-- inspect_directory  (scan data structure)
-          +-- read_file          (read file contents)
-          +-- write_file         (write scripts & README)
-          +-- edit_file          (patch generated scripts)
-          +-- generate_manifest  (create QIIME2 manifest)
-          +-- run_command        (run QIIME2: auto-detects conda env / Docker fallback)
-          +-- check_system       (verify environment)
-          |
-          +-- set_plot_config    (style / palette / DPI / format)
-          +-- execute_python     (pandas/scipy/sklearn/matplotlib analysis)
-          |     |- auto-injects PLOT_CONFIG (FIGURE_DIR, FIGURE_FORMAT, etc.)
-          |     |- subfolder param → phase-organized directories
-          |     |- saves figures as PDF by default
-          |     `- logs step / figures / stats to ANALYSIS_LOG
-          +-- build_report_tex   (auto-build TeX/PDF from ANALYSIS_LOG)
-          |     |- pure Python TeX generation (no LLM, no context flooding)
-          |     |- phase-organized sections (alpha / beta / taxonomy / ...)
-          |     |- compiled with tectonic
-          |     |- Japanese (xeCJK + Hiragino fonts)
-          |     `- English (standard LaTeX)
-          +-- compile_report     (legacy: LLM writes TeX directly)
+[ launch.sh / launch.bat ]  →  [ cli.py ]  ← Entry point (rainbow banner / mode selection)
+                                    |
+          ┌─────────────────────────┼──────────────────────────┐
+          |                         |                          |
+          v                         v                          v
+  Mode 1: Analysis mode     [ pipeline_runner.py ]     Mode 2: Autonomous agent
+  (natural language)         QIIME2 pipeline +           (--auto flag)
+                             result export
+          |                         |                          |
+          v                         v                          v
+  [ code_agent.py ]  ←─────────────┘────────────→  [ code_agent.py ]
+    Tool-calling code generation agent
+    |
+    +---> Ollama (localhost:11434)  <-- Local LLM
+    |       TOOL FIRST: read files before writing code
+    |       NEVER GIVE UP: write_file to fix → run_python again until EXIT CODE: 0
+    |
+    +-- list_files      (enumerate exported directory)
+    +-- read_file       (feed file contents to LLM → understand column names & format)
+    +-- write_file      (atomic write via mkstemp+replace — safe script generation)
+    +-- run_python      (execute with QIIME2 conda Python → check exit code)
+    `-- install_package (detect ModuleNotFoundError → pip install + user approval)
+
+  Autonomous task (Mode 2): 5 phases · 14 figures
+    Phase 0: Quality check (denoising statistics)
+    Phase 1: Alpha diversity (Shannon / Chao1 / Simpson / Faith's PD + stats)
+    Phase 2: Beta diversity (Bray-Curtis PCoA / UniFrac PCoA / CLR-PCA / NMDS / rarefaction)
+    Phase 3: Taxonomy (phylum stacked bar / genus heatmap / CLR phylum bar)
+    Phase 4: Sample correlation (correlation matrix + hierarchical clustering)
+
+  ─────────────────────────────────────────────────────
+  [ qiime2_agent.py ]  QIIME2 pipeline generation (used inside pipeline_runner.py)
+    |
+    +---> Ollama (localhost:11434)  <-- Local LLM
+    +---> 11 tools
+            +-- inspect_directory  (scan data structure)
+            +-- read_file          (read file contents)
+            +-- write_file         (write scripts & README)
+            +-- edit_file          (patch generated scripts)
+            +-- generate_manifest  (create QIIME2 manifest)
+            +-- run_command        (run QIIME2: auto-detects conda env / Docker fallback)
+            +-- check_system       (verify environment)
+            +-- set_plot_config    (style / palette / DPI / format)
+            +-- execute_python     (Python analysis & visualization)
+            +-- build_report_tex   (auto-build TeX/PDF from ANALYSIS_LOG)
+            `-- log_analysis_step  (register QIIME2 steps in ANALYSIS_LOG)
 ```
 
 ---
@@ -1016,7 +1045,10 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 ```
 seq2pipe/
-├── qiime2_agent.py   # AI agent core
+├── cli.py            # Entry point (rainbow banner / mode selection / CLI args)
+├── qiime2_agent.py   # QIIME2 pipeline generation agent (11 tools)
+├── pipeline_runner.py # QIIME2 execution wrapper + result export
+├── code_agent.py     # Tool-calling code generation agent (5 tools, vibe-local style)
 ├── launch.sh         # macOS / Linux launcher
 ├── launch.ps1        # Windows launcher (PowerShell)
 ├── launch.bat        # Windows launcher (double-click)

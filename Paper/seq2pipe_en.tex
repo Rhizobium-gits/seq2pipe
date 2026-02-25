@@ -103,15 +103,17 @@ microbiome analysis by combining a locally running large language model (LLM)
 with the QIIME2 bioinformatics platform.
 Given raw FASTQ sequencing data, seq2pipe automatically inspects
 the data structure, designs an appropriate QIIME2 analysis pipeline,
-generates ready-to-execute shell scripts, performs Python-based downstream
-analysis (diversity, taxonomy, differential abundance, machine learning),
-saves all figures as PDF, and produces bilingual (Japanese/English)
-TeX/PDF reports --- all through natural language dialogue.
+generates ready-to-execute shell scripts, and then invokes a second
+\textbf{tool-calling code-generation agent} (\texttt{code\_agent.py})
+that reads actual exported file contents before writing Python code ---
+eliminating format-mismatch errors common in blind one-shot generation.
+The code agent follows a ``NEVER GIVE UP'' policy: on any Python error
+it rewrites and retries until \texttt{EXIT CODE: 0}.
+In autonomous mode it automatically produces 14 publication-quality figures
+across 5 analysis phases (quality control, alpha diversity, beta diversity
+including CLR-PCA and NMDS, taxonomic composition, and sample correlation).
 The entire workflow runs on the user's local machine, eliminating
 dependencies on cloud services or paid APIs.
-The implementation uses only Python's standard library and leverages
-Ollama's local LLM inference engine to orchestrate 11 specialized tools
-via function calling.
 A startup language selector (Japanese/English), automatic Python dependency
 checking, and comprehensive error handling make seq2pipe immediately
 usable by researchers without bioinformatics backgrounds.
@@ -217,41 +219,57 @@ seq2pipe was developed according to seven core design principles:
 
 \subsection{Overall Architecture}
 
-Figure~\ref{fig:arch} illustrates the overall architecture of seq2pipe.
-The user launches the Python agent (\texttt{qiime2\_agent.py})
-via platform-specific launch scripts.
-The agent communicates with the local Ollama API endpoint
-(\texttt{http://localhost:11434/api/chat}) and coordinates
-11 specialized tools to interact with the filesystem,
-QIIME2 (auto-detects conda environment; falls back to Docker),
-and Python analysis libraries.
+Figure~\ref{fig:arch} illustrates the three-layer architecture of seq2pipe.
+The user launches \texttt{cli.py} via platform-specific launch scripts.
+\texttt{cli.py} presents a rainbow ASCII banner and prompts the user to
+select between two operating modes.
+In either mode, \texttt{pipeline\_runner.py} first executes the full
+QIIME2 pipeline and exports the results, then
+\texttt{code\_agent.py} --- a vibe-local-style tool-calling agent ---
+performs Python downstream analysis.
 
 \begin{figure}[h]
   \centering
   \begin{verbatim}
-  User (language selection: Japanese / English)
+  User
     |
     v
-  [launch.sh / launch.bat]
+  [launch.sh / launch.bat] -> [cli.py]  (rainbow banner / mode selection)
+                                 |
+          +-----------------------+------------------------+
+          |                       |                        |
+          v                       v                        v
+  Mode 1: Analysis mode   [pipeline_runner.py]    Mode 2: Autonomous
+  (user specifies prompt)  QIIME2 pipeline +        (--auto flag)
+                           result export
+          |                       |                        |
+          v                       v                        v
+  [code_agent.py] <--------------+-------------------> [code_agent.py]
+    Tool-calling code generation agent (vibe-local style)
     |
-    v
-  [qiime2_agent.py] <-----> Ollama (localhost:11434)
-    |                              |
-    |                        [LLM Model]
+    +---> Ollama (localhost:11434) <-- Local LLM
+    |       TOOL FIRST: read files first, then write code
+    |       NEVER GIVE UP: rewrite + retry until EXIT CODE: 0
     |
-    +---> [Tool  1] inspect_directory  (data structure survey)
-    +---> [Tool  2] read_file          (read text files)
-    +---> [Tool  3] write_file         (write scripts / manifests)
-    +---> [Tool  4] edit_file          (partial file editing)
-    +---> [Tool  5] generate_manifest  (QIIME2 manifest generation)
-    +---> [Tool  6] run_command        (QIIME2: auto-detects conda env / Docker fallback)
-    +---> [Tool  7] check_system       (environment check)
-    +---> [Tool  8] set_plot_config    (figure style / DPI / format)
-    +---> [Tool  9] execute_python     (Python analysis & visualization)
-    +---> [Tool 10] build_report_tex   (TeX/PDF report generation)
-    +---> [Tool 11] log_analysis_step  (manually log QIIME2 steps to ANALYSIS_LOG)
+    +-- list_files      (enumerate exported directory)
+    +-- read_file       (read file contents -> LLM sees column names)
+    +-- write_file      (atomic write via mkstemp+replace)
+    +-- run_python      (execute with QIIME2 conda Python)
+    `-- install_package (detect ModuleNotFoundError -> pip + approval)
+
+  Autonomous task (Mode 2): 5 phases * 14 figures
+    Phase 0: Quality check (denoising statistics)
+    Phase 1: Alpha diversity (Shannon/Chao1/Simpson/Faith's PD + stats)
+    Phase 2: Beta diversity (PCoA + CLR-PCA + NMDS + rarefaction curves)
+    Phase 3: Taxonomy (phylum stacked bar + genus heatmap + CLR bar)
+    Phase 4: Sample correlation matrix + hierarchical clustering
+
+  [qiime2_agent.py]  QIIME2 pipeline generation (11 tools, inside pipeline_runner.py)
+    +-- inspect_directory / read_file / write_file / edit_file
+    +-- generate_manifest / run_command / check_system
+    +-- set_plot_config / execute_python / build_report_tex / log_analysis_step
   \end{verbatim}
-  \caption{Overall architecture of seq2pipe}
+  \caption{Three-layer architecture of seq2pipe}
   \label{fig:arch}
 \end{figure}
 
@@ -295,91 +313,136 @@ a general-purpose code LLM is transformed into a QIIME2 domain expert.
 
 \subsection{Tool Definitions and Function Calling}
 
-Eleven tools are defined in JSON Schema format compatible with
-Ollama's function calling interface. Table~\ref{tab:tools}
-summarizes the tools and their roles.
+seq2pipe uses two separate tool sets.
+\texttt{qiime2\_agent.py} defines 11 tools (Table~\ref{tab:tools_qiime2})
+for QIIME2 pipeline orchestration.
+\texttt{code\_agent.py} defines 5 tools (Table~\ref{tab:tools_code})
+for Python code generation following the vibe-local paradigm:
+the LLM \emph{reads the actual file contents before writing code},
+eliminating format-mismatch errors.
 
 \begin{table}[h]
   \centering
-  \caption{Tools provided by seq2pipe}
-  \label{tab:tools}
-  \begin{tabular}{lp{8cm}}
+  \caption{Tools in \texttt{qiime2\_agent.py} (QIIME2 pipeline orchestration)}
+  \label{tab:tools_qiime2}
+  \begin{tabular}{lp{7.5cm}}
     \toprule
     \textbf{Tool Name} & \textbf{Function} \\
     \midrule
     \texttt{inspect\_directory} &
-      Lists files with sizes and automatically identifies
-      FASTQ, QZA, and metadata files \\
+      Lists files with sizes; auto-identifies FASTQ, QZA, metadata \\
     \texttt{read\_file} &
       Reads text files (TSV, CSV, Markdown, etc.) up to 50 lines \\
     \texttt{write\_file} &
-      Writes generated scripts, manifests, and README files to disk \\
+      Writes scripts, manifests, and README files \\
     \texttt{edit\_file} &
-      Replaces a unique string in an existing file (old\_str $\to$ new\_str) \\
+      Replaces a unique string in an existing file \\
     \texttt{generate\_manifest} &
-      Auto-generates a QIIME2 manifest TSV from a FASTQ directory \\
+      Auto-generates QIIME2 manifest TSV from a FASTQ directory \\
     \texttt{run\_command} &
-      Executes shell commands after explicit user confirmation.
-      Automatically detects and prepends the QIIME2 conda environment bin
-      (\texttt{miniforge3/envs/qiime2/bin} etc.) to PATH, enabling QIIME2
-      execution without Docker. Supports autonomous mode via
-      \texttt{SEQ2PIPE\_AUTO\_YES=1} \\
+      Executes shell commands after user confirmation;
+      auto-detects QIIME2 conda bin, supports \texttt{SEQ2PIPE\_AUTO\_YES} \\
     \texttt{check\_system} &
-      Verifies Docker, Ollama, Python, and available disk space \\
+      Verifies Docker, Ollama, Python, and disk space \\
     \texttt{set\_plot\_config} &
-      Configures matplotlib style, palette, DPI, font size, and output format \\
+      Configures matplotlib style, palette, DPI, and output format \\
     \texttt{execute\_python} &
-      Executes Python code for analysis/visualization, saves figures
-      to \texttt{FIGURE\_DIR}, and appends steps to \texttt{ANALYSIS\_LOG} \\
+      Executes Python analysis code; saves figures to \texttt{FIGURE\_DIR};
+      logs steps to \texttt{ANALYSIS\_LOG} \\
     \texttt{build\_report\_tex} &
-      Programmatically builds TeX from \texttt{ANALYSIS\_LOG} and compiles
-      bilingual Japanese/English PDF reports via tectonic \\
+      Builds TeX/PDF reports from \texttt{ANALYSIS\_LOG} via tectonic \\
     \texttt{log\_analysis\_step} &
-      Manually registers a QIIME2 step executed via \texttt{run\_command}
-      into \texttt{ANALYSIS\_LOG}, enabling \texttt{build\_report\_tex}
-      to include it in the final report \\
+      Manually registers QIIME2 steps into \texttt{ANALYSIS\_LOG} \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{The Agent Loop}
+\begin{table}[h]
+  \centering
+  \caption{Tools in \texttt{code\_agent.py} (vibe-local style code generation)}
+  \label{tab:tools_code}
+  \begin{tabular}{lp{8cm}}
+    \toprule
+    \textbf{Tool Name} & \textbf{Function} \\
+    \midrule
+    \texttt{list\_files} &
+      Lists all files in the exported results directory with their sizes \\
+    \texttt{read\_file} &
+      Returns the full content of a file (TSV, CSV, Python, etc.) to the LLM,
+      allowing it to inspect column names and data format \emph{before} writing code \\
+    \texttt{write\_file} &
+      Writes a Python script atomically (via \texttt{mkstemp}+\texttt{replace})
+      to prevent partial writes \\
+    \texttt{run\_python} &
+      Executes the written script using the QIIME2 conda Python interpreter;
+      returns stdout, stderr, and exit code; detects new figure files \\
+    \texttt{install\_package} &
+      Detects \texttt{ModuleNotFoundError}, prompts user for approval,
+      then runs \texttt{pip install} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-The \texttt{run\_agent\_loop()} function controls the core reasoning-action
-cycle. It sends conversation history to the LLM, detects tool calls
-in the response, executes them sequentially, appends results to the
-conversation history, and repeats until the LLM produces a final
-text-only response. An empty-response guard retries automatically
-if the LLM returns neither content nor tool calls (Listing~\ref{lst:loop}).
+\subsection{The Code Agent Loop (vibe-local Style)}
 
-\begin{lstlisting}[language=Python, caption={Core agent loop implementation}, label={lst:loop}]
-def run_agent_loop(messages: list, model: str):
-    while True:
-        response = call_ollama(messages, model, tools=TOOLS)
+\texttt{run\_coding\_agent()} in \texttt{code\_agent.py} implements
+a ``read-first, code-second'' tool-calling loop.
+The LLM is instructed to \textbf{always call a tool immediately}
+(TOOL FIRST principle) and \textbf{never give up on errors}
+(NEVER GIVE UP principle).
+The typical sequence per analysis task is:
 
-        # Guard: retry on empty response
-        if not response["content"] and not response["tool_calls"]:
-            print("Empty response from AI. Retrying...")
-            continue
+\begin{enumerate}[leftmargin=2em]
+  \item \texttt{list\_files} --- discover available exported files
+  \item \texttt{read\_file} --- read a target file to inspect
+    column names and data format
+  \item \texttt{write\_file} --- generate a Python script that uses
+    the exact column names seen in step 2
+  \item \texttt{run\_python} --- execute the script;
+    if exit code $\neq 0$, the LLM reads the traceback and loops
+    back to \texttt{write\_file} to fix the error
+\end{enumerate}
 
-        assistant_msg = {"role": "assistant",
-                         "content": response["content"]}
+Listing~\ref{lst:loop} shows the core loop structure.
 
-        if response["tool_calls"]:
-            tool_results = []
-            for tc in response["tool_calls"]:
-                fn = tc.get("function", {})
-                result = dispatch_tool(fn["name"],
-                                       fn.get("arguments", {}))
-                tool_results.append({"role": "tool",
-                                      "content": result})
-            assistant_msg["tool_calls"] = response["tool_calls"]
-            messages.append(assistant_msg)
-            messages.extend(tool_results)
-            continue   # Query LLM again with tool results
-        else:
-            messages.append(assistant_msg)
-            break      # Text-only response: end loop
+\begin{lstlisting}[language=Python, caption={Core tool-calling loop in run\_coding\_agent()}, label={lst:loop}]
+def run_coding_agent(export_files, user_prompt, ...):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": task}]
+    steps = 0
+    while steps < max_steps:
+        response = call_ollama(messages, model, tools=_TOOL_DEFS)
+        tool_calls = response.get("tool_calls", [])
+
+        if not tool_calls:
+            break  # LLM says it's done
+
+        for tc in tool_calls:
+            fn   = tc["function"]
+            name = fn["name"]
+            args = fn["arguments"]  # dict or JSON string
+            if isinstance(args, str):
+                args = json.loads(args)
+
+            result, new_figs = _exec_tool(name, args, ...)
+            figures.extend(new_figs)
+            messages.append({"role": "tool",
+                              "name": name,
+                              "content": result[:4000]})
+        steps += 1
+
+    return CodeExecutionResult(success=bool(figures), figures=figures)
 \end{lstlisting}
+
+\subsection{The QIIME2 Pipeline Agent Loop}
+
+\texttt{run\_agent\_loop()} in \texttt{qiime2\_agent.py} controls
+the QIIME2 pipeline generation cycle.
+It sends conversation history to the LLM, detects tool calls,
+executes them sequentially, appends results, and repeats until
+the LLM produces a text-only response.
+An empty-response guard retries automatically if the LLM returns
+neither content nor tool calls.
 
 \subsection{Communication with the Ollama API and Error Handling}
 
@@ -487,20 +550,30 @@ Primer trim lengths and truncation positions are automatically
 adjusted based on the detected hypervariable region
 (V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R).
 
-Following QIIME2 analysis, the autonomous exploration mode executes
-five phases of Python downstream analysis:
+Following QIIME2 analysis, the autonomous agent mode (\texttt{--auto})
+executes five phases of Python downstream analysis, producing
+\textbf{14 publication-quality figures}.
+Unlike simple script injection, the code agent first calls
+\texttt{read\_file} on each target TSV to confirm exact column names,
+then writes and executes analysis code.
 
 \begin{enumerate}[leftmargin=2em]
-  \item \textbf{Phase 1 (alpha\_diversity)}:
-    Shannon / Simpson / Chao1 indices with statistical tests
-  \item \textbf{Phase 2 (beta\_diversity)}:
-    Bray-Curtis PCoA with PERMANOVA
+  \item \textbf{Phase 0 (quality)}:
+    Denoising statistics --- input, filtered, denoised, non-chimeric read counts
+  \item \textbf{Phase 1 (alpha diversity)}:
+    Shannon / Chao1 / Simpson / Faith's PD with
+    Mann-Whitney U and Kruskal-Wallis tests
+  \item \textbf{Phase 2 (beta diversity)}:
+    Bray-Curtis PCoA, UniFrac PCoA,
+    CLR-transformed PCA (principal component analysis on compositional data),
+    NMDS (non-metric multidimensional scaling),
+    and rarefaction curves across all available beta-diversity TSV files
   \item \textbf{Phase 3 (taxonomy)}:
-    Phylum/genus-level stacked bar charts and heatmaps
-  \item \textbf{Phase 4 (differential\_abundance)}:
-    All-ASV Mann-Whitney U with Benjamini-Hochberg correction and volcano plot
-  \item \textbf{Phase 5 (machine\_learning)}:
-    Random Forest 5-fold CV with feature importance visualization
+    Phylum-level stacked bar chart (relative abundance),
+    genus-level heatmap with hierarchical clustering,
+    and CLR-transformed phylum bar chart
+  \item \textbf{Phase 4 (sample correlation)}:
+    Pairwise sample correlation matrix with hierarchical clustering heatmap
 \end{enumerate}
 
 Upon completion, \texttt{build\_report\_tex} automatically generates
@@ -595,8 +668,20 @@ seq2pipe achieves the following:
   \item Complete cross-platform support (macOS / Linux / Windows)
   \item Automatic recognition of FASTQ data structure and adaptive pipeline generation
   \item Safe QIIME2 command execution with explicit user confirmation
-  \item Python-based 5-phase downstream analysis (diversity, taxonomy,
-    differential abundance, machine learning)
+  \item \textbf{Vibe-local style tool-calling code agent} that reads actual file
+    contents before writing code, eliminating format-mismatch errors that plagued
+    blind one-shot generation approaches
+  \item \textbf{Automated error correction}: when \texttt{run\_python} fails,
+    the agent reads the traceback, rewrites the script, and retries until
+    \texttt{EXIT CODE: 0} (NEVER GIVE UP policy)
+  \item \textbf{5-phase autonomous analysis producing 14 figures}:
+    quality control, alpha diversity (4 metrics), beta diversity
+    (PCoA + CLR-PCA + NMDS + rarefaction curves), taxonomy (3 chart types),
+    and sample correlation
+  \item \textbf{ModuleNotFoundError auto-recovery}: detects missing packages,
+    prompts user for approval, and runs \texttt{pip install}
+  \item Two operation modes: directed (Mode 1 — natural language prompt)
+    and fully autonomous (Mode 2 — \texttt{--auto} flag)
   \item Automatic bilingual (Japanese/English) TeX/PDF report generation
     from \texttt{ANALYSIS\_LOG} without LLM involvement
   \item Startup language selection UI (Japanese / English)
@@ -613,17 +698,23 @@ seq2pipe achieves the following:
   \item Initial SILVA 138 classifier training requires approximately 30 GB
     of disk space and several hours of computation.
   \item PDF report compilation requires tectonic to be installed separately.
+  \item The QIIME2 pipeline agent (\texttt{qiime2\_agent.py}) does not yet
+    apply the read-first pattern; integrating it with \texttt{code\_agent.py}'s
+    approach is a future goal.
 \end{itemize}
 
 \subsection{Future Directions}
 
 \begin{itemize}
-  \item Implementation of automated command validation and error correction
-  \item Web UI integration (Gradio or Streamlit)
+  \item Web UI integration (Gradio or Streamlit) --- a Streamlit prototype
+    (\texttt{app.py}) is already planned
   \item Support for additional marker genes (ITS, 18S rRNA)
   \item Feedback loop incorporating pipeline execution results
     to iteratively refine parameters
   \item Parallel tool execution for faster autonomous exploration
+  \item Integration of statistical result annotation directly into figures
+  \item Extending the autonomous task list with differential abundance
+    (volcano plots) and machine learning (Random Forest) analyses
 \end{itemize}
 
 % -------------------------------------------------------
@@ -632,12 +723,15 @@ seq2pipe achieves the following:
 
 We have described seq2pipe, an interactive AI agent that integrates
 local LLM inference with the QIIME2 microbiome analysis platform.
-By embedding comprehensive QIIME2 domain knowledge into the system prompt
-and providing 11 specialized tools through Ollama's function calling interface,
-seq2pipe enables researchers to automate an entire 16S rRNA analysis workflow ---
-from raw FASTQ data through statistical analysis, publication-quality figures,
-and bilingual research reports --- entirely offline and without any
-cloud dependencies.
+The system combines two complementary LLM agents:
+\texttt{qiime2\_agent.py} orchestrates 11 specialized tools for
+QIIME2 pipeline generation, while \texttt{code\_agent.py} --- a
+vibe-local-style tool-calling agent with 5 tools --- generates
+accurate Python analysis code by reading actual file contents
+before writing code and automatically correcting errors until success.
+Together they enable researchers to automate an entire 16S rRNA analysis workflow ---
+from raw FASTQ data through 14 publication-quality figures across 5 analysis phases,
+and bilingual research reports --- entirely offline and without any cloud dependencies.
 
 seq2pipe is released as open source under the MIT License and is available at:
 \texttt{https://github.com/Rhizobium-gits/seq2pipe}
