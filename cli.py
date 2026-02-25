@@ -25,7 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
-from code_agent import run_code_agent, CodeExecutionResult
+from code_agent import (
+    run_code_agent, run_auto_agent,
+    CodeExecutionResult, AutoAgentResult,
+)
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
 
 
@@ -77,6 +80,36 @@ def _print_result(result: CodeExecutionResult):
             for line in result.code.splitlines()[:50]:
                 print("  " + line)
     _hr()
+
+
+def _print_auto_result(result: AutoAgentResult):
+    _hr()
+    n_rounds  = len(result.rounds)
+    n_success = sum(1 for r in result.rounds if r.success)
+    n_figs    = len(result.total_figures)
+
+    if result.completed:
+        print(f"✅ 自律解析完了！  ({n_rounds} ラウンド / {n_success} 成功 / 図 {n_figs} 件)")
+    else:
+        print(f"⏹  最大ラウンド数に到達  ({n_rounds} ラウンド / {n_success} 成功 / 図 {n_figs} 件)")
+
+    if result.total_figures:
+        print()
+        print("📊 生成された図:")
+        for f in result.total_figures:
+            print(f"   {f}")
+    _hr()
+
+
+def _select_mode() -> str:
+    """起動モードをインタラクティブに選択する"""
+    print("モードを選択してください:")
+    print()
+    print("  1. 解析モード        やりたい解析を自然言語で指定 → LLM がコード生成・実行")
+    print("  2. 自律エージェント  AI が自ら解析計画を立て、全解析を自動で実行")
+    print()
+    choice = _ask("選択 (1/2)", "1")
+    return choice.strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,11 +297,19 @@ def main():
     parser.add_argument("--output-dir", help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
     parser.add_argument("--model",      help="Ollama モデル名（省略時は自動選択）")
     parser.add_argument("--export-dir", help="既存の exported/ ディレクトリ（コード生成のみ実行）")
+    parser.add_argument("--auto",       action="store_true", help="自律エージェントモードで起動")
+    parser.add_argument("--max-rounds", type=int, default=6, help="自律エージェントの最大ラウンド数（デフォルト 6）")
     args = parser.parse_args()
 
     _print_banner()
 
     model = _select_model(args.model or "")
+
+    # モード選択（--auto フラグで省略可）
+    if args.auto:
+        mode = "2"
+    else:
+        mode = _select_mode()
 
     # 出力ディレクトリを決定
     if args.output_dir:
@@ -291,22 +332,37 @@ def main():
             sys.exit(1)
 
         print(f"📂 エクスポートデータ: {export_dir}")
-        user_prompt = args.prompt or _ask("やりたい解析を入力してください", "")
         _hr()
         print(f"出力先: {output_dir}")
         _hr()
         print()
 
-        result = run_code_agent(
-            export_files=export_files,
-            user_prompt=user_prompt,
-            output_dir=str(Path(export_dir).parent),
-            figure_dir=str(fig_dir),
-            model=model,
-            log_callback=_log,
-            install_callback=_install_callback,
-        )
-        _print_result(result)
+        if mode == "2":
+            print("🤖 自律エージェントモードで解析を開始します")
+            print(f"   最大 {args.max_rounds} ラウンド実行します（Ctrl+C で中断）")
+            print()
+            auto_result = run_auto_agent(
+                export_files=export_files,
+                output_dir=str(Path(export_dir).parent),
+                figure_dir=str(fig_dir),
+                model=model,
+                max_rounds=args.max_rounds,
+                log_callback=_log,
+                install_callback=_install_callback,
+            )
+            _print_auto_result(auto_result)
+        else:
+            user_prompt = args.prompt or _ask("やりたい解析を入力してください", "")
+            result = run_code_agent(
+                export_files=export_files,
+                user_prompt=user_prompt,
+                output_dir=str(Path(export_dir).parent),
+                figure_dir=str(fig_dir),
+                model=model,
+                log_callback=_log,
+                install_callback=_install_callback,
+            )
+            _print_result(result)
         return
 
     # ── マニフェストからフルパイプライン（メインフロー）──────────────
@@ -321,16 +377,20 @@ def main():
         print(f"⚠️  メタデータファイルが見つかりません（スキップ）: {metadata_path}")
         metadata_path = ""
 
-    print()
-    print("やりたい解析を自然言語で入力してください。")
-    print("例: 属レベルの積み上げ棒グラフ、Shannon 多様性のグループ比較、Bray-Curtis PCoA")
-    user_prompt = args.prompt or _ask("解析内容", "")
+    user_prompt = ""
+    if mode != "2":
+        print()
+        print("やりたい解析を自然言語で入力してください。")
+        print("例: 属レベルの積み上げ棒グラフ、Shannon 多様性のグループ比較、Bray-Curtis PCoA")
+        user_prompt = args.prompt or _ask("解析内容", "")
 
     _hr()
     print(f"📂 マニフェスト : {manifest_path}")
     if metadata_path:
         print(f"📋 メタデータ  : {metadata_path}")
     print(f"💾 出力先      : {output_dir}")
+    if mode == "2":
+        print(f"🤖 モード       : 自律エージェント（最大 {args.max_rounds} ラウンド）")
     _hr()
     print()
 
@@ -382,7 +442,8 @@ def main():
 
     # ── STEP 2: LLM による解析コード生成・実行 ────────────────────────
     print("─" * 48)
-    print("  🤖 STEP 2/2 : LLM 解析コード生成・実行")
+    step2_label = "自律エージェント" if mode == "2" else "LLM 解析コード生成・実行"
+    print(f"  🤖 STEP 2/2 : {step2_label}")
     print("─" * 48)
     export_files = get_exported_files(pipeline_result.export_dir)
     total = sum(len(v) for v in export_files.values())
@@ -392,18 +453,34 @@ def main():
             print(f"  [{cat}] {len(paths)} ファイル")
     print()
 
-    result = run_code_agent(
-        export_files=export_files,
-        user_prompt=user_prompt,
-        output_dir=pipeline_result.output_dir,
-        figure_dir=str(fig_dir),
-        metadata_path=metadata_path,
-        model=model,
-        log_callback=_log,
-        install_callback=_install_callback,
-    )
-
-    _print_result(result)
+    if mode == "2":
+        print(f"🤖 自律エージェントモードで解析を開始します")
+        print(f"   最大 {args.max_rounds} ラウンド実行します（Ctrl+C で中断）")
+        print()
+        auto_result = run_auto_agent(
+            export_files=export_files,
+            output_dir=pipeline_result.output_dir,
+            figure_dir=str(fig_dir),
+            metadata_path=metadata_path,
+            model=model,
+            max_rounds=args.max_rounds,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+        _print_auto_result(auto_result)
+    else:
+        user_prompt = args.prompt or _ask("やりたい解析を入力してください", "")
+        result = run_code_agent(
+            export_files=export_files,
+            user_prompt=user_prompt,
+            output_dir=pipeline_result.output_dir,
+            figure_dir=str(fig_dir),
+            metadata_path=metadata_path,
+            model=model,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+        _print_result(result)
 
 
 if __name__ == "__main__":
