@@ -328,6 +328,18 @@ QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
 | `llama3.2:3b` | 4 GB 以上 | 汎用・会話能力高め |
 | `qwen3:8b` | 16 GB 以上 | 最高品質・推論能力も高い |
 
+### 小型モデルへの対応（ロバストネス機能）
+
+7B 以下の小型モデルでは Ollama の tool_calls フォーマットに非対応のことがあります。
+seq2pipe は以下の多層フォールバック機構でこれを自動的に補います:
+
+1. **`_parse_text_tool_calls`**: テキスト本文に埋め込まれた JSON をツール呼び出しとして解析（5 パターン対応）
+2. **Auto-inject `run_python`**: `write_file` で .py ファイルを書いた直後、モデルが `run_python` を呼ぶのを待たずに自動実行
+3. **ステップ 6 フォールバック**: ツール呼び出しループが 5 ステップ進まない場合は自動的に 1 ショット生成（`run_code_agent`）に切り替え
+4. **繰り返し検出**: 同じ 50 文字チャンクが 4 回連続したら生成を打ち切り（無限ループ回避）
+
+これにより、7B モデルでも少なくとも 1 種類以上の図を確実に生成できます。
+
 別のモデルを使うには:
 
 ```bash
@@ -868,6 +880,18 @@ QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
 | `qwen2.5-coder:3b` | 4 GB+ | Lightweight and fast |
 | `llama3.2:3b` | 4 GB+ | General purpose, good conversation |
 | `qwen3:8b` | 16 GB+ | Highest quality, strong reasoning |
+
+### Small model robustness
+
+Models smaller than 7B may not support Ollama's `tool_calls` format.
+seq2pipe handles this automatically through a multi-layer fallback system:
+
+1. **`_parse_text_tool_calls`**: Parses JSON embedded in the response text as tool calls (5 pattern variants)
+2. **Auto-inject `run_python`**: After `write_file` produces a `.py` file, immediately executes it without waiting for the LLM to call `run_python`
+3. **Step-6 fallback**: If the tool-calling loop makes no progress after 5 steps, automatically switches to 1-shot code generation (`run_code_agent`)
+4. **Repetition detector**: Truncates generation when the same 50-character chunk repeats 4 consecutive times (prevents infinite loops)
+
+This ensures that even 7B models reliably produce at least one figure.
 
 To use a different model:
 

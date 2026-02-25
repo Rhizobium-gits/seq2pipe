@@ -434,6 +434,49 @@ def run_coding_agent(export_files, user_prompt, ...):
     return CodeExecutionResult(success=bool(figures), figures=figures)
 \end{lstlisting}
 
+\subsection{Robustness Enhancements for Small LLMs}
+
+Smaller models (7B parameters and below) often do not emit structured
+\texttt{tool\_calls} objects via the Ollama API; instead, they embed
+JSON tool invocations as plain text in the response body.
+seq2pipe handles this through a four-layer fallback system implemented
+in \texttt{run\_coding\_agent()}:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Text-based tool call parser (\texttt{\_parse\_text\_tool\_calls})}:
+    When \texttt{tool\_calls} is empty, the response body is searched
+    for JSON objects using five heuristic patterns:
+    (a) \texttt{```json} code blocks,
+    (b) the entire response as a JSON object,
+    (c) inline regex scan for \texttt{"name": "..."} patterns,
+    (d) name-less JSON objects inferred as \texttt{write\_file}/\texttt{list\_files}
+        by key inspection, and
+    (e) a lenient regex-based broken-JSON extractor.
+
+  \item \textbf{Auto-inject \texttt{run\_python}}:
+    Immediately after \texttt{write\_file} successfully writes a
+    \texttt{.py} file, \texttt{run\_python} is automatically executed
+    without waiting for the LLM to call it --- avoiding the common
+    failure mode where small models write a script but forget to run it.
+
+  \item \textbf{Step-6 fallback to 1-shot generation}:
+    A \texttt{\_run\_python\_count} counter tracks how many times
+    \texttt{run\_python} has been called (both via tool calls and
+    auto-inject). If no execution has occurred after 5 steps,
+    \texttt{run\_coding\_agent()} falls back to \texttt{run\_code\_agent()},
+    which performs 1-shot code generation with up to 3 error-correction
+    retries --- ensuring figure output even when the tool-calling loop stalls.
+
+  \item \textbf{Repetition detector in \texttt{call\_ollama()}}:
+    A sliding-window check truncates generation when the same 50-character
+    chunk appears four consecutive times, or when total output exceeds
+    20\,000 characters --- preventing infinite loops caused by degenerate
+    model outputs.
+\end{enumerate}
+
+Together, these mechanisms guarantee that at least one analysis figure
+is produced regardless of model size or Ollama version.
+
 \subsection{The QIIME2 Pipeline Agent Loop}
 
 \texttt{run\_agent\_loop()} in \texttt{qiime2\_agent.py} controls
@@ -680,6 +723,10 @@ seq2pipe achieves the following:
     and sample correlation
   \item \textbf{ModuleNotFoundError auto-recovery}: detects missing packages,
     prompts user for approval, and runs \texttt{pip install}
+  \item \textbf{Small-LLM robustness}: four-layer fallback system
+    (\texttt{\_parse\_text\_tool\_calls}, auto-inject \texttt{run\_python},
+    step-6 1-shot fallback, repetition detector) ensures reliable figure
+    generation even with 7B parameter models
   \item Two operation modes: directed (Mode 1 — natural language prompt)
     and fully autonomous (Mode 2 — \texttt{--auto} flag)
   \item Automatic bilingual (Japanese/English) TeX/PDF report generation

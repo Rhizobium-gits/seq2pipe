@@ -403,6 +403,39 @@ def run_coding_agent(export_files, user_prompt, ...):
     return CodeExecutionResult(success=bool(figures), figures=figures)
 \end{lstlisting}
 
+\subsection{小型モデル向けロバストネス機能}
+
+7B 以下の小型 LLM は Ollama の \texttt{tool\_calls} フォーマットに非対応の場合があり、
+ツール呼び出しをプレーンテキストの JSON として出力する。
+seq2pipe はこれを \texttt{run\_coding\_agent()} 内の 4 層フォールバック機構で自動的に補う。
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{テキストベースツール呼び出しパーサ（\texttt{\_parse\_text\_tool\_calls})}:
+    \texttt{tool\_calls} が空のとき、応答本文を 5 つのヒューリスティックパターンで検索し
+    JSON ツール呼び出しを抽出する:
+    (a) \texttt{```json} コードブロック、
+    (b) 応答全体を JSON として解析、
+    (c) \texttt{"name": "..."} パターンのインライン正規表現スキャン、
+    (d) name キーなし JSON をキー名から \texttt{write\_file}/\texttt{list\_files} として推論、
+    (e) 壊れた JSON を正規表現で抽出する寛容なパーサ。
+
+  \item \textbf{Auto-inject \texttt{run\_python}}:
+    \texttt{write\_file} が \texttt{.py} ファイルを書き込んだ直後、
+    モデルが \texttt{run\_python} を呼ぶのを待たずに自動実行する。
+    これにより「スクリプトは書いたが実行を忘れる」という小型モデルの典型的な失敗を回避する。
+
+  \item \textbf{ステップ 6 フォールバック（1 ショット生成）}:
+    \texttt{\_run\_python\_count} カウンタが 5 ステップ後もゼロのとき（ループが進まない場合）、
+    \texttt{run\_coding\_agent()} は自動的に \texttt{run\_code\_agent()} にフォールバックし、
+    最大 3 回のエラー修正リトライ付き 1 ショット生成を行う。
+
+  \item \textbf{繰り返し検出（\texttt{call\_ollama()} 内）}:
+    同じ 50 文字チャンクが 4 回連続して現れた場合、または応答が 20,000 文字を超えた場合に
+    生成を強制終了し、無限ループを防ぐ。
+\end{enumerate}
+
+これらの機構により、7B モデルでも少なくとも 1 種類以上の図を確実に生成できる。
+
 \subsection{QIIME2 パイプラインエージェントループ}
 
 \texttt{qiime2\_agent.py} の \texttt{run\_agent\_loop()} は
@@ -577,6 +610,10 @@ seq2pipe は以下の目標を達成した。
     分類組成（3 図）・サンプル相関
   \item \textbf{ModuleNotFoundError 自動復旧}:
     不足パッケージを検出してユーザーに承認を求め、\texttt{pip install} を実行
+  \item \textbf{小型 LLM 向けロバストネス機能}: 4 層フォールバック機構
+    （\texttt{\_parse\_text\_tool\_calls}・Auto-inject \texttt{run\_python}・
+    ステップ 6 の 1 ショットフォールバック・繰り返し検出）により、
+    7B モデルでも確実に図を生成
   \item 2 つの操作モード: 指定解析（モード 1）・完全自律（モード 2 / \texttt{--auto}）
   \item \texttt{ANALYSIS\_LOG} からの日英 TeX/PDF レポート自動生成（LLM 不使用）
   \item 日本語 / 英語の起動時言語選択 UI
