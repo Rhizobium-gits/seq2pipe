@@ -132,13 +132,57 @@ _BANNER = r"""
 """
 
 def _print_banner():
-    CYAN  = "\033[96m"
-    GREEN = "\033[92m"
-    DIM   = "\033[2m"
+    import time
+
     RESET = "\033[0m"
     BOLD  = "\033[1m"
+    DIM   = "\033[2m"
+    CYAN  = "\033[96m"
+    HIDE  = "\033[?25l"   # カーソル非表示
+    SHOW  = "\033[?25h"   # カーソル表示
+    CLR   = "\033[J"      # カーソル以降を消去
 
-    print(CYAN + _BANNER + RESET)
+    # アニメーション: (カラーコード, 表示秒数)
+    # 蛍光灯がチカチカしながら点灯するイメージ
+    _FLICKER = [
+        ("\033[90m",   0.09),   # 暗い（消灯）
+        ("\033[96;1m", 0.07),   # 明るいシアン（点灯）
+        ("\033[90m",   0.05),   # 暗い
+        ("\033[96;1m", 0.08),   # 点灯
+        ("\033[90m",   0.04),   # 暗い
+        ("\033[2m",    0.05),   # うっすら
+        ("\033[96;1m", 0.07),   # 点灯
+        ("\033[90m",   0.03),   # 暗い
+        ("\033[96m",   0.12),   # 安定（通常シアン）
+    ]
+
+    is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+    if not is_tty:
+        # パイプ・リダイレクト時はアニメーションなし
+        print(CYAN + _BANNER + RESET)
+    else:
+        n_up = _BANNER.count("\n") + 1   # print() が加える改行分 +1
+        UP   = f"\033[{n_up}A"
+
+        sys.stdout.write(HIDE)
+        sys.stdout.flush()
+        try:
+            # 最初は暗い状態で描画
+            sys.stdout.write("\033[90m" + _BANNER + RESET)
+            sys.stdout.flush()
+            time.sleep(0.08)
+
+            for color, delay in _FLICKER:
+                sys.stdout.write(UP + CLR + color + _BANNER + RESET)
+                sys.stdout.flush()
+                time.sleep(delay)
+        except Exception:
+            pass
+        finally:
+            sys.stdout.write(SHOW)
+            sys.stdout.flush()
+
     print(f"  {DIM}sequence -> pipeline{RESET}")
     print()
     print(f"  {BOLD}QIIME2 AI Analysis Agent{RESET}")
