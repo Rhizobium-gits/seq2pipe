@@ -301,7 +301,7 @@ def main():
     parser.add_argument("--model",      help="Ollama モデル名（省略時は自動選択）")
     parser.add_argument("--export-dir", help="既存の exported/ ディレクトリ（コード生成のみ実行）")
     parser.add_argument("--auto",       action="store_true", help="自律エージェントモードで起動")
-    parser.add_argument("--max-rounds", type=int, default=6, help="自律エージェントの最大ラウンド数（デフォルト 6）")
+    parser.add_argument("--max-rounds", type=int, default=10, help="自律エージェントの最大ラウンド数（デフォルト 10）")
     args = parser.parse_args()
 
     _print_banner()
@@ -354,7 +354,7 @@ def main():
             output_dir=str(Path(export_dir).parent),
             figure_dir=str(fig_dir),
             model=model,
-            max_steps=args.max_rounds * 3,   # ラウンド数×3 ステップ
+            max_steps=args.max_rounds * 4,   # ラウンド数×4 ステップ（list+read+write+run）
             log_callback=_log,
             install_callback=_install_callback,
         )
@@ -461,7 +461,7 @@ def main():
         figure_dir=str(fig_dir),
         metadata_path=metadata_path,
         model=model,
-        max_steps=args.max_rounds * 3,    # ラウンド数×3 ステップ
+        max_steps=args.max_rounds * 4,    # ラウンド数×4 ステップ（list+read+write+run）
         log_callback=_log,
         install_callback=_install_callback,
     )
