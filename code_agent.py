@@ -82,6 +82,109 @@ def _build_prompt(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# マニフェスト用プロンプト構築
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_manifest_prompt(
+    manifest_path: str,
+    user_prompt: str,
+    output_dir: str,
+    figure_dir: str,
+    metadata_path: str = "",
+    plot_config: Optional[dict] = None,
+) -> str:
+    """マニフェストファイルからフルパイプラインを実行するプロンプトを構築"""
+    import csv
+
+    # マニフェストを読んでサンプル数・構造を確認
+    samples = []
+    try:
+        with open(manifest_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                sid = row.get("sample-id") or row.get("sampleid") or ""
+                if sid:
+                    samples.append(sid)
+    except Exception:
+        pass
+
+    qiime_bin = (
+        str(Path(_agent.QIIME2_CONDA_BIN) / "qiime")
+        if _agent.QIIME2_CONDA_BIN and Path(_agent.QIIME2_CONDA_BIN).exists()
+        else "qiime"
+    )
+    biom_bin = (
+        str(Path(_agent.QIIME2_CONDA_BIN) / "biom")
+        if _agent.QIIME2_CONDA_BIN and Path(_agent.QIIME2_CONDA_BIN).exists()
+        else "biom"
+    )
+
+    cfg = plot_config or {}
+    sample_preview = ", ".join(samples[:5]) + ("..." if len(samples) > 5 else "")
+
+    lines = [
+        "あなたはQIIME2とPythonを使ったマイクロバイオーム解析の専門家です。",
+        "以下のマニフェストファイルからQIIME2パイプラインを実行し、",
+        "解析・可視化まで行う完全なPythonスクリプトを1つ書いてください。",
+        "",
+        "## QIIME2 実行環境",
+        f"qiime コマンド: {qiime_bin}",
+        f"biom コマンド: {biom_bin}",
+        "",
+        "## マニフェストファイル",
+        f"パス: {manifest_path}",
+        "形式: PairedEndFastqManifestPhred33V2（タブ区切り、ヘッダ: sample-id / forward-absolute-filepath / reverse-absolute-filepath）",
+        f"サンプル数: {len(samples)}",
+        f"サンプルID例: {sample_preview}",
+        "",
+    ]
+
+    if metadata_path:
+        lines += [
+            "## メタデータファイル",
+            f"パス: {metadata_path}",
+            "(sample-id 列とグループ情報を含む TSV)",
+            "",
+        ]
+
+    lines += [
+        f"## 出力先ディレクトリ: {output_dir}",
+        f"## 図の保存先ディレクトリ: {figure_dir}",
+        f"## DPI: {cfg.get('dpi', 150)}",
+        f"## figsize: {cfg.get('figsize', [10, 6])}",
+        "",
+        "## ユーザーの要求",
+        user_prompt if user_prompt.strip() else (
+            "属レベル相対存在量の積み上げ棒グラフ、Shannon α多様性、Bray-Curtis PCoA を生成してください。"
+        ),
+        "",
+        "## コードの要件",
+        "- import matplotlib; matplotlib.use('Agg') を最初に書く",
+        "- QIIME2 コマンドは subprocess.run([qiime_cmd, ...], check=True, capture_output=True, text=True) で実行する",
+        "  例: result = subprocess.run(['/path/to/qiime', 'tools', 'import', ...], check=True, capture_output=True, text=True)",
+        "- 各ステップの returncode != 0 のとき stderr を表示して sys.exit(1) で停止する",
+        "- 図は plt.savefig() で保存し plt.show() は使わない",
+        "- タイトル・ラベルは英語で書く（日本語フォント依存を避けるため）",
+        "- コードのみを出力する。説明文は不要",
+        "- コードは ```python ... ``` で囲む",
+        "",
+        "## QIIME2パイプラインの推奨フロー",
+        "1. qiime tools import でマニフェストからインポート",
+        "   --type 'SampleData[PairedEndSequencesWithQuality]'",
+        "   --input-format PairedEndFastqManifestPhred33V2",
+        "2. qiime dada2 denoise-paired でデノイジング",
+        "   推奨: --p-trim-left-f 0 --p-trim-left-r 0 --p-trunc-len-f 250 --p-trunc-len-r 200 --p-n-threads 0",
+        "3. qiime taxa collapse --p-level 6 で属レベルに集約",
+        "4. qiime tools export で feature-table.biom をエクスポート",
+        "5. biom convert -i feature-table.biom -o feature-table.tsv --to-tsv でTSVに変換",
+        "6. pandasでTSVを読み込んで相対存在量を計算・matplotlib で可視化",
+        "7. 多様性解析が必要な場合は qiime diversity core-metrics-phylogenetic などを使用",
+    ]
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # コード抽出
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -335,6 +438,157 @@ def run_code_agent(
 
         # LLM にエラーを渡してコード修正を依頼
         _log(f"エラーを LLM に渡してコード修正を依頼中...")
+        messages.append({
+            "role": "assistant",
+            "content": f"```python\n{last_code}\n```",
+        })
+        messages.append({
+            "role": "user",
+            "content": (
+                f"The code produced the following error:\n"
+                f"```\n{stderr[:1500]}\n```\n\n"
+                f"Please fix the code and output the complete corrected version "
+                f"wrapped in ```python ... ```."
+            ),
+        })
+
+        try:
+            fix_response = _agent.call_ollama(messages, model)
+        except Exception as e:
+            _log(f"Ollama 接続エラー: {e}")
+            break
+
+        fixed = _extract_code(fix_response.get("content", ""))
+        if fixed:
+            last_code = fixed
+            _log(f"修正済みコード受信 ({len(last_code.splitlines())} 行)")
+        else:
+            _log("コード修正に失敗しました。")
+            break
+
+    return CodeExecutionResult(
+        success=False,
+        stdout="",
+        stderr=last_stderr,
+        code=last_code,
+        figures=[],
+        retry_count=max_retries,
+        error_message=last_stderr[:500],
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# マニフェストエージェント（フルパイプライン + 解析）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_manifest_agent(
+    manifest_path: str,
+    user_prompt: str,
+    output_dir: str,
+    figure_dir: str,
+    metadata_path: str = "",
+    model: Optional[str] = None,
+    max_retries: int = 3,
+    plot_config: Optional[dict] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+    install_callback: Optional[Callable[[str], bool]] = None,
+) -> CodeExecutionResult:
+    """
+    マニフェストファイルから QIIME2 パイプライン + 解析コードを
+    LLM に生成させて実行するエージェント。
+
+    Parameters
+    ----------
+    manifest_path : str
+        QIIME2 形式のマニフェスト TSV（PairedEndFastqManifestPhred33V2）
+    user_prompt : str
+        やりたい解析の自然言語指示
+    output_dir : str
+        QIIME2 成果物・中間ファイルの出力先
+    figure_dir : str
+        図の保存先
+    """
+    if model is None:
+        model = _agent.DEFAULT_MODEL
+
+    def _log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    _log("LLM にパイプライン＋解析コードの生成を依頼中...")
+
+    system_msg = {
+        "role": "system",
+        "content": (
+            "You are a microbiome analysis expert using QIIME2 and Python. "
+            "Generate only Python code without any explanation. "
+            "Wrap code in ```python ... ```."
+        ),
+    }
+    user_msg = {
+        "role": "user",
+        "content": _build_manifest_prompt(
+            manifest_path, user_prompt, output_dir, figure_dir,
+            metadata_path, plot_config,
+        ),
+    }
+    messages = [system_msg, user_msg]
+
+    try:
+        response = _agent.call_ollama(messages, model)
+    except Exception as e:
+        return CodeExecutionResult(
+            success=False,
+            error_message=f"Ollama 接続エラー: {e}",
+        )
+
+    code = _extract_code(response.get("content", ""))
+    if not code:
+        return CodeExecutionResult(
+            success=False,
+            error_message="LLM がコードを生成しませんでした",
+        )
+    _log(f"コード生成完了 ({len(code.splitlines())} 行)")
+
+    last_code = code
+    last_stderr = ""
+
+    for attempt in range(max_retries + 1):
+        _log(f"コード実行中... (試行 {attempt + 1}/{max_retries + 1})")
+
+        success, stdout, stderr, new_figs = _run_code(
+            last_code, output_dir, figure_dir, log_callback
+        )
+
+        if success:
+            _log(f"実行成功。生成された図: {len(new_figs)} 件")
+            return CodeExecutionResult(
+                success=True,
+                stdout=stdout,
+                stderr=stderr,
+                code=last_code,
+                figures=new_figs,
+                retry_count=attempt,
+            )
+
+        last_stderr = stderr
+
+        missing_pkg = _detect_missing_module(stderr)
+        if missing_pkg:
+            _log(f"未インストールパッケージを検出: {missing_pkg}")
+            approved = install_callback(missing_pkg) if install_callback else False
+            if approved:
+                ok = pip_install(missing_pkg, log_callback)
+                if ok:
+                    _log(f"{missing_pkg} のインストール完了。再実行します。")
+                    continue
+            else:
+                _log(f"{missing_pkg} のインストールをスキップしました。")
+
+        if attempt >= max_retries:
+            break
+
+        _log("エラーを LLM に渡してコード修正を依頼中...")
         messages.append({
             "role": "assistant",
             "content": f"```python\n{last_code}\n```",

@@ -4,33 +4,36 @@ cli.py
 ======
 seq2pipe ターミナル版エントリポイント。
 
-使い方:
-    ~/miniforge3/envs/qiime2/bin/python cli.py
-    ~/miniforge3/envs/qiime2/bin/python cli.py --fastq-dir /path/to/fastq
+基本的な使い方:
+    ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py
+
+引数で指定する場合:
+    ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py \\
+        --manifest manifest.tsv \\
+        --prompt "属レベルの積み上げ棒グラフと Shannon 多様性を作りたい"
+
+既存エクスポートデータだけを使う場合:
+    ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py \\
+        --export-dir ~/seq2pipe_results/20240101_120000/exported/
 """
 
 import sys
 import argparse
-import textwrap
+import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
-from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
-from code_agent import run_code_agent
+from code_agent import run_manifest_agent, run_code_agent, CodeExecutionResult
+from pipeline_runner import get_exported_files
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ターミナル表示ユーティリティ
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _hr(char="─", width=60):
-    print(char * width)
-
-def _section(title: str):
-    _hr()
-    print(f"  {title}")
-    _hr()
+def _hr(width=60):
+    print("─" * width)
 
 def _ask(prompt: str, default: str = "") -> str:
     hint = f" [{default}]" if default else ""
@@ -48,20 +51,38 @@ def _ask_bool(prompt: str, default: bool = True) -> bool:
     except (EOFError, KeyboardInterrupt):
         print()
         sys.exit(0)
-    if not val:
-        return default
-    return val.startswith("y")
+    return default if not val else val.startswith("y")
 
 def _log(line: str):
     print(line, flush=True)
 
+def _install_callback(pkg: str) -> bool:
+    return _ask_bool(f"\n⚠️  パッケージ '{pkg}' が必要です。インストールしますか?", True)
+
+def _print_result(result: CodeExecutionResult):
+    _hr()
+    if result.success:
+        print("✅ 解析完了！")
+        if result.figures:
+            print(f"\n📊 生成された図 ({len(result.figures)} 件):")
+            for f in result.figures:
+                print(f"   {f}")
+    else:
+        print(f"❌ 実行失敗（{result.retry_count} 回試行）")
+        if result.error_message:
+            print(f"\nエラー:\n{result.error_message[:600]}")
+        if result.code:
+            print("\n--- 最後に生成されたコード（先頭50行）---")
+            for line in result.code.splitlines()[:50]:
+                print("  " + line)
+    _hr()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Ollama 接続確認
+# Ollama 確認 + モデル選択
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _check_ollama() -> str:
-    """Ollama の動作確認 + モデル選択。モデル名を返す。"""
+def _select_model(preferred: str = "") -> str:
     if not _agent.check_ollama_running():
         print("❌ Ollama が起動していません。")
         print("   別のターミナルで: ollama serve")
@@ -69,9 +90,13 @@ def _check_ollama() -> str:
 
     models = _agent.get_available_models()
     if not models:
-        print("❌ Ollama にモデルがありません。")
+        print(f"❌ Ollama にモデルがありません。")
         print(f"   ollama pull {_agent.DEFAULT_MODEL}")
         sys.exit(1)
+
+    if preferred and preferred in models:
+        print(f"✅ モデル: {preferred}")
+        return preferred
 
     if len(models) == 1:
         print(f"✅ モデル: {models[0]}")
@@ -80,131 +105,11 @@ def _check_ollama() -> str:
     print("利用可能なモデル:")
     for i, m in enumerate(models):
         print(f"  {i + 1}. {m}")
-    raw = _ask(f"モデルを選択 (1-{len(models)})", default="1")
+    raw = _ask(f"モデルを選択 (1-{len(models)})", "1")
     try:
-        idx = int(raw) - 1
-        return models[max(0, min(idx, len(models) - 1))]
-    except ValueError:
+        return models[int(raw) - 1]
+    except (ValueError, IndexError):
         return models[0]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# パラメータ入力
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _collect_params(args: argparse.Namespace) -> PipelineConfig:
-    _section("📂 入力ファイル")
-
-    fastq_dir = args.fastq_dir or _ask("FASTQ ディレクトリ")
-    if not fastq_dir or not Path(fastq_dir).exists():
-        print(f"❌ ディレクトリが存在しません: {fastq_dir}")
-        sys.exit(1)
-
-    metadata_path = args.metadata or _ask("メタデータ TSV (省略可)", "")
-    classifier_path = args.classifier or _ask("分類器 .qza (省略可)", "")
-
-    _section("⚙️  デノイジング設定")
-    paired_end  = _ask_bool("ペアエンド?", True)
-    trim_left_f = int(_ask("trim-left-f",  str(args.trim_left_f)))
-    trunc_len_f = int(_ask("trunc-len-f",  str(args.trunc_len_f)))
-    if paired_end:
-        trim_left_r = int(_ask("trim-left-r", str(args.trim_left_r)))
-        trunc_len_r = int(_ask("trunc-len-r", str(args.trunc_len_r)))
-    else:
-        trim_left_r, trunc_len_r = 0, 0
-
-    _section("🌿 多様性解析設定")
-    n_threads      = int(_ask("スレッド数",   str(args.n_threads)))
-    sampling_depth = int(_ask("サンプリング深度", str(args.sampling_depth)))
-    group_column   = args.group_column or _ask("グループ列名 (省略可)", "")
-
-    return PipelineConfig(
-        fastq_dir=fastq_dir,
-        paired_end=paired_end,
-        trim_left_f=trim_left_f,
-        trim_left_r=trim_left_r,
-        trunc_len_f=trunc_len_f,
-        trunc_len_r=trunc_len_r,
-        metadata_path=metadata_path,
-        classifier_path=classifier_path,
-        n_threads=n_threads,
-        sampling_depth=sampling_depth,
-        group_column=group_column,
-        output_dir=args.output_dir or "",
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# パッケージインストール許可コールバック
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _install_callback(pkg: str) -> bool:
-    return _ask_bool(f"\n⚠️  パッケージ '{pkg}' が必要です。インストールしますか?", True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# コード生成のみモード
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _run_code_only_mode(args: argparse.Namespace, model: str):
-    export_dir = args.export_dir or _ask("エクスポートディレクトリ (exported/)")
-    if not export_dir or not Path(export_dir).exists():
-        print(f"❌ ディレクトリが存在しません: {export_dir}")
-        sys.exit(1)
-
-    export_files = get_exported_files(export_dir)
-    total = sum(len(v) for v in export_files.values())
-    if total == 0:
-        print(f"❌ エクスポートファイルが見つかりません: {export_dir}")
-        sys.exit(1)
-
-    print(f"✅ エクスポートファイル: {total} 件")
-    for cat, paths in export_files.items():
-        if paths:
-            print(f"   [{cat}] {len(paths)} ファイル")
-
-    _section("💬 解析プロンプト")
-    print("LLM に行わせる解析を自然言語で入力してください。")
-    print("(空 Enter でデフォルト: 属レベル棒グラフ・α多様性・PCoA)")
-    user_prompt = _ask("プロンプト", "")
-
-    fig_dir = str(Path(export_dir).parent / "figures")
-    out_dir = str(Path(export_dir).parent)
-
-    _section("🤖 コード生成・実行")
-    result = run_code_agent(
-        export_files=export_files,
-        user_prompt=user_prompt,
-        output_dir=out_dir,
-        figure_dir=fig_dir,
-        model=model,
-        log_callback=_log,
-        install_callback=_install_callback,
-    )
-
-    _print_code_result(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 結果表示
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _print_code_result(result):
-    _hr()
-    if result.success:
-        print(f"✅ コード実行成功！")
-        if result.figures:
-            print(f"📊 生成された図 ({len(result.figures)} 件):")
-            for f in result.figures:
-                print(f"   {f}")
-    else:
-        print(f"❌ コード実行失敗（{result.retry_count} 回試行）")
-        if result.error_message:
-            print("\n--- エラー ---")
-            print(result.error_message[:500])
-        print("\n--- 最後のコード ---")
-        print(textwrap.indent(result.code[:1000], "  "))
-    _hr()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,24 +119,14 @@ def _print_code_result(result):
 def main():
     parser = argparse.ArgumentParser(
         prog="seq2pipe",
-        description="QIIME2 AI Agent — ターミナル版",
+        description="seq2pipe — マニフェスト TSV と自然言語プロンプトで QIIME2 + 解析を自動実行",
     )
-    parser.add_argument("--fastq-dir",       help="FASTQ ディレクトリ")
-    parser.add_argument("--metadata",        help="メタデータ TSV")
-    parser.add_argument("--classifier",      help="分類器 .qza")
-    parser.add_argument("--output-dir",      help="出力ディレクトリ（省略時は自動生成）")
-    parser.add_argument("--trim-left-f",     type=int, default=17)
-    parser.add_argument("--trim-left-r",     type=int, default=21)
-    parser.add_argument("--trunc-len-f",     type=int, default=270)
-    parser.add_argument("--trunc-len-r",     type=int, default=220)
-    parser.add_argument("--n-threads",       type=int, default=4)
-    parser.add_argument("--sampling-depth",  type=int, default=5000)
-    parser.add_argument("--group-column",    default="")
-    parser.add_argument("--prompt",          help="解析プロンプト（省略時は対話入力）")
-    parser.add_argument("--export-dir",      help="コード生成のみモード用: exported/ のパス")
-    parser.add_argument("--code-only",       action="store_true",
-                        help="パイプラインをスキップしてコード生成のみ実行")
-    parser.add_argument("--model",           help="Ollama モデル名")
+    parser.add_argument("--manifest",   help="マニフェスト TSV のパス")
+    parser.add_argument("--metadata",   help="メタデータ TSV のパス（省略可）")
+    parser.add_argument("--prompt",     help="やりたい解析の内容（省略時は対話入力）")
+    parser.add_argument("--output-dir", help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
+    parser.add_argument("--model",      help="Ollama モデル名（省略時は自動選択）")
+    parser.add_argument("--export-dir", help="既存の exported/ ディレクトリ（コード生成のみ実行）")
     args = parser.parse_args()
 
     print()
@@ -240,56 +135,84 @@ def main():
     print("=" * 60)
     print()
 
-    # Ollama 確認 + モデル選択
-    model = args.model or _check_ollama()
+    model = _select_model(args.model or "")
 
-    # ── コード生成のみモード ──────────────────────────────────────────
-    if args.code_only or args.export_dir:
-        _run_code_only_mode(args, model)
-        return
-
-    # ── フルパイプラインモード ────────────────────────────────────────
-    config = _collect_params(args)
-
-    _section("🚀 QIIME2 パイプライン実行")
-    pipeline_result = run_pipeline(config=config, log_callback=_log)
-
-    _hr()
-    if pipeline_result.success:
-        print(f"✅ パイプライン完了 → {pipeline_result.output_dir}")
-        for step in pipeline_result.completed_steps:
-            print(f"   {step}")
+    # 出力ディレクトリを決定
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
     else:
-        print(f"❌ パイプライン失敗")
-        print(pipeline_result.error_message[:500])
-        if not _ask_bool("失敗しましたが、コード生成を続けますか?", False):
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path.home() / "seq2pipe_results" / ts
+    fig_dir = output_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 既存エクスポートデータからコード生成のみ ─────────────────────
+    if args.export_dir:
+        export_dir = args.export_dir
+        if not Path(export_dir).exists():
+            print(f"❌ ディレクトリが存在しません: {export_dir}")
+            sys.exit(1)
+        export_files = get_exported_files(export_dir)
+        if not any(export_files.values()):
+            print(f"❌ エクスポートファイルが見つかりません: {export_dir}")
             sys.exit(1)
 
-    # ── 解析プロンプト ────────────────────────────────────────────────
-    _section("💬 解析プロンプト")
-    print("LLM に行わせる解析を自然言語で入力してください。")
-    print("(空 Enter でデフォルト: 属レベル棒グラフ・α多様性・PCoA)")
-    user_prompt = args.prompt or _ask("プロンプト", "")
+        print(f"📂 エクスポートデータ: {export_dir}")
+        user_prompt = args.prompt or _ask("やりたい解析を入力してください", "")
+        _hr()
+        print(f"出力先: {output_dir}")
+        _hr()
+        print()
 
-    # ── コード生成・実行 ──────────────────────────────────────────────
-    _section("🤖 コード生成・実行")
-    export_files = get_exported_files(pipeline_result.export_dir)
-    total = sum(len(v) for v in export_files.values())
-    print(f"エクスポートファイル: {total} 件")
+        result = run_code_agent(
+            export_files=export_files,
+            user_prompt=user_prompt,
+            output_dir=str(Path(export_dir).parent),
+            figure_dir=str(fig_dir),
+            model=model,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+        _print_result(result)
+        return
 
-    fig_dir = str(Path(pipeline_result.output_dir) / "figures")
-    code_result = run_code_agent(
-        export_files=export_files,
+    # ── マニフェストからフルパイプライン（メインフロー）──────────────
+    print("マニフェスト TSV（sample-id / forward / reverse のパスを含む）を指定してください。")
+    manifest_path = args.manifest or _ask("マニフェスト TSV のパス")
+    if not manifest_path or not Path(manifest_path).exists():
+        print(f"❌ ファイルが存在しません: {manifest_path}")
+        sys.exit(1)
+
+    metadata_path = args.metadata or _ask("メタデータ TSV のパス（省略可）", "")
+    if metadata_path and not Path(metadata_path).exists():
+        print(f"⚠️  メタデータファイルが見つかりません（スキップ）: {metadata_path}")
+        metadata_path = ""
+
+    print()
+    print("やりたい解析を自然言語で入力してください。")
+    print("例: 属レベルの積み上げ棒グラフ、Shannon 多様性のグループ比較、Bray-Curtis PCoA")
+    user_prompt = args.prompt or _ask("解析内容", "")
+
+    _hr()
+    print(f"📂 マニフェスト : {manifest_path}")
+    if metadata_path:
+        print(f"📋 メタデータ  : {metadata_path}")
+    print(f"💾 出力先      : {output_dir}")
+    _hr()
+    print()
+
+    result = run_manifest_agent(
+        manifest_path=manifest_path,
         user_prompt=user_prompt,
-        output_dir=pipeline_result.output_dir,
-        figure_dir=fig_dir,
-        metadata_path=config.metadata_path,
+        output_dir=str(output_dir),
+        figure_dir=str(fig_dir),
+        metadata_path=metadata_path,
         model=model,
         log_callback=_log,
         install_callback=_install_callback,
     )
 
-    _print_code_result(code_result)
+    _print_result(result)
 
 
 if __name__ == "__main__":
