@@ -46,37 +46,77 @@ def _build_prompt(
     plot_config: Optional[dict] = None,
 ) -> str:
     """LLM へのコード生成プロンプトを組み立てる"""
+    cfg = plot_config or {}
+    dpi     = cfg.get("dpi", 150)
+    figsize = cfg.get("figsize", [10, 6])
+
     lines = [
-        "あなたはマイクロバイオーム解析の専門家です。",
-        "以下のエクスポート済み QIIME2 データを使って解析する Python コードを書いてください。",
+        "You are a microbiome bioinformatics expert.",
+        "Write a single, complete, self-contained Python script that analyzes and visualizes",
+        "the QIIME2-exported data listed below.",
         "",
-        "## 利用可能なファイル",
+        "## Available files",
     ]
     for category, paths in export_files.items():
         for p in paths:
             lines.append(f"  [{category}] {p}")
-
     if metadata_path:
         lines.append(f"  [metadata] {metadata_path}")
 
-    cfg = plot_config or {}
     lines += [
         "",
-        f"## 出力先（図を保存するディレクトリ）: {figure_dir}",
-        f"## DPI: {cfg.get('dpi', 150)}",
-        f"## figsize: {cfg.get('figsize', [10, 6])}",
+        f"## Output directory for figures: {figure_dir}",
+        f"## DPI: {dpi}",
+        f"## figsize: {figsize}",
         "",
-        "## ユーザーの要求",
-        user_prompt if user_prompt.strip() else (
-            "属レベル相対存在量の積み上げ棒グラフ、α多様性グラフ、PCoA を生成してください。"
+        "## User request",
+        user_prompt.strip() or (
+            "Generate: (1) genus-level stacked bar chart of relative abundance, "
+            "(2) alpha diversity boxplot (Shannon), (3) beta diversity PCoA (Bray-Curtis)."
         ),
         "",
-        "## 制約",
-        "- matplotlib の Agg バックエンド: import matplotlib; matplotlib.use('Agg') を先頭に書く",
-        "- 図は plt.savefig() で保存し plt.show() は使わない",
-        "- タイトル・ラベルは英語で書く（日本語フォント依存を避けるため）",
-        "- コードのみを出力する。説明文は不要",
-        "- コードは ```python ... ``` で囲む",
+        "## FILE FORMAT — read exactly as described",
+        "",
+        "### [feature_table] TSV  (exported from QIIME2 via biom convert)",
+        "  - First line  : '# Constructed from biom file'  ← comment, skip it",
+        "  - Second line : '#OTU ID\\t<sample1>\\t<sample2>...'  ← use as header",
+        "  - Remaining   : Feature ID (ASV/OTU) | per-sample read counts",
+        "  - Read with   :",
+        "      ft = pd.read_csv(path, sep='\\t', skiprows=1, index_col=0)",
+        "      ft.index.name = 'Feature ID'",
+        "",
+        "### [taxonomy] taxonomy.tsv",
+        "  - Columns: Feature ID (index) | Taxon | Confidence",
+        "  - Taxon format: 'd__Bacteria; p__Firmicutes; c__Clostridia; o__...; f__...; g__Genus; s__species'",
+        "  - Read with   : tax = pd.read_csv(path, sep='\\t', index_col=0)",
+        "  - Get genus   : tax['genus'] = tax['Taxon'].str.extract(r'g__([^;]+)').fillna('Unknown').str.strip()",
+        "",
+        "### [alpha] alpha-diversity TSV",
+        "  - Columns: sample-id (index) | metric value (shannon / observed_features / faith_pd ...)",
+        "  - Read with   : alpha = pd.read_csv(path, sep='\\t', index_col=0)",
+        "",
+        "### [beta] distance-matrix TSV",
+        "  - Square symmetric matrix; row names = column names = sample IDs",
+        "  - Read with   : dm = pd.read_csv(path, sep='\\t', index_col=0)",
+        "  - PCoA with sklearn :",
+        "      from sklearn.manifold import MDS",
+        "      coords = MDS(n_components=2, dissimilarity='precomputed', random_state=42).fit_transform(dm.values)",
+        "",
+        "## Code requirements",
+        "1. First two lines MUST be:",
+        "      import matplotlib",
+        "      matplotlib.use('Agg')",
+        "2. Define at the top:",
+        f"      FIGURE_DIR = r'{figure_dir}'",
+        f"      DPI = {dpi}",
+        "      import os; os.makedirs(FIGURE_DIR, exist_ok=True)",
+        "3. Save every figure:",
+        "      plt.savefig(os.path.join(FIGURE_DIR, 'name.png'), dpi=DPI, bbox_inches='tight')",
+        "      plt.close()",
+        "4. All axis labels, titles, legend entries in English.",
+        "5. Use try/except around each section so one failure does not stop the whole script.",
+        "6. Output ONLY the Python code, wrapped in ```python ... ```.",
+        "7. Do NOT use plt.show().",
     ]
     return "\n".join(lines)
 

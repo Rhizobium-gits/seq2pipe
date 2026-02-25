@@ -18,14 +18,15 @@ seq2pipe ターミナル版エントリポイント。
 """
 
 import sys
+import csv
 import argparse
 import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
-from code_agent import run_manifest_agent, run_code_agent, CodeExecutionResult
-from pipeline_runner import get_exported_files
+from code_agent import run_code_agent, CodeExecutionResult
+from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -333,10 +334,68 @@ def main():
     _hr()
     print()
 
-    result = run_manifest_agent(
-        manifest_path=manifest_path,
-        user_prompt=user_prompt,
+    # ── マニフェストから FASTQ ディレクトリを取得 ─────────────────────
+    fastq_dir = None
+    try:
+        with open(manifest_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                fp = row.get("forward-absolute-filepath", "")
+                if fp:
+                    fastq_dir = str(Path(fp).parent)
+                    break
+    except Exception as e:
+        print(f"❌ マニフェスト読み込みエラー: {e}")
+        sys.exit(1)
+
+    if not fastq_dir:
+        print("❌ マニフェストから FASTQ ディレクトリを特定できませんでした")
+        sys.exit(1)
+
+    print(f"📂 FASTQ ディレクトリ: {fastq_dir}")
+    print()
+
+    # ── STEP 1: QIIME2 パイプライン実行（既存の実証済みコードを使用）──
+    print("─" * 48)
+    print("  🚀 STEP 1/2 : QIIME2 パイプライン実行中")
+    print("─" * 48)
+    config = PipelineConfig(
+        fastq_dir=fastq_dir,
+        paired_end=True,
+        trim_left_f=0,
+        trim_left_r=0,
+        trunc_len_f=250,
+        trunc_len_r=200,
+        metadata_path=metadata_path,
+        n_threads=4,
+        sampling_depth=5000,
         output_dir=str(output_dir),
+    )
+    pipeline_result = run_pipeline(config=config, log_callback=_log)
+
+    if not pipeline_result.success:
+        print(f"\n❌ パイプライン失敗: {pipeline_result.error_message[:400]}")
+        sys.exit(1)
+
+    print(f"\n✅ パイプライン完了 → {pipeline_result.output_dir}")
+    print()
+
+    # ── STEP 2: LLM による解析コード生成・実行 ────────────────────────
+    print("─" * 48)
+    print("  🤖 STEP 2/2 : LLM 解析コード生成・実行")
+    print("─" * 48)
+    export_files = get_exported_files(pipeline_result.export_dir)
+    total = sum(len(v) for v in export_files.values())
+    print(f"エクスポートファイル: {total} 件")
+    for cat, paths in export_files.items():
+        if paths:
+            print(f"  [{cat}] {len(paths)} ファイル")
+    print()
+
+    result = run_code_agent(
+        export_files=export_files,
+        user_prompt=user_prompt,
+        output_dir=pipeline_result.output_dir,
         figure_dir=str(fig_dir),
         metadata_path=metadata_path,
         model=model,
