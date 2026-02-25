@@ -116,20 +116,38 @@ def _select_model(preferred: str = "") -> str:
 # 起動バナー
 # ─────────────────────────────────────────────────────────────────────────────
 
-_BANNER = r"""
- ███████╗███████╗ ██████╗ ██████╗
- ██╔════╝██╔════╝██╔═══██╗╚════██╗
- ███████╗█████╗  ██║   ██║  ▄╔═╝
- ╚════██║██╔══╝  ██║▄▄ ██║ ██╔╝
- ███████║███████╗╚██████╔╝██████╗
- ╚══════╝╚══════╝ ╚══▀▀═╝ ╚═════╝
- ██████╗ ██╗██████╗ ███████╗
- ██╔══██╗██║██╔══██╗██╔════╝
- ██████╔╝██║██████╔╝█████╗
- ██╔═══╝ ██║██╔═══╝ ██╔══╝
- ██║     ██║██║     ███████╗
- ╚═╝     ╚═╝╚═╝     ╚══════╝
-"""
+# 行ごとのバナーテキスト
+_BANNER_LINES = [
+    r" ███████╗███████╗ ██████╗ ██████╗",
+    r" ██╔════╝██╔════╝██╔═══██╗╚════██╗",
+    r" ███████╗█████╗  ██║   ██║  ▄╔═╝",
+    r" ╚════██║██╔══╝  ██║▄▄ ██║ ██╔╝",
+    r" ███████║███████╗╚██████╔╝██████╗",
+    r" ╚══════╝╚══════╝ ╚══▀▀═╝ ╚═════╝",
+    r" ██████╗ ██╗██████╗ ███████╗",
+    r" ██╔══██╗██║██╔══██╗██╔════╝",
+    r" ██████╔╝██║██████╔╝█████╗",
+    r" ██╔═══╝ ██║██╔═══╝ ██╔══╝",
+    r" ██║     ██║██║     ███████╗",
+    r" ╚═╝     ╚═╝╚═╝     ╚══════╝",
+]
+
+# SEQ2（上6行）: 赤→黄  /  PIPE（下6行）: シアン→青
+_LINE_COLORS = [
+    "\033[91m",   # bright red
+    "\033[91m",   # bright red
+    "\033[93m",   # bright yellow
+    "\033[93m",   # bright yellow
+    "\033[91m",   # bright red
+    "\033[91m",   # bright red
+    "\033[96m",   # bright cyan
+    "\033[96m",   # bright cyan
+    "\033[94m",   # bright blue
+    "\033[94m",   # bright blue
+    "\033[96m",   # bright cyan
+    "\033[96m",   # bright cyan
+]
+
 
 def _print_banner():
     import time
@@ -137,46 +155,59 @@ def _print_banner():
     RESET = "\033[0m"
     BOLD  = "\033[1m"
     DIM   = "\033[2m"
-    CYAN  = "\033[96m"
-    HIDE  = "\033[?25l"   # カーソル非表示
-    SHOW  = "\033[?25h"   # カーソル表示
-    CLR   = "\033[J"      # カーソル以降を消去
+    HIDE  = "\033[?25l"
+    SHOW  = "\033[?25h"
+    CLR   = "\033[J"
 
-    # アニメーション: (カラーコード, 表示秒数)
-    # 蛍光灯がチカチカしながら点灯するイメージ
+    def _mono(color: str) -> str:
+        """全行を同じ色で描画した文字列"""
+        return "\n" + "".join(f"{color}{l}{RESET}\n" for l in _BANNER_LINES)
+
+    def _colorful() -> str:
+        """行ごとに色を変えた最終フレーム"""
+        return "\n" + "".join(
+            f"\033[1m{col}{l}{RESET}\n"
+            for l, col in zip(_BANNER_LINES, _LINE_COLORS)
+        )
+
+    DARK   = "\033[90m"    # 暗いグレー（消灯）
+    BRIGHT = "\033[96;1m"  # 明るいシアン（点灯）
+    DIMMED = "\033[2;96m"  # 薄いシアン
+
+    # チカチカフレーム: (描画文字列, 秒数)  最後は None = 待たない
     _FLICKER = [
-        ("\033[90m",   0.09),   # 暗い（消灯）
-        ("\033[96;1m", 0.07),   # 明るいシアン（点灯）
-        ("\033[90m",   0.05),   # 暗い
-        ("\033[96;1m", 0.08),   # 点灯
-        ("\033[90m",   0.04),   # 暗い
-        ("\033[2m",    0.05),   # うっすら
-        ("\033[96;1m", 0.07),   # 点灯
-        ("\033[90m",   0.03),   # 暗い
-        ("\033[96m",   0.12),   # 安定（通常シアン）
+        (_mono(DARK),   0.09),
+        (_mono(BRIGHT), 0.07),
+        (_mono(DARK),   0.05),
+        (_mono(BRIGHT), 0.08),
+        (_mono(DARK),   0.04),
+        (_mono(DIMMED), 0.05),
+        (_mono(BRIGHT), 0.06),
+        (_mono(DARK),   0.03),
+        (_colorful(),   None),   # 最終フレーム: カラフルで安定
     ]
 
     is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
     if not is_tty:
-        # パイプ・リダイレクト時はアニメーションなし
-        print(CYAN + _BANNER + RESET)
+        sys.stdout.write(_colorful())
+        sys.stdout.flush()
     else:
-        n_up = _BANNER.count("\n") + 1   # print() が加える改行分 +1
+        n_up = len(_BANNER_LINES) + 1   # content行 + 先頭の \n 分
         UP   = f"\033[{n_up}A"
 
         sys.stdout.write(HIDE)
         sys.stdout.flush()
         try:
-            # 最初は暗い状態で描画
-            sys.stdout.write("\033[90m" + _BANNER + RESET)
+            sys.stdout.write(_mono(DARK))
             sys.stdout.flush()
             time.sleep(0.08)
 
-            for color, delay in _FLICKER:
-                sys.stdout.write(UP + CLR + color + _BANNER + RESET)
+            for frame, delay in _FLICKER:
+                sys.stdout.write(UP + CLR + frame)
                 sys.stdout.flush()
-                time.sleep(delay)
+                if delay:
+                    time.sleep(delay)
         except Exception:
             pass
         finally:
