@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
 from code_agent import (
-    run_code_agent, run_auto_agent,
+    run_code_agent, run_auto_agent, run_coding_agent,
     CodeExecutionResult, AutoAgentResult,
 )
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
@@ -105,8 +105,11 @@ def _select_mode() -> str:
     """起動モードをインタラクティブに選択する"""
     print("モードを選択してください:")
     print()
-    print("  1. 解析モード        やりたい解析を自然言語で指定 → LLM がコード生成・実行")
-    print("  2. 自律エージェント  AI が自ら解析計画を立て、全解析を自動で実行")
+    print("  1. 解析モード        やりたい解析を自然言語で指定")
+    print("                       AI がファイルを読んで → コードを書いて → 実行 → エラー修正")
+    print()
+    print("  2. 自律エージェント  AI が自分でファイルを調べて包括的な解析を全自動実行")
+    print("                       指示不要。動くコードができるまで自律的に修正を繰り返す")
     print()
     choice = _ask("選択 (1/2)", "1")
     return choice.strip()
@@ -337,32 +340,25 @@ def main():
         _hr()
         print()
 
-        if mode == "2":
-            print("🤖 自律エージェントモードで解析を開始します")
-            print(f"   最大 {args.max_rounds} ラウンド実行します（Ctrl+C で中断）")
-            print()
-            auto_result = run_auto_agent(
-                export_files=export_files,
-                output_dir=str(Path(export_dir).parent),
-                figure_dir=str(fig_dir),
-                model=model,
-                max_rounds=args.max_rounds,
-                log_callback=_log,
-                install_callback=_install_callback,
-            )
-            _print_auto_result(auto_result)
-        else:
+        user_prompt = ""
+        if mode != "2":
             user_prompt = args.prompt or _ask("やりたい解析を入力してください", "")
-            result = run_code_agent(
-                export_files=export_files,
-                user_prompt=user_prompt,
-                output_dir=str(Path(export_dir).parent),
-                figure_dir=str(fig_dir),
-                model=model,
-                log_callback=_log,
-                install_callback=_install_callback,
-            )
-            _print_result(result)
+        else:
+            print("🤖 自律エージェントモードで解析を開始します")
+            print(f"   最大 {args.max_rounds} ステップ（Ctrl+C で中断）")
+            print()
+
+        result = run_coding_agent(
+            export_files=export_files,
+            user_prompt=user_prompt,
+            output_dir=str(Path(export_dir).parent),
+            figure_dir=str(fig_dir),
+            model=model,
+            max_steps=args.max_rounds * 3,   # ラウンド数×3 ステップ
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+        _print_result(result)
         return
 
     # ── マニフェストからフルパイプライン（メインフロー）──────────────
@@ -454,33 +450,22 @@ def main():
     print()
 
     if mode == "2":
-        print(f"🤖 自律エージェントモードで解析を開始します")
-        print(f"   最大 {args.max_rounds} ラウンド実行します（Ctrl+C で中断）")
+        print("🤖 自律エージェントモードで解析を開始します")
+        print(f"   最大 {args.max_rounds * 3} ステップ（Ctrl+C で中断）")
         print()
-        auto_result = run_auto_agent(
-            export_files=export_files,
-            output_dir=pipeline_result.output_dir,
-            figure_dir=str(fig_dir),
-            metadata_path=metadata_path,
-            model=model,
-            max_rounds=args.max_rounds,
-            log_callback=_log,
-            install_callback=_install_callback,
-        )
-        _print_auto_result(auto_result)
-    else:
-        user_prompt = args.prompt or _ask("やりたい解析を入力してください", "")
-        result = run_code_agent(
-            export_files=export_files,
-            user_prompt=user_prompt,
-            output_dir=pipeline_result.output_dir,
-            figure_dir=str(fig_dir),
-            metadata_path=metadata_path,
-            model=model,
-            log_callback=_log,
-            install_callback=_install_callback,
-        )
-        _print_result(result)
+
+    result = run_coding_agent(
+        export_files=export_files,
+        user_prompt=user_prompt,          # mode 1: ユーザー指定 / mode 2: ""（自律）
+        output_dir=pipeline_result.output_dir,
+        figure_dir=str(fig_dir),
+        metadata_path=metadata_path,
+        model=model,
+        max_steps=args.max_rounds * 3,    # ラウンド数×3 ステップ
+        log_callback=_log,
+        install_callback=_install_callback,
+    )
+    _print_result(result)
 
 
 if __name__ == "__main__":

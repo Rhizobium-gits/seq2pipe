@@ -6,6 +6,7 @@ LLM に Python 解析コードを生成させ、実行・エラー修正・パ�
 インストール確認を行うモジュール。
 """
 
+import json
 import re
 import subprocess
 import tempfile
@@ -778,6 +779,481 @@ def run_auto_agent(
         })
 
     return AutoAgentResult(rounds=results, total_figures=all_figures, completed=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool-Calling Coding Agent（vibe-local スタイル）
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── ツール定義（Ollama /api/chat に渡す JSON スキーマ）──────────────────────
+_TOOL_DEFS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": (
+                "Read a file's contents. ALWAYS call this before writing analysis code "
+                "to understand the exact column names, header structure, and data format."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the file",
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "description": "Maximum lines to return (default 100)",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Write content to a file (creates or overwrites). "
+                "Use to create Python analysis scripts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path of the file to write",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full content to write",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_python",
+            "description": (
+                "Execute a Python script file. Returns stdout, stderr, and exit code. "
+                "If it fails, immediately call write_file to fix the script, "
+                "then call run_python again — repeat until exit code is 0."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the .py file to execute",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "List files in a directory, optionally filtered by glob pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string",
+                        "description": "Directory path to list",
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to filter (e.g. '*.tsv', '*.png'). Defaults to '*'.",
+                    },
+                },
+                "required": ["directory"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "install_package",
+            "description": (
+                "Install a Python package via pip. "
+                "Use only when run_python fails with ModuleNotFoundError."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "package": {
+                        "type": "string",
+                        "description": "Package name to install (e.g. 'scikit-learn', 'seaborn')",
+                    },
+                },
+                "required": ["package"],
+            },
+        },
+    },
+]
+
+
+def _exec_tool(
+    tool_name: str,
+    tool_args: dict,
+    output_dir: str,
+    figure_dir: str,
+    log_callback: Optional[Callable[[str], None]],
+    install_callback: Optional[Callable[[str], bool]],
+) -> tuple:
+    """
+    ツール呼び出しを実行する。
+    戻り値: (result_str: str, new_figures: list[str])
+    """
+    def _log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    # ── read_file ─────────────────────────────────────────────────────────
+    if tool_name == "read_file":
+        path = tool_args.get("path", "")
+        max_lines = int(tool_args.get("max_lines", 100))
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            truncated = len(lines) > max_lines
+            content = "".join(lines[:max_lines])
+            if truncated:
+                content += f"\n... ({len(lines) - max_lines} more lines truncated)"
+            _log(f"  ← read {Path(path).name} ({len(lines)} lines)")
+            return content or "(empty file)", []
+        except FileNotFoundError:
+            return f"ERROR: file not found: {path}", []
+        except Exception as e:
+            return f"ERROR reading {path}: {e}", []
+
+    # ── write_file ────────────────────────────────────────────────────────
+    elif tool_name == "write_file":
+        path = tool_args.get("path", "")
+        content = tool_args.get("content", "")
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            # アトミック書き込み（クラッシュセーフ）
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".tmp",
+                dir=p.parent, delete=False, encoding="utf-8",
+            ) as f:
+                f.write(content)
+                tmp = f.name
+            Path(tmp).replace(path)
+            n = len(content.splitlines())
+            _log(f"  ← wrote {Path(path).name} ({n} lines)")
+            return f"OK: wrote {n} lines to {path}", []
+        except Exception as e:
+            return f"ERROR writing {path}: {e}", []
+
+    # ── run_python ────────────────────────────────────────────────────────
+    elif tool_name == "run_python":
+        path = tool_args.get("path", "")
+        py_exec = _agent.QIIME2_PYTHON
+        if not py_exec or not Path(py_exec).exists():
+            py_exec = sys.executable
+
+        fig_dir = Path(figure_dir)
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        before = (
+            set(fig_dir.glob("*.png"))
+            | set(fig_dir.glob("*.pdf"))
+            | set(fig_dir.glob("*.svg"))
+        )
+
+        try:
+            proc = subprocess.run(
+                [py_exec, path],
+                capture_output=True, text=True,
+                timeout=300, cwd=output_dir,
+            )
+        except subprocess.TimeoutExpired:
+            return "ERROR: execution timed out (300 seconds)", []
+        except Exception as e:
+            return f"ERROR launching process: {e}", []
+
+        after = (
+            set(fig_dir.glob("*.png"))
+            | set(fig_dir.glob("*.pdf"))
+            | set(fig_dir.glob("*.svg"))
+        )
+        new_figs = [str(f) for f in sorted(after - before)]
+
+        parts = []
+        if proc.stdout.strip():
+            parts.append(f"STDOUT:\n{proc.stdout[:3000]}")
+        if proc.returncode != 0 and proc.stderr.strip():
+            parts.append(f"STDERR:\n{proc.stderr[:3000]}")
+            if log_callback:
+                for line in proc.stderr.splitlines()[:10]:
+                    log_callback(f"    [err] {line}")
+        parts.append(f"EXIT CODE: {proc.returncode}")
+        if new_figs:
+            parts.append(f"NEW FIGURES: {[Path(f).name for f in new_figs]}")
+            _log(f"  ← 📊 {[Path(f).name for f in new_figs]}")
+
+        _log(f"  ← run {Path(path).name} → exit {proc.returncode}")
+        return "\n".join(parts), new_figs
+
+    # ── list_files ────────────────────────────────────────────────────────
+    elif tool_name == "list_files":
+        directory = tool_args.get("directory", "")
+        pattern = tool_args.get("pattern", "*")
+        try:
+            files = sorted(Path(directory).glob(pattern))
+            if not files:
+                return f"(no files matching '{pattern}' in {directory})", []
+            return "\n".join(str(f) for f in files), []
+        except Exception as e:
+            return f"ERROR: {e}", []
+
+    # ── install_package ───────────────────────────────────────────────────
+    elif tool_name == "install_package":
+        package = tool_args.get("package", "")
+        _log(f"  ⚠️  パッケージ '{package}' のインストールが要求されました")
+        approved = install_callback(package) if install_callback else False
+        if not approved:
+            return (
+                f"DECLINED: user declined to install '{package}'. "
+                "Try an alternative approach without this package.", []
+            )
+        ok = pip_install(package, log_callback)
+        return (
+            f"OK: installed {package}" if ok
+            else f"ERROR: failed to install {package}"
+        ), []
+
+    else:
+        return f"ERROR: unknown tool '{tool_name}'", []
+
+
+def run_coding_agent(
+    export_files: dict,
+    user_prompt: str,
+    output_dir: str,
+    figure_dir: str,
+    metadata_path: str = "",
+    model: Optional[str] = None,
+    max_steps: int = 20,
+    log_callback: Optional[Callable[[str], None]] = None,
+    install_callback: Optional[Callable[[str], bool]] = None,
+) -> CodeExecutionResult:
+    """
+    vibe-local スタイルのツール呼び出し型コーディングエージェント。
+
+    従来の「スクリプト一括生成→実行」と異なり、LLM が:
+      1. list_files でファイルを探索
+      2. read_file でデータの実際のフォーマットを確認
+      3. write_file で解析スクリプトを作成
+      4. run_python で実行
+      5. エラーが出たら write_file で修正 → run_python を繰り返す
+    という自律的なループで「必ず動くコード」を作り上げる。
+
+    user_prompt が空の場合は包括的な解析を自律実行（自律モード）。
+    user_prompt が指定された場合はその内容に従う（指示モード）。
+    """
+    if model is None:
+        model = _agent.DEFAULT_MODEL
+
+    def _log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    # ── システムプロンプト（vibe-local "TOOL FIRST" 設計） ────────────────
+    system_content = "\n".join([
+        "You are an autonomous microbiome bioinformatics coding agent.",
+        "",
+        "## CRITICAL RULES — follow exactly, no exceptions",
+        "1. TOOL FIRST: Call a tool immediately. Never write explanations before acting.",
+        "2. READ BEFORE CODING: Call read_file on each data file before writing code.",
+        "   You MUST verify the exact column names, delimiter, number of header lines,",
+        "   and data structure — do not assume.",
+        "3. NEVER GIVE UP: If run_python fails, diagnose the error in STDERR,",
+        "   call write_file to fix the script, then call run_python again.",
+        "   Repeat until EXIT CODE is 0. Do not report failures — fix them.",
+        "4. ONE SCRIPT PER ANALYSIS: Write the complete analysis into one .py file.",
+        "   If a section fails, fix only that section; keep working sections intact.",
+        "5. DONE WHEN FIGURES ARE SAVED: Stop calling tools when all figures exist",
+        "   in FIGURE_DIR. Then respond with a brief summary.",
+        "",
+        "## WORKFLOW",
+        "Step 1 → list_files on the export directory to see what's available",
+        "Step 2 → read_file on each relevant file (first 80-100 lines is enough)",
+        "Step 3 → write_file to create analysis.py with the complete analysis code",
+        "Step 4 → run_python on analysis.py",
+        "Step 5 → If error: inspect STDERR, write_file to fix, run_python again",
+        "Step 6 → Repeat Step 5 until EXIT CODE: 0",
+        "",
+        "## PYTHON SCRIPT TEMPLATE (always follow this structure)",
+        "```python",
+        "import matplotlib",
+        "matplotlib.use('Agg')   # must be before any other matplotlib import",
+        "import matplotlib.pyplot as plt",
+        "import pandas as pd",
+        "import numpy as np",
+        "import os",
+        "",
+        "FIGURE_DIR = r'/path/to/figures'",
+        "DPI = 150",
+        "os.makedirs(FIGURE_DIR, exist_ok=True)",
+        "",
+        "# --- Section 1: Genus-level bar chart ---",
+        "try:",
+        "    ...",
+        "    plt.savefig(os.path.join(FIGURE_DIR, 'fig1_bar.png'), dpi=DPI, bbox_inches='tight')",
+        "    plt.close()",
+        "    print('fig1 saved')",
+        "except Exception as e:",
+        "    print(f'fig1 failed: {e}')",
+        "```",
+        "NEVER use plt.show(). ALWAYS plt.savefig() then plt.close().",
+    ])
+
+    # ── 初回ユーザーメッセージ ─────────────────────────────────────────────
+    file_lines = []
+    for cat, paths in export_files.items():
+        for p in paths:
+            file_lines.append(f"  [{cat}] {p}")
+    if metadata_path:
+        file_lines.append(f"  [metadata] {metadata_path}")
+
+    auto_task = "\n".join([
+        "Perform a COMPREHENSIVE microbiome analysis. Generate all of the following figures:",
+        "  1. fig1_bar.png      — Genus-level stacked bar chart (relative abundance, top 15 genera)",
+        "  2. fig2_alpha.png    — Alpha diversity boxplot (Shannon index)",
+        "  3. fig3_pcoa.png     — Beta diversity PCoA scatter (Bray-Curtis)",
+        "  4. fig4_heatmap.png  — Taxonomy heatmap (top 20 genera, z-score)",
+        "All figures must be publication-quality (dpi=150, clear labels, legend).",
+    ])
+    task = user_prompt.strip() if user_prompt.strip() else auto_task
+
+    initial_content = "\n".join([
+        "## Available QIIME2-exported data files",
+        *file_lines,
+        "",
+        f"## FIGURE_DIR (save all figures here): {figure_dir}",
+        f"## Working directory: {output_dir}",
+        f"## Script path suggestion: {output_dir}/analysis.py",
+        "",
+        "## Your task",
+        task,
+        "",
+        "## Start now",
+        "Call list_files first to explore the directory, then read_file on data files.",
+        "Do NOT write any code until you have confirmed the file formats.",
+    ])
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user",   "content": initial_content},
+    ]
+
+    all_figs: list = []
+    final_code     = ""
+    final_error    = ""
+    success        = False
+    total_steps    = 0
+
+    _log("🤖 コーディングエージェント起動（tool-calling モード）")
+    _log(f"   最大 {max_steps} ステップ  |  Ctrl+C で中断")
+    _log("")
+
+    for step in range(1, max_steps + 1):
+        total_steps = step
+        _log(f"[step {step}/{max_steps}] 送信中...")
+
+        try:
+            response = _agent.call_ollama(messages, model, tools=_TOOL_DEFS)
+        except KeyboardInterrupt:
+            _log("\n⚠️  中断されました。")
+            break
+        except Exception as e:
+            _log(f"Ollama エラー: {e}")
+            final_error = str(e)
+            break
+
+        content    = response.get("content", "")
+        tool_calls = response.get("tool_calls", [])
+
+        # アシスタントメッセージを会話履歴に追加
+        assistant_msg: dict = {"role": "assistant", "content": content}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+        messages.append(assistant_msg)
+
+        if not tool_calls:
+            # ツール呼び出しなし → エージェントが完了と判断
+            if content:
+                _log(f"エージェント応答: {content[:300]}")
+            _log("✅ エージェントがタスクを完了しました。")
+            success = True
+            break
+
+        # ── 各ツール呼び出しを実行 ────────────────────────────────────────
+        for tc in tool_calls:
+            fn         = tc.get("function", {})
+            tool_name  = fn.get("name", "")
+            raw_args   = fn.get("arguments", {})
+
+            # arguments が JSON 文字列で返ってくる場合に対応
+            if isinstance(raw_args, str):
+                try:
+                    tool_args = json.loads(raw_args)
+                except Exception:
+                    tool_args = {}
+            elif isinstance(raw_args, dict):
+                tool_args = raw_args
+            else:
+                tool_args = {}
+
+            # 引数のプレビュー表示
+            preview = ", ".join(
+                f"{k}={repr(str(v))[:60]}" for k, v in tool_args.items()
+            )
+            _log(f"  🔧 {tool_name}({preview})")
+
+            tool_result, new_figs = _exec_tool(
+                tool_name, tool_args,
+                output_dir, figure_dir,
+                log_callback, install_callback,
+            )
+            all_figs.extend(new_figs)
+
+            # run_python 成功時: 最後のスクリプトのコードを保存
+            if tool_name == "run_python" and "EXIT CODE: 0" in tool_result:
+                success = True
+                script_path = tool_args.get("path", "")
+                if script_path and Path(script_path).exists():
+                    try:
+                        final_code = Path(script_path).read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+
+            # ツール結果を会話履歴に追加（長すぎる場合は切り捨て）
+            messages.append({
+                "role":    "tool",
+                "name":    tool_name,
+                "content": tool_result[:4000],
+            })
+
+    return CodeExecutionResult(
+        success=success,
+        stdout="",
+        stderr=final_error,
+        code=final_code,
+        figures=all_figs,
+        retry_count=total_steps,
+        error_message=final_error[:500] if not success else "",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
