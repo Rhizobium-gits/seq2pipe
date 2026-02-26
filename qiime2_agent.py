@@ -1995,6 +1995,7 @@ def tool_run_qiime2_pipeline(
         fastq_dir=fastq_dir,
         output_path=manifest_path,
         paired_end=paired_end,
+        container_data_dir=str(Path(fastq_dir).expanduser().absolute()),  # ホスト実行時は実パスを使用
     )
     if "❌" in manifest_result:
         return f"❌ マニフェスト生成に失敗しました:\n{manifest_result}"
