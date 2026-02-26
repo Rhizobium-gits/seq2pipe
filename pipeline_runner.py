@@ -36,6 +36,8 @@ class PipelineConfig:
     sampling_depth: int = 5000
     group_column: str = ""
     output_dir: str = ""   # 空なら ~/seq2pipe_results/<timestamp>/ を自動生成
+    manifest_path: str = ""  # 事前作成マニフェスト（空なら自動生成）
+    model: str = ""          # Ollama モデル名（空なら DEFAULT_MODEL）
 
 
 @dataclass
@@ -116,6 +118,20 @@ def run_pipeline(
     _agent.SESSION_OUTPUT_DIR = str(out_dir)
     _agent.SESSION_FIGURE_DIR = str(fig_dir)
     _agent.AUTO_YES = True   # input() をスキップして自律実行
+    if config.model:
+        _agent.DEFAULT_MODEL = config.model
+
+    # ── カスタムマニフェストのモンキーパッチ ──────────────────────────
+    import shutil as _shutil
+    _orig_generate_manifest = _agent.tool_generate_manifest
+    if config.manifest_path and Path(config.manifest_path).exists():
+        _manifest_src = config.manifest_path
+
+        def _patched_manifest(fastq_dir, output_path, **kw):
+            _shutil.copy(_manifest_src, output_path)
+            return f"✅ カスタムマニフェストを使用: {_manifest_src}"
+
+        _agent.tool_generate_manifest = _patched_manifest
 
     # ── stdout キャプチャ開始 ─────────────────────────────────────────
     log_lines = []
@@ -170,6 +186,7 @@ def run_pipeline(
 
     finally:
         sys.stdout = orig_stdout
+        _agent.tool_generate_manifest = _orig_generate_manifest  # モンキーパッチを元に戻す
 
 
 # ─────────────────────────────────────────────────────────────────────────────
