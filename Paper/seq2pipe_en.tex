@@ -698,6 +698,111 @@ Table~\ref{tab:requirements} summarizes the required software stack.
 \end{enumerate}
 
 % -------------------------------------------------------
+\section{Example Results}
+% -------------------------------------------------------
+
+To demonstrate seq2pipe's end-to-end capability, we analysed
+10 human stool samples (TEST01--TEST10, freeze-dried, Illumina MiSeq
+paired-end V3--V4) without manual intervention.
+The full pipeline ran in a single command using \texttt{\_run\_pipeline.py},
+which invoked QIIME2 (DADA2 denoising + core-metrics-phylogenetic) and
+then handed the exported data to \texttt{chat\_agent.InteractiveSession}
+for downstream visualisation.
+Six figures were generated automatically and compiled into a PDF report.
+Figures are stored in the \texttt{Figure/} directory of this repository.
+
+\subsection{Alpha Diversity}
+
+Four alpha diversity metrics (Shannon entropy, Faith's PD, Pielou's
+evenness, and observed features) were computed per sample and displayed
+as a 2$\times$2 panel with strip-plot overlay (Figure~\ref{fig:alpha}).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{../Figure/alpha_diversity.png}
+  \caption{Alpha diversity of 10 human stool samples.
+    Each panel shows a different metric computed from the DADA2-denoised
+    feature table. Strip plots overlay individual sample values on the
+    aggregate distribution.}
+  \label{fig:alpha}
+\end{figure}
+
+\subsection{Beta Diversity}
+
+Beta diversity was assessed using three dissimilarity measures.
+Bray--Curtis PCoA (Figure~\ref{fig:bc}) and Unweighted UniFrac PCoA
+(Figure~\ref{fig:unifrac}) were computed via scikit-learn MDS
+(\texttt{n\_components=2, dissimilarity=`precomputed'}).
+Jaccard distances were visualised as a clustered heatmap
+(Figure~\ref{fig:jaccard}).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/bray_curtis_pcoa.png}
+  \caption{Bray--Curtis PCoA. Samples are coloured by ID (tab10 palette)
+    and labelled directly on the plot. MDS coordinates were computed from
+    the QIIME2-exported distance matrix.}
+  \label{fig:bc}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/unifrac_pcoa.png}
+  \caption{Unweighted UniFrac PCoA. Phylogenetic distances computed by
+    QIIME2's core-metrics-phylogenetic pipeline are projected onto
+    two MDS dimensions.}
+  \label{fig:unifrac}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/jaccard_heatmap.png}
+  \caption{Jaccard distance heatmap with hierarchical clustering (Ward
+    linkage, seaborn \texttt{clustermap}). Both axes show the 10 samples;
+    colour intensity indicates pairwise dissimilarity.}
+  \label{fig:jaccard}
+\end{figure}
+
+\subsection{DADA2 Denoising Statistics}
+
+The progression of reads through each DADA2 stage
+(input $\rightarrow$ filtered $\rightarrow$ denoised $\rightarrow$
+merged $\rightarrow$ non-chimeric) is shown in Figure~\ref{fig:dada2}.
+The grouped bar chart was generated directly from
+\texttt{denoising\_stats/stats.tsv} without any manual intervention.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{../Figure/dada2_stats.png}
+  \caption{DADA2 denoising statistics for 10 stool samples.
+    Each group of bars represents one sample; bar colours distinguish
+    the five processing stages. The figure reveals consistent filtering
+    efficiency across samples.}
+  \label{fig:dada2}
+\end{figure}
+
+\subsection{Shannon Diversity Violin Plot}
+
+Figure~\ref{fig:shannon} shows a horizontal violin plot of Shannon
+diversity, with samples sorted by their Shannon value and a vertical
+mean line superimposed.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/shannon_violin.png}
+  \caption{Shannon alpha diversity per sample as a horizontal violin plot,
+    sorted in ascending order. The vertical line marks the mean Shannon
+    value across all samples.}
+  \label{fig:shannon}
+\end{figure}
+
+All six figures and accompanying interpretive text were incorporated
+into a Japanese PDF report (\texttt{report\_ja.pdf}) automatically by
+\texttt{InteractiveSession.generate\_report()}, which calls the LLM to
+write a figure caption for each plot and compiles the result with
+\texttt{tectonic}.
+
+% -------------------------------------------------------
 \section{Discussion}
 % -------------------------------------------------------
 
