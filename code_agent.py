@@ -118,6 +118,17 @@ def _build_prompt(
         "5. Use try/except around each section so one failure does not stop the whole script.",
         "6. Output ONLY the Python code, wrapped in ```python ... ```.",
         "7. Do NOT use plt.show().",
+        "",
+        "## COMMON MISTAKES — avoid these",
+        "- DO NOT: from scipy.stats import boxplot  ← scipy.stats has NO boxplot function",
+        "  CORRECT: plt.boxplot(data)  or  seaborn.boxplot(data=df, ...)",
+        "- DO NOT: import biom  ← use pd.read_csv() directly on .tsv files",
+        "- DO NOT hardcode data values — always read from the file paths listed above",
+        "- TAXONOMY str.extract RETURNS DataFrame, not Series:",
+        "  WRONG: tax['Taxon'].str.extract(r'g__([^;]+)').fillna('Unknown').str.strip()",
+        "  RIGHT: tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
+        "- DO NOT use bare 'except Exception as e: print(...)' — it hides real errors.",
+        "  Instead: let errors propagate (no try/except) or use 'raise' inside except.",
     ]
     return "\n".join(lines)
 
@@ -448,7 +459,7 @@ def run_code_agent(
             last_code, output_dir, figure_dir, log_callback
         )
 
-        if success:
+        if success and new_figs:
             _log(f"実行成功。生成された図: {len(new_figs)} 件")
             return CodeExecutionResult(
                 success=True,
@@ -459,7 +470,18 @@ def run_code_agent(
                 retry_count=attempt,
             )
 
-        last_stderr = stderr
+        if success and not new_figs:
+            # exit 0 だが図が生成されていない → try/except による silent failure を疑う
+            _log("⚠️  exit 0 だが図が未生成。サイレントエラーとして再試行します。")
+            last_stderr = (
+                "Script exited with code 0 but NO figures were saved to FIGURE_DIR.\n"
+                "This usually means an error was silently caught by a try/except block.\n"
+                f"Script stdout (look for 'Error:' lines):\n{stdout[:800]}\n\n"
+                "Fix: remove broad except clauses (or re-raise), and ensure "
+                "plt.savefig() is actually executed with the correct FIGURE_DIR path."
+            )
+        else:
+            last_stderr = stderr
 
         # ModuleNotFoundError の処理
         missing_pkg = _detect_missing_module(stderr)
@@ -1387,6 +1409,18 @@ def run_coding_agent(
         "",
         "NEVER plt.show(). ALWAYS plt.savefig() + plt.close().",
         "Print 'figNN saved' on success so you can verify which figures were generated.",
+        "",
+        "## COMMON MISTAKES — avoid these",
+        "- WRONG: from scipy.stats import boxplot  ← scipy.stats has NO boxplot",
+        "  RIGHT:  plt.boxplot(data)  or  import seaborn; seaborn.boxplot(data=df)",
+        "- WRONG: import biom  ← not available; use pd.read_csv() on .tsv files",
+        "- WRONG: hardcoding data values — ALWAYS read from file paths in the task",
+        "- WRONG: plt.show()  ← never; always plt.savefig() + plt.close()",
+        "- TAXONOMY str.extract RETURNS DataFrame (not Series):",
+        "  WRONG: tax['Taxon'].str.extract(r'g__([^;]+)').fillna('Unknown').str.strip()",
+        "  RIGHT:  tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
+        "- DO NOT use bare except: print(e) — it hides errors and prevents figure generation.",
+        "  Instead: write code without try/except, or use 'raise' inside except blocks.",
     ])
 
     # ── 初回ユーザーメッセージ ─────────────────────────────────────────────
@@ -1470,8 +1504,12 @@ def run_coding_agent(
     _log("")
 
     for step in range(1, max_steps + 1):
-        # ── フォールバック判定: 5 ステップ経過して run_python すら呼ばれていない ──
-        if step == 6 and _run_python_count == 0 and not all_figs:
+        # ── フォールバック判定1: 5 ステップ経過して run_python すら呼ばれていない ──
+        # ── フォールバック判定2: run_python を 3 回以上呼んでも図が未生成 ──
+        if not all_figs and (
+            (step == 6 and _run_python_count == 0)
+            or (_run_python_count >= 3)
+        ):
             _log("  ⚠️  ツール呼び出しループが進捗しません。1ショット生成にフォールバックします...")
             fallback = run_code_agent(
                 export_files=export_files,
@@ -1621,6 +1659,36 @@ def run_coding_agent(
                     "name":    "run_python",
                     "content": run_result[:4000],
                 })
+                # auto-inject でも exit 0 だが図が生成されていない場合は本番コード強制
+                if (
+                    "EXIT CODE: 0" in run_result
+                    and not run_figs
+                    and not all_figs
+                    and step < max_steps - 2
+                ):
+                    _log("  ℹ️  auto-inject: exit 0 でも図が未生成。本番コードの作成を促します...")
+                    _file_refs = "\n".join(
+                        f"  [{cat}] {p}"
+                        for cat, paths in export_files.items()
+                        for p in paths
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "The script ran with EXIT CODE: 0 but NO figures were saved.\n"
+                            "The script likely hardcoded data or had a silent error in a try/except.\n\n"
+                            "IMPORTANT: Read data from the ACTUAL FILES listed below — do NOT hardcode values.\n\n"
+                            "CORRECT FILE PATHS:\n"
+                            f"{_file_refs}\n\n"
+                            f"FIGURE_DIR = r'{figure_dir}'\n"
+                            f"Script path: {output_dir}/analysis.py\n\n"
+                            "Call write_file NOW with a script that:\n"
+                            "  1. Uses pd.read_csv() on the EXACT paths above\n"
+                            "  2. Generates the requested figures\n"
+                            "  3. Saves each with plt.savefig() to FIGURE_DIR\n"
+                            "Add print() after each plt.savefig() to confirm the save."
+                        ),
+                    })
 
             # run_python が exit 0 でも図が生成されていない場合は継続
             if (
