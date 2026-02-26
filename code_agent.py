@@ -104,9 +104,11 @@ def _build_prompt(
         "      coords = MDS(n_components=2, dissimilarity='precomputed', random_state=42).fit_transform(dm.values)",
         "",
         "## Code requirements",
-        "1. First two lines MUST be:",
+        "1. First FOUR lines MUST be (in this exact order, NEVER omit any):",
         "      import matplotlib",
         "      matplotlib.use('Agg')",
+        "      import matplotlib.pyplot as plt",
+        "      import pandas as pd",
         "2. Define at the top:",
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
@@ -278,12 +280,39 @@ def _extract_code(content: str) -> str:
     # ```python ... ``` または ``` ... ```
     match = re.search(r'```(?:python)?\s*([\s\S]*?)```', content)
     if match:
-        return match.group(1).strip()
-    # フォールバック: import から始まる行以降
-    for i, line in enumerate(content.splitlines()):
-        if line.strip().startswith(("import ", "from ")):
-            return "\n".join(content.splitlines()[i:]).strip()
-    return content.strip()
+        code = match.group(1).strip()
+    else:
+        # フォールバック: import から始まる行以降
+        for i, line in enumerate(content.splitlines()):
+            if line.strip().startswith(("import ", "from ")):
+                code = "\n".join(content.splitlines()[i:]).strip()
+                break
+        else:
+            code = content.strip()
+    return _ensure_required_imports(code)
+
+
+def _ensure_required_imports(code: str) -> str:
+    """
+    LLM が生成したコードに必須インポートが欠けている場合に自動補完する。
+    matplotlib.pyplot as plt と pandas は常に必要。
+    """
+    required = [
+        ("import matplotlib\n", "import matplotlib"),
+        ("matplotlib.use('Agg')\n", "matplotlib.use('Agg')"),
+        ("import matplotlib.pyplot as plt\n", "import matplotlib.pyplot as plt"),
+        ("import pandas as pd\n", "import pandas as pd"),
+    ]
+    lines = code.splitlines()
+    prepend = []
+    for insert_line, check_str in required:
+        if check_str not in code:
+            prepend.append(insert_line.rstrip())
+    if prepend:
+        # matplotlib.use('Agg') は import matplotlib の直後に挿入する必要があるため、
+        # ブロックとしてまとめて先頭に付加する
+        code = "\n".join(prepend) + "\n" + code
+    return code
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -732,9 +761,11 @@ def _build_auto_initial_prompt(
         "  plot_data = rel.loc[top15].T                  # shape: (n_samples × 15)",
         "",
         "## Code requirements",
-        "1. First two lines MUST be:",
+        "1. First FOUR lines MUST be (in this exact order, NEVER omit any):",
         "      import matplotlib",
         "      matplotlib.use('Agg')",
+        "      import matplotlib.pyplot as plt",
+        "      import pandas as pd",
         "2. Define at the top:",
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
