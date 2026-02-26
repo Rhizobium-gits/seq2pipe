@@ -30,6 +30,7 @@ from code_agent import (
     CodeExecutionResult, AutoAgentResult,
 )
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
+from chat_agent import run_terminal_chat
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,13 +106,16 @@ def _select_mode() -> str:
     """起動モードをインタラクティブに選択する"""
     print("モードを選択してください:")
     print()
-    print("  1. 解析モード        やりたい解析を自然言語で指定")
+    print("  1. 解析モード        やりたい解析を自然言語で一回指定して実行")
     print("                       AI がファイルを読んで → コードを書いて → 実行 → エラー修正")
     print()
     print("  2. 自律エージェント  AI が自分でファイルを調べて包括的な解析を全自動実行")
     print("                       指示不要。動くコードができるまで自律的に修正を繰り返す")
     print()
-    choice = _ask("選択 (1/2)", "1")
+    print("  3. 対話モード        実験の説明から始めて会話しながら解析を積み重ねる")
+    print("                       「次はベータ多様性も見て」など自然な流れで進められる")
+    print()
+    choice = _ask("選択 (1/2/3)", "1")
     return choice.strip()
 
 
@@ -301,12 +305,30 @@ def main():
     parser.add_argument("--model",      help="Ollama モデル名（省略時は自動選択）")
     parser.add_argument("--export-dir", help="既存の exported/ ディレクトリ（コード生成のみ実行）")
     parser.add_argument("--auto",       action="store_true", help="自律エージェントモードで起動")
+    parser.add_argument("--chat",       action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
     parser.add_argument("--max-rounds", type=int, default=10, help="自律エージェントの最大ラウンド数（デフォルト 10）")
     args = parser.parse_args()
 
     _print_banner()
 
     model = _select_model(args.model or "")
+
+    # ── 対話モード（--chat または --export-dir + モード3）───────────────────
+    if args.chat:
+        export_dir = args.export_dir or _ask("QIIME2 エクスポートディレクトリのパス")
+        if not export_dir or not Path(export_dir).exists():
+            print(f"❌ ディレクトリが存在しません: {export_dir}")
+            sys.exit(1)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = args.output_dir or str(Path.home() / "seq2pipe_results" / ts)
+        run_terminal_chat(
+            export_dir=export_dir,
+            output_dir=output_dir,
+            model=model,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+        return
 
     # モード選択（--auto フラグで省略可）
     if args.auto:
@@ -339,6 +361,18 @@ def main():
         print(f"出力先: {output_dir}")
         _hr()
         print()
+
+        # モード3: 対話モード
+        if mode == "3":
+            run_terminal_chat(
+                export_dir=export_dir,
+                output_dir=str(output_dir),
+                figure_dir=str(fig_dir),
+                model=model,
+                log_callback=_log,
+                install_callback=_install_callback,
+            )
+            return
 
         user_prompt = ""
         if mode != "2":
