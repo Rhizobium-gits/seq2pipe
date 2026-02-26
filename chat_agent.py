@@ -2,36 +2,28 @@
 """
 chat_agent.py
 =============
-対話型解析エージェント。
+研究目的を聞いてから自律的に複数の解析を実行し、
+最後に TeX / PDF レポートを出力する対話型エージェント。
 
-実験系やデータ形式を自然言語で説明しながら、
-会話をしつつどんどん解析を進めていくモード。
+流れ:
+  1. 実験の説明・研究目的を自然言語で入力
+  2. LLM が解析プランを自動作成（5〜8 ステップ）
+  3. 各解析を run_code_agent で自動実行
+  4. report/ に TeX + PDF レポートを出力
+  5. そのまま追加の会話・解析も可能
 
 使い方:
-    from chat_agent import InteractiveSession
-
-    session = InteractiveSession(
-        export_dir="~/data/exported",
-        output_dir="~/analysis/output",
-        figure_dir="~/analysis/figures",
-        model="qwen2.5-coder:7b",
-    )
-
-    # 実験の説明
-    print(session.setup("マウス腸内フローラの16Sデータ。抗生物質投与群と対照群の比較"))
-
-    # 対話ループ
-    result = session.chat("まずアルファ多様性を群間で比較して")
-    print(result["text"])   # 自然言語サマリー
-    print(result["figures"]) # 生成された図のパス一覧
+    python chat_agent.py ~/data/exported/
+    python cli.py --chat --export-dir ~/data/exported/
 """
 
 from __future__ import annotations
 
 import re
 import glob
-import json
+import shutil
 import datetime
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -81,46 +73,37 @@ def _file_summary(export_files: dict[str, list[str]]) -> str:
 
 @dataclass
 class AnalysisFinding:
-    """1ターンの解析結果。コンテキスト蓄積に使用。"""
     step: int
-    user_request: str
-    analysis_description: str    # 実際に何の解析をしたか
-    result_summary: str          # LLM による自然言語サマリー
+    description: str        # 解析の説明（1行）
+    code_prompt: str        # run_code_agent に渡したプロンプト
+    result_summary: str     # LLM による自然言語サマリー
     figures: list[str] = field(default_factory=list)
+    stdout: str = ""
     success: bool = True
 
 
 @dataclass
 class SessionContext:
     experiment_description: str = ""
-    groups: list[str] = field(default_factory=list)
-    data_type: str = ""
-    notes: str = ""                            # 追加のメモ（ユーザーから得た情報）
+    research_goals: str = ""
+    lang: str = "ja"                  # "ja" | "en"
     findings: list[AnalysisFinding] = field(default_factory=list)
     all_figures: list[str] = field(default_factory=list)
 
-    def to_context_block(self) -> str:
-        """コード生成プロンプトに挿入する実験コンテキスト文字列。"""
-        parts = ["## EXPERIMENT CONTEXT (use this to guide analysis)"]
+    def to_context_block(self, max_findings: int = 4) -> str:
+        parts = ["## EXPERIMENT CONTEXT"]
         if self.experiment_description:
             parts.append(f"Experiment: {self.experiment_description}")
-        if self.data_type:
-            parts.append(f"Data type: {self.data_type}")
-        if self.groups:
-            parts.append(f"Groups: {', '.join(self.groups)}")
-        if self.notes:
-            parts.append(f"Notes: {self.notes}")
-
+        if self.research_goals:
+            parts.append(f"Research goals: {self.research_goals}")
         if self.findings:
-            parts.append("\n## PREVIOUS ANALYSES (results so far)")
-            for f in self.findings[-4:]:   # 直近4件まで参照
-                parts.append(f"  Step {f.step}: {f.analysis_description}")
+            parts.append("\n## PREVIOUS ANALYSES")
+            for f in self.findings[-max_findings:]:
+                parts.append(f"  Step {f.step}: {f.description}")
                 if f.result_summary:
-                    # 先頭180文字だけ（プロンプト肥大化防止）
                     parts.append(f"  → {f.result_summary[:180]}")
                 if f.figures:
                     parts.append(f"  → Figures: {', '.join(Path(p).name for p in f.figures)}")
-
         return "\n".join(parts)
 
 
@@ -130,11 +113,8 @@ class SessionContext:
 
 class InteractiveSession:
     """
-    対話型マイクロバイオーム解析セッション。
-
-    1. setup()  — 実験の説明を受けてコンテキストを構築
-    2. chat()   — 解析指示を受けてコードを生成・実行・結果をサマリー
-    3. get_summary() — セッション全体のサマリー
+    研究目的から解析プランを自動作成し、
+    全自動で複数解析を実行して TeX/PDF レポートを生成する。
     """
 
     def __init__(
@@ -146,80 +126,223 @@ class InteractiveSession:
         log_callback=None,
         install_callback=None,
     ):
-        self.export_dir  = Path(export_dir).expanduser()
-        self.output_dir  = Path(output_dir).expanduser()
-        self.figure_dir  = Path(figure_dir).expanduser()
+        self.export_dir   = Path(export_dir).expanduser()
+        self.output_dir   = Path(output_dir).expanduser()
+        self.figure_dir   = Path(figure_dir).expanduser()
+        self.report_dir   = self.figure_dir.parent / "report"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.figure_dir.mkdir(parents=True, exist_ok=True)
+        self.report_dir.mkdir(parents=True, exist_ok=True)
 
-        self.model            = model or _agent.DEFAULT_MODEL
-        self._log             = log_callback or (lambda m: None)
-        self._install_cb      = install_callback
-        self.ctx              = SessionContext()
-        self._llm_history: list[dict] = []   # LLM 会話履歴（サマリー用）
-        self._step            = 0
-
-        # ファイル自動発見
+        self.model        = model or _agent.DEFAULT_MODEL
+        self._log         = log_callback or (lambda m: print(m, flush=True))
+        self._install_cb  = install_callback
+        self.ctx          = SessionContext()
         self.export_files = discover_export_files(self.export_dir)
 
-    # ── 1. setup ──────────────────────────────────────────────────────────────
+    # ── setup ─────────────────────────────────────────────────────────────────
 
-    def setup(self, description: str) -> str:
-        """
-        実験の説明を受け取り、コンテキストを構築する。
-        Returns: アシスタントからのウェルカムメッセージ（自然言語）
-        """
+    def setup(self, description: str, goals: str = "", lang: str = "ja") -> str:
+        """実験の説明と研究目的を受け取り、ウェルカムメッセージを返す。"""
         self.ctx.experiment_description = description
+        self.ctx.research_goals = goals
+        self.ctx.lang = lang
 
-        # LLM にコンテキスト解析 + ウェルカムメッセージを生成させる
-        n_files = sum(len(v) for v in self.export_files.values())
+        n = sum(len(v) for v in self.export_files.values())
         file_block = _file_summary(self.export_files)
 
         prompt = (
-            "You are a microbiome bioinformatics assistant.\n"
-            "The user has described their experiment. Respond in the SAME LANGUAGE the user used.\n\n"
-            f"User's description:\n{description}\n\n"
-            f"Available export files ({n_files} files found):\n{file_block}\n\n"
-            "Please:\n"
-            "1. Briefly confirm what you understood (experiment type, groups, data).\n"
-            "2. List the key files available.\n"
-            "3. Suggest 2-3 concrete analysis options to start with.\n"
-            "Keep it under 200 words. Be friendly and practical."
+            f"You are a microbiome bioinformatics assistant. Respond in {'Japanese' if lang == 'ja' else 'English'}.\n\n"
+            f"Experiment: {description}\n"
+            f"Research goals: {goals}\n\n"
+            f"Available files ({n} found):\n{file_block}\n\n"
+            "Briefly confirm what you understood and suggest a concrete analysis plan "
+            "(5-7 steps) for these goals. Keep it under 200 words."
+        )
+        return self._call_llm(prompt)
+
+    # ── plan ──────────────────────────────────────────────────────────────────
+
+    def plan_analysis_suite(self) -> list[str]:
+        """
+        実験説明と研究目的から解析プランを LLM に生成させる。
+        Returns: 解析の説明リスト（各要素が run_code_agent に渡すプロンプトになる）
+        """
+        available = list(self.export_files.keys())
+        file_block = _file_summary(self.export_files)
+
+        prompt = (
+            "You are planning a microbiome analysis pipeline.\n\n"
+            f"Experiment: {self.ctx.experiment_description}\n"
+            f"Research goals: {self.ctx.research_goals}\n\n"
+            f"Available data: {', '.join(available)}\n"
+            f"Files:\n{file_block}\n\n"
+            "List 5-8 specific analyses to run, ordered logically. "
+            "Each should be ONE concrete figure/visualization task.\n"
+            "Format: one analysis per line, starting with a number and period.\n"
+            "Example:\n"
+            "1. Plot denoising statistics (reads filtered/merged/non-chimeric) as a bar chart.\n"
+            "2. Compare Shannon alpha diversity between groups with boxplot and Mann-Whitney U test.\n"
+            "Keep each description under 30 words. Focus on what figures to generate."
         )
 
-        reply = self._call_llm_simple(prompt)
+        content = self._call_llm(prompt)
 
-        # 履歴に追加
-        self._llm_history.append({"role": "user", "content": description})
-        self._llm_history.append({"role": "assistant", "content": reply})
+        # 番号付きリストを解析
+        analyses = []
+        for line in content.splitlines():
+            m = re.match(r"^\s*\d+[\.\)]\s*(.+)", line.strip())
+            if m:
+                analyses.append(m.group(1).strip())
 
-        return reply
+        if not analyses:
+            # フォールバック: デフォルト解析セット
+            analyses = _default_analyses(available)
 
-    # ── 2. chat ───────────────────────────────────────────────────────────────
+        return analyses[:8]  # 最大8ステップ
+
+    # ── run_planned ───────────────────────────────────────────────────────────
+
+    def run_planned(
+        self,
+        analyses: list[str],
+        progress_callback=None,
+    ) -> list[AnalysisFinding]:
+        """
+        解析リストを順番に実行する。
+        progress_callback(step, total, description) が渡されると進捗通知。
+        """
+        total = len(analyses)
+        for i, desc in enumerate(analyses, 1):
+            if progress_callback:
+                progress_callback(i, total, desc)
+            self._log(f"\n{'─'*55}")
+            self._log(f"[{i}/{total}] {desc}")
+            self._log(f"{'─'*55}")
+
+            result = self._run_one(desc)
+
+            # 簡易サマリー（LLM 呼び出し節約のため短文）
+            n_figs = len(result.figures)
+            summary = (
+                f"{desc} — {'成功' if result.success else '失敗'} "
+                f"({'図 ' + str(n_figs) + ' 件生成' if n_figs else 'エラー'})"
+            )
+
+            finding = AnalysisFinding(
+                step=len(self.ctx.findings) + 1,
+                description=desc,
+                code_prompt=desc,
+                result_summary=summary,
+                figures=result.figures,
+                stdout=result.stdout or "",
+                success=result.success,
+            )
+            self.ctx.findings.append(finding)
+            self.ctx.all_figures.extend(result.figures)
+
+            if result.figures:
+                self._log(f"  ✅ 図: {[Path(f).name for f in result.figures]}")
+            else:
+                self._log(f"  {'✅' if result.success else '⚠️ '} 図なし")
+
+        return self.ctx.findings
+
+    # ── chat（個別ターン）────────────────────────────────────────────────────
 
     def chat(self, user_input: str) -> dict:
+        """ユーザーの解析指示を1回受けてコードを生成・実行し結果をサマリーする。"""
+        self._log(f"\n🔬 解析中: {user_input[:80]}...")
+        result = self._run_one(user_input)
+        summary = self._summarize(user_input, result)
+
+        finding = AnalysisFinding(
+            step=len(self.ctx.findings) + 1,
+            description=user_input[:120],
+            code_prompt=user_input,
+            result_summary=summary,
+            figures=result.figures,
+            stdout=result.stdout or "",
+            success=result.success,
+        )
+        self.ctx.findings.append(finding)
+        self.ctx.all_figures.extend(result.figures)
+
+        return {
+            "text":    summary,
+            "figures": result.figures,
+            "success": result.success,
+        }
+
+    # ── レポート生成 ──────────────────────────────────────────────────────────
+
+    def generate_report(self) -> dict:
         """
-        ユーザーの解析指示を受けて、コードを生成・実行し結果をサマリーする。
-
-        Returns:
-            {
-                "text":    str,          # 自然言語サマリー + 次の提案
-                "figures": list[str],    # 生成された図のパス
-                "step":    int,
-                "success": bool,
-            }
+        全解析結果を TeX + PDF レポートとして出力する。
+        report/ ディレクトリに report_ja.tex / report_ja.pdf (または en) を保存。
+        Returns: {"tex_path": str, "pdf_path": str | None, "report_dir": str}
         """
-        self._step += 1
-        self._llm_history.append({"role": "user", "content": user_input})
-        self._log(f"\n🔬 [Step {self._step}] 解析実行中...")
+        lang = self.ctx.lang
+        self._log("\n📄 レポートを生成しています...")
 
-        # コード生成用プロンプト（コンテキスト付き）
-        code_prompt = self._build_code_prompt(user_input)
+        # 各図の説明を LLM に書かせる
+        figure_descriptions = self._generate_figure_descriptions(lang)
 
-        # コード生成・実行
-        result = run_code_agent(
+        # TeX ソース構築
+        tex_content = _build_tex(
+            lang=lang,
+            experiment_description=self.ctx.experiment_description,
+            research_goals=self.ctx.research_goals,
+            findings=self.ctx.findings,
+            figure_descriptions=figure_descriptions,
+            figure_dir=self.figure_dir,
+            report_dir=self.report_dir,
+        )
+
+        fname = f"report_{lang}.tex"
+        tex_path = self.report_dir / fname
+        tex_path.write_text(tex_content, encoding="utf-8")
+        self._log(f"  ✅ TeX 保存: {tex_path}")
+
+        # PDF コンパイル
+        pdf_path = _compile_tex(tex_path, self._log)
+
+        return {
+            "tex_path":   str(tex_path),
+            "pdf_path":   str(pdf_path) if pdf_path else None,
+            "report_dir": str(self.report_dir),
+        }
+
+    # ── summary ───────────────────────────────────────────────────────────────
+
+    def get_summary(self) -> str:
+        if not self.ctx.findings:
+            return "まだ解析は実行されていません。"
+        lines = [
+            "=" * 55,
+            "📊 解析セッション サマリー",
+            "=" * 55,
+            f"実験: {self.ctx.experiment_description[:100]}",
+            f"ステップ数: {len(self.ctx.findings)} / 図: {len(self.ctx.all_figures)} 件",
+            "",
+        ]
+        for f in self.ctx.findings:
+            icon = "✅" if f.success else "❌"
+            lines.append(f"{icon} Step {f.step}: {f.description[:70]}")
+            for fig in f.figures:
+                lines.append(f"     📊 {Path(fig).name}")
+        lines += ["", f"図の保存先: {self.figure_dir}", f"レポート: {self.report_dir}", "=" * 55]
+        return "\n".join(lines)
+
+    # ── 内部メソッド ──────────────────────────────────────────────────────────
+
+    def _run_one(self, user_request: str) -> CodeExecutionResult:
+        """コンテキスト付きプロンプトでコード生成・実行。"""
+        ctx_block = self.ctx.to_context_block()
+        prompt = f"{ctx_block}\n\n## CURRENT TASK\n{user_request}" if ctx_block else user_request
+        return run_code_agent(
             export_files=self.export_files,
-            user_prompt=code_prompt,
+            user_prompt=prompt,
             output_dir=str(self.output_dir),
             figure_dir=str(self.figure_dir),
             model=self.model,
@@ -228,122 +351,333 @@ class InteractiveSession:
             install_callback=self._install_cb,
         )
 
-        # 結果のサマリー（自然言語）
-        summary_text = self._summarize(user_input, result)
-
-        # コンテキストに記録
-        finding = AnalysisFinding(
-            step=self._step,
-            user_request=user_input,
-            analysis_description=user_input[:120],
-            result_summary=summary_text,
-            figures=result.figures,
-            success=result.success,
-        )
-        self.ctx.findings.append(finding)
-        self.ctx.all_figures.extend(result.figures)
-
-        self._llm_history.append({"role": "assistant", "content": summary_text})
-
-        return {
-            "text":    summary_text,
-            "figures": result.figures,
-            "step":    self._step,
-            "success": result.success,
-        }
-
-    # ── 3. summary ────────────────────────────────────────────────────────────
-
-    def get_summary(self) -> str:
-        """セッション全体のサマリーを返す。"""
-        if not self.ctx.findings:
-            return "まだ解析は実行されていません。"
-
-        lines = [
-            "=" * 55,
-            "📊 解析セッション サマリー",
-            "=" * 55,
-            f"実験: {self.ctx.experiment_description[:120]}",
-            f"総ステップ数: {self._step}",
-            f"生成された図: {len(self.ctx.all_figures)} 件",
-            "",
-        ]
-        for f in self.ctx.findings:
-            icon = "✅" if f.success else "❌"
-            lines.append(f"{icon} Step {f.step}: {f.user_request[:70]}")
-            if f.figures:
-                for fig in f.figures:
-                    lines.append(f"     📊 {Path(fig).name}")
-        lines.append("")
-        lines.append(f"図の保存先: {self.figure_dir}")
-        lines.append("=" * 55)
-        return "\n".join(lines)
-
-    # ── 内部メソッド ──────────────────────────────────────────────────────────
-
-    def _build_code_prompt(self, user_request: str) -> str:
-        """コンテキスト情報を含んだコード生成用プロンプト。"""
-        ctx_block = self.ctx.to_context_block()
-        if ctx_block:
-            return f"{ctx_block}\n\n## CURRENT ANALYSIS REQUEST\n{user_request}"
-        return user_request
-
-    def _summarize(self, user_request: str, result: CodeExecutionResult) -> str:
-        """解析結果を自然言語でサマリーし、次のステップを提案する。"""
+    def _summarize(self, request: str, result: CodeExecutionResult) -> str:
         if not result.success and not result.figures:
             return (
-                f"⚠️ 解析中にエラーが発生しました。\n"
-                f"エラー内容: {(result.error_message or '')[:300]}\n\n"
-                "プロンプトを変えるか、別のアプローチを試してみてください。"
+                f"⚠️ エラーが発生しました: {(result.error_message or '')[:200]}\n"
+                "別の表現で指示を変えて試してみてください。"
             )
-
         fig_names = [Path(f).name for f in result.figures]
-        stdout_snip = (result.stdout or "")[:400]
-
-        # LLM にサマリーを生成させる
-        summary_prompt = (
-            f"Microbiome analysis result summary.\n\n"
-            f"User requested: \"{user_request}\"\n"
-            f"Figures generated: {', '.join(fig_names) if fig_names else 'none'}\n"
-            f"Script output:\n{stdout_snip}\n\n"
-            f"Previous context:\n{self.ctx.to_context_block()[:400]}\n\n"
-            "Write a concise summary (3-5 sentences) in the SAME LANGUAGE the user uses:\n"
-            "1. What was analyzed and what the result shows\n"
-            "2. Any notable biological interpretation\n"
-            "3. Suggest 1-2 natural next analysis steps"
+        prompt = (
+            f"Summarize in {'Japanese' if self.ctx.lang == 'ja' else 'English'} "
+            f"(3-4 sentences).\n"
+            f"Analysis: {request}\n"
+            f"Figures: {', '.join(fig_names) if fig_names else 'none'}\n"
+            f"Output: {(result.stdout or '')[:300]}\n"
+            "Include biological interpretation and suggest 1-2 next steps."
         )
-
-        summary = self._call_llm_simple(summary_prompt)
-
-        # 図リストを末尾に追加
+        summary = self._call_llm(prompt)
         if fig_names:
-            summary += "\n\n📊 生成された図:\n" + "\n".join(f"  • {n}" for n in fig_names)
-
+            summary += "\n\n📊 " + "\n📊 ".join(fig_names)
         return summary
 
-    def _call_llm_simple(self, prompt: str) -> str:
-        """サマリー・ウェルカム用の単純な LLM 呼び出し。"""
+    def _generate_figure_descriptions(self, lang: str) -> dict[str, str]:
+        """
+        各図ファイル名 → TeX 用説明文（手法 + 解釈）の辞書を生成する。
+        """
+        desc: dict[str, str] = {}
+        for finding in self.ctx.findings:
+            for fig_path in finding.figures:
+                fig_name = Path(fig_path).name
+                prompt = (
+                    f"Write a {'Japanese' if lang == 'ja' else 'English'} figure caption "
+                    f"(2-3 sentences) for a scientific paper.\n"
+                    f"Analysis performed: {finding.description}\n"
+                    f"Figure file: {fig_name}\n"
+                    f"Result context: {finding.stdout[:200]}\n"
+                    "Include: what was measured, method used, key finding. "
+                    "Do NOT start with 'Figure' or a number."
+                )
+                desc[fig_name] = self._call_llm(prompt)
+        return desc
+
+    def _call_llm(self, prompt: str) -> str:
         try:
             resp = _agent.call_ollama(
                 [{"role": "user", "content": prompt}],
                 self.model,
             )
-            return resp.get("content", "（応答なし）").strip()
+            return resp.get("content", "").strip()
         except Exception as e:
-            return f"（LLM 呼び出しエラー: {e}）"
+            return f"（LLM エラー: {e}）"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLIターミナルモード（スタンドアロン実行用）
+# デフォルト解析セット（LLM のプランニングが失敗した場合のフォールバック）
 # ─────────────────────────────────────────────────────────────────────────────
 
-_HELP_TEXT = """
-コマンド一覧:
-  summary  — これまでの解析をまとめて表示
-  figures  — 生成された図のパスを一覧表示
-  context  — 現在の実験コンテキストを確認
-  help     — このヘルプを表示
-  exit     — 終了
+def _default_analyses(available: list[str]) -> list[str]:
+    analyses = []
+    if "denoising" in available:
+        analyses.append(
+            "Plot denoising statistics: grouped bar chart showing input, filtered, denoised, "
+            "merged, and non-chimeric read counts per sample."
+        )
+    if "alpha" in available:
+        analyses.append(
+            "Plot Shannon alpha diversity per sample as a boxplot with individual data points (stripplot). "
+            "Use seaborn modern style."
+        )
+        analyses.append(
+            "Plot all alpha diversity metrics (Shannon, Faith PD, observed features, evenness) "
+            "side by side as boxplots."
+        )
+    if "feature_table" in available and "taxonomy" in available:
+        analyses.append(
+            "Plot relative abundance stacked bar chart at genus level (top 15 genera + Other), "
+            "one bar per sample. Use tab20 palette."
+        )
+        analyses.append(
+            "Plot top 10 most abundant phyla as a horizontal bar chart of mean relative abundance."
+        )
+    if "beta" in available:
+        analyses.append(
+            "Plot PCoA of Bray-Curtis distances as scatter plot with sample labels. "
+            "Use modern seaborn white style."
+        )
+    if len(analyses) < 4 and "feature_table" in available:
+        analyses.append(
+            "Plot rarefaction curve: species richness (observed features) vs. sequencing depth, "
+            "one line per sample."
+        )
+    return analyses
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TeX レポートビルダー
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tex_escape(text: str) -> str:
+    """LaTeX の特殊文字をエスケープ。"""
+    for ch, rep in [
+        ("\\", r"\textbackslash{}"), ("&", r"\&"), ("%", r"\%"),
+        ("$", r"\$"), ("#", r"\#"), ("_", r"\_"), ("{", r"\{"),
+        ("}", r"\}"), ("~", r"\textasciitilde{}"), ("^", r"\^{}"),
+    ]:
+        text = text.replace(ch, rep)
+    return text
+
+
+def _build_tex(
+    lang: str,
+    experiment_description: str,
+    research_goals: str,
+    findings: list[AnalysisFinding],
+    figure_descriptions: dict[str, str],
+    figure_dir: Path,
+    report_dir: Path,
+) -> str:
+    """TeX ソース文字列を組み立てる。"""
+    is_ja = (lang == "ja")
+    today = datetime.date.today().isoformat()
+
+    total_figs = sum(len(f.figures) for f in findings)
+    total_steps = len(findings)
+
+    L: list[str] = []
+
+    # ── プリアンブル ─────────────────────────────────────────────────────────
+    if is_ja:
+        L += [
+            r"\documentclass[a4paper,12pt]{article}",
+            r"\usepackage{xeCJK}",
+            r"\setCJKmainfont{Hiragino Mincho ProN}",
+        ]
+    else:
+        L += [r"\documentclass[a4paper,12pt]{article}"]
+
+    L += [
+        r"\usepackage{graphicx}",
+        r"\usepackage{booktabs}",
+        r"\usepackage{longtable}",
+        r"\usepackage{geometry}",
+        r"\usepackage{caption}",
+        r"\usepackage[hidelinks]{hyperref}",
+        r"\usepackage{parskip}",
+        r"\geometry{margin=2.5cm}",
+        r"\captionsetup{font=small, labelfont=bf}",
+        "",
+        r"\title{" + ("マイクロバイオーム解析レポート" if is_ja else "Microbiome Analysis Report") + "}",
+        r"\author{seq2pipe}",
+        r"\date{" + today + "}",
+        r"\begin{document}",
+        r"\maketitle",
+        r"\tableofcontents",
+        r"\newpage",
+        "",
+    ]
+
+    # ── 概要 ─────────────────────────────────────────────────────────────────
+    if is_ja:
+        L += [
+            r"\section{解析概要}",
+            r"\subsection{実験系}",
+            _tex_escape(experiment_description),
+            "",
+        ]
+        if research_goals:
+            L += [
+                r"\subsection{研究目的}",
+                _tex_escape(research_goals),
+                "",
+            ]
+        L += [
+            r"\subsection{解析サマリー}",
+            r"\begin{tabular}{ll}",
+            r"\toprule",
+            f"解析ステップ数 & {total_steps} \\\\",
+            f"生成された図 & {total_figs} 件 \\\\",
+            f"実行日時 & {today} \\\\",
+            r"\bottomrule",
+            r"\end{tabular}",
+            r"\newpage",
+            "",
+        ]
+    else:
+        L += [
+            r"\section{Overview}",
+            r"\subsection{Experimental Setup}",
+            _tex_escape(experiment_description),
+            "",
+        ]
+        if research_goals:
+            L += [
+                r"\subsection{Research Goals}",
+                _tex_escape(research_goals),
+                "",
+            ]
+        L += [
+            r"\subsection{Analysis Summary}",
+            r"\begin{tabular}{ll}",
+            r"\toprule",
+            f"Analysis steps & {total_steps} \\\\",
+            f"Figures generated & {total_figs} \\\\",
+            f"Date & {today} \\\\",
+            r"\bottomrule",
+            r"\end{tabular}",
+            r"\newpage",
+            "",
+        ]
+
+    # ── 各解析セクション ──────────────────────────────────────────────────────
+    results_title = "解析結果" if is_ja else "Results"
+    L.append(f"\\section{{{results_title}}}")
+    L.append("")
+
+    for finding in findings:
+        if not finding.figures:
+            continue  # 図がない解析はスキップ
+
+        # subsection タイトル = 解析の説明（先頭60文字）
+        sec_title = _tex_escape(finding.description[:60])
+        L.append(f"\\subsection{{{sec_title}}}")
+        L.append("")
+
+        for fig_path in finding.figures:
+            fig_name = Path(fig_path).name
+            # report/ から figures/ への相対パス
+            rel = Path("..") / "figures" / fig_name
+
+            # キャプション（LLM 生成 or フォールバック）
+            caption_text = figure_descriptions.get(fig_name, finding.description)
+            caption_escaped = _tex_escape(caption_text)
+
+            L += [
+                r"\begin{figure}[htbp]",
+                r"  \centering",
+                f"  \\includegraphics[width=0.92\\textwidth]{{{rel}}}",
+                f"  \\caption{{{caption_escaped}}}",
+                f"  \\label{{fig:{fig_name.replace('.', '_')}}}",
+                r"\end{figure}",
+                "",
+            ]
+
+    # ── 手法セクション ────────────────────────────────────────────────────────
+    methods_title = "手法" if is_ja else "Methods"
+    L.append(r"\newpage")
+    L.append(f"\\section{{{methods_title}}}")
+    L.append("")
+
+    for finding in findings:
+        if not finding.figures:
+            continue
+        sec_title = _tex_escape(finding.description[:60])
+        L.append(f"\\subsection{{{sec_title}}}")
+        if is_ja:
+            L.append(
+                "本解析は seq2pipe の LLM コードエージェント（qwen2.5-coder）によって自動生成された "
+                "Python スクリプトで実行されました。可視化には matplotlib / seaborn を使用しました。"
+            )
+        else:
+            L.append(
+                "This analysis was performed by a Python script automatically generated by "
+                "seq2pipe's LLM code agent. Visualization used matplotlib / seaborn."
+            )
+        L.append("")
+
+    L.append(r"\end{document}")
+    return "\n".join(L)
+
+
+def _compile_tex(tex_path: Path, log=None) -> Optional[Path]:
+    """tectonic または pdflatex で TeX を PDF にコンパイルする。"""
+    _log = log or (lambda m: None)
+
+    # tectonic を優先（自動フォントダウンロード対応）
+    tectonic = shutil.which("tectonic")
+    if tectonic:
+        try:
+            proc = subprocess.run(
+                [tectonic, str(tex_path)],
+                capture_output=True, text=True,
+                timeout=180, cwd=str(tex_path.parent),
+            )
+            pdf = tex_path.with_suffix(".pdf")
+            if proc.returncode == 0 and pdf.exists():
+                _log(f"  ✅ PDF 生成: {pdf}")
+                return pdf
+            else:
+                _log(f"  ⚠️  tectonic エラー: {proc.stderr[:300]}")
+        except subprocess.TimeoutExpired:
+            _log("  ⏱️  tectonic タイムアウト")
+        except Exception as e:
+            _log(f"  ❌ tectonic: {e}")
+
+    # pdflatex フォールバック（日本語は xelatex）
+    engine = "xelatex" if "\\usepackage{xeCJK}" in tex_path.read_text() else "pdflatex"
+    latex_bin = shutil.which(engine)
+    if latex_bin:
+        try:
+            for _ in range(2):   # 目次のために2回
+                subprocess.run(
+                    [latex_bin, "-interaction=nonstopmode", str(tex_path)],
+                    capture_output=True, text=True,
+                    timeout=180, cwd=str(tex_path.parent),
+                )
+            pdf = tex_path.with_suffix(".pdf")
+            if pdf.exists():
+                _log(f"  ✅ PDF 生成: {pdf}")
+                return pdf
+        except Exception as e:
+            _log(f"  ❌ {engine}: {e}")
+
+    _log("  ⚠️  PDF コンパイラが見つかりません（tectonic / pdflatex / xelatex）")
+    _log("     brew install tectonic  または  brew install --cask mactex")
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLIターミナルモード
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HELP = """
+コマンド:
+  summary    これまでの解析サマリーを表示
+  figures    生成された図のパスを一覧
+  report     今すぐレポートを生成（解析途中でも可）
+  context    現在の実験コンテキストを表示
+  help       このヘルプ
+  exit       終了
 """
 
 
@@ -355,15 +689,15 @@ def run_terminal_chat(
     log_callback=None,
     install_callback=None,
 ):
-    """ターミナルでの対話型解析セッションを実行する。"""
+    """ターミナルで対話型解析セッションを実行する。"""
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base = Path.home() / "seq2pipe_results" / ts
     out_dir = output_dir or str(base / "output")
     fig_dir = figure_dir or str(base / "figures")
 
     def _log(m: str):
-        # コード生成の詳細ログは薄く表示
-        if m.startswith("  "):
+        # コード生成の詳細は薄く表示
+        if m.startswith("  ") and not m.startswith("  ✅") and not m.startswith("  ⚠️"):
             print(f"\033[2m{m}\033[0m", flush=True)
         else:
             print(m, flush=True)
@@ -372,17 +706,17 @@ def run_terminal_chat(
         _log = log_callback  # noqa: F811
 
     def _install_cb(pkg: str) -> bool:
-        ans = input(f"\n⚠️  パッケージ '{pkg}' が必要です。インストールしますか? [Y/n]: ").strip().lower()
+        ans = input(f"\n⚠️  '{pkg}' が必要です。インストールしますか? [Y/n]: ").strip().lower()
         return ans != "n"
 
     _cb = install_callback or _install_cb
 
     print()
     print("─" * 55)
-    print("🧬  seq2pipe  対話型解析モード")
+    print("🧬  seq2pipe  対話型自律解析モード")
     print("─" * 55)
-    print(f"  エクスポートデータ: {export_dir}")
-    print(f"  図の出力先        : {fig_dir}")
+    print(f"  データ : {export_dir}")
+    print(f"  図    : {fig_dir}")
     print("─" * 55)
 
     session = InteractiveSession(
@@ -396,80 +730,120 @@ def run_terminal_chat(
 
     if not session.export_files:
         print(f"\n❌ {export_dir} に QIIME2 エクスポートファイルが見つかりません。")
-        print("   feature-table.tsv / taxonomy/taxonomy.tsv などを確認してください。")
         return
 
     n = sum(len(v) for v in session.export_files.values())
-    print(f"\n✅ {n} ファイルを検出しました:")
+    print(f"\n✅ {n} ファイルを検出:")
     for cat, paths in session.export_files.items():
         for p in paths:
             print(f"   [{cat}] {Path(p).name}")
 
-    # ── 実験の説明 ──────────────────────────────────────────────────────────
+    # ── 言語選択 ──────────────────────────────────────────────────────────────
     print()
-    print("実験の概要を教えてください。")
-    print("（例: マウス腸内フローラ 16S データ。抗生物質投与群 vs 対照群、各 10 匹）")
-    print()
-    try:
-        description = input("あなた> ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print(); return
+    lang_raw = _input_safe("レポート言語を選択してください [ja/en]", default="ja")
+    lang = "en" if lang_raw.strip().lower().startswith("e") else "ja"
 
+    # ── 実験説明 ──────────────────────────────────────────────────────────────
+    print()
+    print("【1/2】実験の概要を教えてください。")
+    print("  （例: マウス腸内フローラ 16S。抗生物質投与群 vs 対照群、各 10 匹）")
+    description = _input_safe("あなた", required=True)
     if not description:
         description = "QIIME2 で処理したマイクロバイオームデータ"
 
+    print()
+    print("【2/2】知りたいこと・研究の目的を教えてください。")
+    print("  （例: 抗生物質が多様性と菌叢組成に与える影響。Lactobacillus の変化を見たい）")
+    goals = _input_safe("あなた", required=False)
+
+    # ── セットアップ ──────────────────────────────────────────────────────────
     print("\n🤖 考え中...\n")
-    welcome = session.setup(description)
+    welcome = session.setup(description, goals, lang)
     print(f"🤖  {welcome}\n")
 
-    # ── メインループ ─────────────────────────────────────────────────────────
+    # ── 解析プランの作成 ──────────────────────────────────────────────────────
     print("─" * 55)
-    print("解析指示を入力してください。(help でコマンド一覧)\n")
+    print("📋 解析プランを作成しています...")
+    analyses = session.plan_analysis_suite()
+
+    print(f"\n以下の解析を実行します（{len(analyses)} ステップ）:\n")
+    for i, a in enumerate(analyses, 1):
+        print(f"  {i}. {a}")
+
+    print()
+    go = _input_safe("このプランで解析を開始しますか？ [Y/n]", default="y")
+    if go.strip().lower() == "n":
+        print("解析プランを変更したい場合は解析内容を直接入力してください。")
+
+    else:
+        # ── 全自動解析実行 ────────────────────────────────────────────────────
+        print()
+        session.run_planned(analyses)
+
+        # ── レポート生成 ──────────────────────────────────────────────────────
+        print()
+        rpt = session.generate_report()
+        print(f"\n📄 レポート保存先: {rpt['report_dir']}")
+        if rpt["tex_path"]:
+            print(f"   TeX : {rpt['tex_path']}")
+        if rpt["pdf_path"]:
+            print(f"   PDF : {rpt['pdf_path']}")
+
+    # ── 追加の会話ループ ──────────────────────────────────────────────────────
+    print()
+    print("─" * 55)
+    print("追加の解析指示があれば入力してください。(help / exit)\n")
 
     while True:
-        try:
-            user_input = input("あなた> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
+        user_input = _input_safe("あなた", required=False)
+        if user_input is None:
             break
-
         if not user_input:
             continue
-
-        # 特殊コマンド
-        cmd = user_input.lower()
+        cmd = user_input.lower().strip()
         if cmd in ("exit", "quit", "q"):
             break
+        if cmd == "help":
+            print(_HELP)
+            continue
         if cmd == "summary":
             print("\n" + session.get_summary() + "\n")
             continue
         if cmd == "figures":
             figs = session.ctx.all_figures
-            if figs:
-                print("\n📊 生成された図:")
-                for f in figs:
-                    print(f"   {f}")
-                print()
-            else:
-                print("\n（まだ図は生成されていません）\n")
+            print("\n📊 生成された図:" if figs else "\n（まだ図はありません）")
+            for f in figs:
+                print(f"   {f}")
+            print()
             continue
         if cmd == "context":
             print("\n" + session.ctx.to_context_block() + "\n")
             continue
-        if cmd == "help":
-            print(_HELP_TEXT)
+        if cmd == "report":
+            rpt = session.generate_report()
+            print(f"📄 レポート: {rpt['report_dir']}")
+            if rpt["pdf_path"]:
+                print(f"   PDF: {rpt['pdf_path']}")
             continue
 
-        # 解析実行
-        print()
         result = session.chat(user_input)
-        print()
-        print(f"🤖  {result['text']}\n")
+        print(f"\n🤖  {result['text']}\n")
         print("─" * 55)
 
-    # セッション終了
+    # 終了
     print("\n" + session.get_summary())
-    print("\n👋 セッションを終了しました。\n")
+    print("\n👋 終了しました。\n")
+
+
+def _input_safe(prompt: str, default: str = "", required: bool = False) -> Optional[str]:
+    """入力ヘルパー。EOF / Ctrl+C で None を返す。"""
+    hint = f" [{default}]" if default else ""
+    try:
+        val = input(f"{prompt}{hint}> ").strip()
+        return val if val else (default if default else ("" if not required else None))
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -480,18 +854,14 @@ if __name__ == "__main__":
     import argparse, sys
 
     parser = argparse.ArgumentParser(
-        description="seq2pipe 対話型解析モード",
+        description="seq2pipe 対話型自律解析モード",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "使用例:\n"
-            "  python chat_agent.py ~/data/exported/\n"
-            "  python chat_agent.py ~/data/exported/ --model qwen2.5-coder:7b"
-        ),
+        epilog="例:\n  python chat_agent.py ~/data/exported/\n  python chat_agent.py ~/data/exported/ --model qwen2.5-coder:7b",
     )
     parser.add_argument("export_dir", help="QIIME2 エクスポートディレクトリ")
-    parser.add_argument("--output-dir", help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
-    parser.add_argument("--figure-dir", help="図の出力ディレクトリ")
-    parser.add_argument("--model",      help="使用する Ollama モデル名")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--figure-dir")
+    parser.add_argument("--model")
     args = parser.parse_args()
 
     run_terminal_chat(
