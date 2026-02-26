@@ -32,7 +32,7 @@
 - データ構造を自動で調査（FASTQ / メタデータ / 既存 QZA）
 - データに合った QIIME2 コマンドをゼロから組み立てる
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
-- **3 つの操作モード**: チャット（自然言語でやりたい解析を指定）・自律エージェント（AI が自律的に全解析を設計・実行）・**Streamlit ブラウザ GUI（`app.py`）**
+- **2 つの操作モード**: チャット（自然言語でやりたい解析を指定）・自律エージェント（AI が自律的に全解析を設計・実行）
 - **ツール呼び出し型コード生成エージェント（vibe-local 方式）**: LLM がまず `read_file` でデータの列名・形式を確認してからコードを生成するため精度が高く、エラーが出ても `NEVER GIVE UP` で自動修正を繰り返す
 - QIIME2 の出力を **Python（pandas / scipy / scikit-learn / matplotlib）で高度解析**
 - 解析図をすべて **PNG/PDF として自動保存**（view.qiime2.org 不要）
@@ -143,38 +143,18 @@ pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format netwo
 
 ## 起動方法
 
-### Streamlit ブラウザ GUI（推奨）
-
-```bash
-~/miniforge3/envs/qiime2/bin/streamlit run app.py
-# → ブラウザで http://localhost:8501 が開く
-```
-
-ブラウザ上でパスを入力してボタン一つで実行できます。ログ・結果ファイル・図をタブで確認できます。
-
-### ターミナル CLI
-
 ```bash
 ./launch.sh     # macOS / Linux
 .\launch.bat    # Windows
 ```
 
+起動すると言語選択（日本語 / English）の後、対話型ターミナルセッションが始まります。
+
+> **ブラウザ GUI が必要な場合（任意）:** `app.py`（Streamlit）を利用できますが、ターミナル CLI が標準の使用方法です。
+
 ---
 
 ## 使い方
-
-### Streamlit GUI モード
-
-サイドバーで設定を入力してボタンをクリック:
-
-1. **FASTQ ディレクトリ** を入力
-2. **メタデータ (.tsv)** をアップロードまたはパス入力
-3. **DADA2 パラメータ**（trim-left, trunc-len, n_threads, sampling_depth）を設定
-4. **Ollama モデル**をセレクトボックスから選択
-5. **解析プロンプト**を自然言語で記述（省略可）
-6. **「QIIME2 パイプライン + コード生成」** ボタンをクリック
-
-実行中はログタブでリアルタイムに進捗を確認できます。完了後は結果ファイルのダウンロードと図の表示が行われます。
 
 ### QIIME2 パイプライン生成（CLI）
 
@@ -354,9 +334,9 @@ QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
 あなた
   |
   v
-[ app.py (Streamlit GUI) ]  OR  [ launch.sh ]  →  [ cli.py ]
-        |                                                |
-        v                                                v
+[ launch.sh / cli.py ]  (任意: app.py Streamlit GUI)
+        |
+        v
 [ pipeline_runner.py ]  ←─────────────────────→  [ qiime2_agent.py ]
   QIIME2 パイプライン実行                          QIIME2 コマンド生成
   (manifest モンキーパッチ対応)                    (11 ツール)
@@ -460,9 +440,9 @@ QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
 
 ```
 seq2pipe/
-├── app.py             # Streamlit ブラウザ GUI（NEW）
-├── chat_agent.py      # 自律解析セッション管理 + TeX/PDF レポート生成（NEW）
 ├── cli.py             # ターミナル エントリーポイント（虹色バナー・モード選択）
+├── chat_agent.py      # 自律解析セッション管理 + TeX/PDF レポート生成
+├── app.py             # Streamlit ブラウザ GUI（任意）
 ├── qiime2_agent.py    # QIIME2 パイプライン生成エージェント（11 ツール）
 ├── pipeline_runner.py # QIIME2 実行ラッパー + 結果エクスポート
 ├── code_agent.py      # LLM コード生成エージェント（vibe-local 方式）
@@ -555,7 +535,7 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - Inspects your data structure automatically (FASTQ / metadata / existing QZA)
 - Builds the right QIIME2 commands from scratch for your dataset
 - Writes ready-to-run `.sh` / `.ps1` scripts
-- **Three operation modes**: Chat (specify analysis in natural language) · Autonomous agent (AI designs and runs all analyses) · **Streamlit browser GUI (`app.py`)**
+- **Two operation modes**: Chat (specify analysis in natural language) · Autonomous agent (AI designs and runs all analyses)
 - **Tool-calling code generation agent (vibe-local style)**: LLM first calls `read_file` to understand column names and data format before writing code — far fewer format errors; if an error occurs, `NEVER GIVE UP` — it rewrites and retries until EXIT CODE: 0
 - Runs **Python downstream analysis** (pandas / scipy / scikit-learn / matplotlib) on QIIME2 outputs
 - **Auto-saves all figures as PNG/PDF** — no need for view.qiime2.org
@@ -666,21 +646,14 @@ pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format netwo
 
 ## Launch
 
-### Streamlit Browser GUI (Recommended)
-
-```bash
-~/miniforge3/envs/qiime2/bin/streamlit run app.py
-# → Opens http://localhost:8501 in your browser
-```
-
-Enter paths, click a button, and watch the analysis run. Logs, result files, and figures are shown in separate tabs.
-
-### Terminal CLI
-
 ```bash
 ./launch.sh     # macOS / Linux
 .\launch.bat    # Windows
 ```
+
+After launching, select your language (Japanese / English) and an interactive terminal session begins.
+
+> **Optional browser GUI:** `app.py` (Streamlit) is available for those who prefer a browser interface, but the terminal CLI is the standard way to use seq2pipe.
 
 ---
 
@@ -802,9 +775,9 @@ Enter request: Shannon diversity violin plot by group
 You
   |
   v
-[ app.py (Streamlit GUI) ]  OR  [ launch.sh ]  →  [ cli.py ]
-        |                                                |
-        v                                                v
+[ launch.sh / cli.py ]  (optional: app.py Streamlit GUI)
+        |
+        v
 [ pipeline_runner.py ]  ←─────────────────────→  [ qiime2_agent.py ]
   QIIME2 pipeline execution                        QIIME2 command generation
   (manifest monkey-patch support)                  (11 tools)
@@ -897,9 +870,9 @@ curl --proto '=https' --tlsv1.2 -fsSL https://drop.rs/tectonic | sh
 
 ```
 seq2pipe/
-├── app.py             # Streamlit browser GUI (NEW)
-├── chat_agent.py      # Autonomous analysis session + TeX/PDF report (NEW)
 ├── cli.py             # Terminal entry point (rainbow banner / mode selection)
+├── chat_agent.py      # Autonomous analysis session + TeX/PDF report
+├── app.py             # Streamlit browser GUI (optional)
 ├── qiime2_agent.py    # QIIME2 pipeline generation agent (11 tools)
 ├── pipeline_runner.py # QIIME2 execution wrapper + result export
 ├── code_agent.py      # LLM code generation agent (vibe-local style)
