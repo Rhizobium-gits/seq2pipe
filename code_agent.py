@@ -501,6 +501,28 @@ def run_code_agent(
 
         # LLM にエラーを渡してコード修正を依頼
         _log(f"エラーを LLM に渡してコード修正を依頼中...")
+
+        # エラー種別に応じた追加ヒント
+        _hint = ""
+        _err_ctx = (stderr + stdout)[:2000]
+        if "cannot import name" in _err_ctx and "scipy.stats" in _err_ctx:
+            _hint = (
+                "\n⚠️  IMPORTANT FIX: scipy.stats does NOT have that function.\n"
+                "For box plots use: plt.boxplot(data)  or  seaborn.boxplot(data=df)\n"
+                "Remove the scipy.stats import entirely."
+            )
+        elif "str.extract" in _err_ctx and "DataFrame" in _err_ctx and "str" in _err_ctx:
+            _hint = (
+                "\n⚠️  IMPORTANT FIX: str.extract() returns a DataFrame, not a Series.\n"
+                "Use: series.str.extract(r'pattern')[0].fillna('?').str.strip()"
+            )
+        elif "EXIT CODE: 0" in _err_ctx or "NO figures" in _err_ctx:
+            _hint = (
+                "\n⚠️  The script ran but saved NO figures.\n"
+                "Check for silent failures: remove try/except or add 'raise' inside except.\n"
+                "Ensure plt.savefig() is called with the correct FIGURE_DIR path."
+            )
+
         messages.append({
             "role": "assistant",
             "content": f"```python\n{last_code}\n```",
@@ -509,7 +531,8 @@ def run_code_agent(
             "role": "user",
             "content": (
                 f"The code produced the following error:\n"
-                f"```\n{stderr[:1500]}\n```\n\n"
+                f"```\n{last_stderr[:1500]}\n```"
+                f"{_hint}\n\n"
                 f"Please fix the code and output the complete corrected version "
                 f"wrapped in ```python ... ```."
             ),
