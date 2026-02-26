@@ -129,6 +129,13 @@ def _build_prompt(
         "  RIGHT: tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
         "- DO NOT use bare 'except Exception as e: print(...)' — it hides real errors.",
         "  Instead: let errors propagate (no try/except) or use 'raise' inside except.",
+        "## QIIME2 DATA STRUCTURE — key facts",
+        "- feature-table.tsv: rows=ASV IDs, columns=SampleIDs. Read with skiprows=1, index_col=0",
+        "- taxonomy.tsv: rows=ASV IDs, cols=Taxon,Confidence. Read with index_col=0",
+        "- alpha-diversity.tsv: rows=SampleIDs, 1 numeric col (name varies). Use alpha.columns[0]",
+        "- To aggregate feature-table BY GENUS:",
+        "    tax['genus'] = tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
+        "    genus_ft = ft.join(tax['genus']).groupby('genus').sum()   # rows=genus, cols=samples",
     ]
     return "\n".join(lines)
 
@@ -511,10 +518,15 @@ def run_code_agent(
                 "For box plots use: plt.boxplot(data)  or  seaborn.boxplot(data=df)\n"
                 "Remove the scipy.stats import entirely."
             )
-        elif "str.extract" in _err_ctx and "DataFrame" in _err_ctx and "str" in _err_ctx:
+        elif (
+            "'DataFrame' object has no attribute 'str'" in _err_ctx
+            or ("str.extract" in _err_ctx and "DataFrame" in _err_ctx)
+        ):
             _hint = (
                 "\n⚠️  IMPORTANT FIX: str.extract() returns a DataFrame, not a Series.\n"
-                "Use: series.str.extract(r'pattern')[0].fillna('?').str.strip()"
+                "WRONG: tax['Taxon'].str.extract(r'g__([^;]+)').fillna('x').str.strip()\n"
+                "RIGHT: tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('x').str.strip()\n"
+                "The [0] converts the single-column DataFrame to a Series."
             )
         elif "EXIT CODE: 0" in _err_ctx or "NO figures" in _err_ctx:
             _hint = (
@@ -1444,6 +1456,13 @@ def run_coding_agent(
         "  RIGHT:  tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
         "- DO NOT use bare except: print(e) — it hides errors and prevents figure generation.",
         "  Instead: write code without try/except, or use 'raise' inside except blocks.",
+        "## QIIME2 DATA STRUCTURE — key facts",
+        "- feature-table.tsv: rows=ASV IDs, columns=SampleIDs. Read with skiprows=1, index_col=0",
+        "- taxonomy.tsv: rows=ASV IDs, cols=Taxon,Confidence. Read with index_col=0",
+        "- alpha-diversity.tsv: rows=SampleIDs, 1 numeric column (name varies). Use alpha.columns[0]",
+        "- To aggregate feature-table BY GENUS (correct way):",
+        "    tax['genus'] = tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
+        "    genus_ft = ft.join(tax['genus']).groupby('genus').sum()  # rows=genus, cols=samples",
     ])
 
     # ── 初回ユーザーメッセージ ─────────────────────────────────────────────
