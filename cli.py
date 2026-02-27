@@ -24,6 +24,7 @@ import argparse
 import datetime
 import statistics
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
@@ -33,6 +34,7 @@ from code_agent import (
 )
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
 from chat_agent import run_terminal_chat
+from report_generator import generate_html_report
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +106,13 @@ def _print_auto_result(result: AutoAgentResult):
     _hr()
 
 
+_REPORT_KEYWORDS = {
+    "レポート", "report", "レポートを出力", "レポート出力", "レポート生成",
+    "まとめ", "サマリー", "summary", "pdf", "html", "レポートを作って",
+    "レポートください", "レポートを作成", "レポートをください",
+}
+
+
 def _run_refinement_session(
     result: CodeExecutionResult,
     export_files: dict,
@@ -111,13 +120,17 @@ def _run_refinement_session(
     fig_dir,
     model: str,
     metadata_path: str = "",
+    report_context: Optional[dict] = None,
 ):
     """
     解析完了後の振り返り・修正ループ。
 
-    ユーザーが自然言語で修正指示を入力するたびに LLM がコードを修正・再実行する。
-    空 Enter / 'quit' / 'done' で終了。
+    - 自然言語で修正指示 → LLM がコードを修正・再実行
+    - 「レポート」と入力 → HTML レポートを生成
+    - 空 Enter / 'quit' / 'done' で終了
     """
+    report_context = report_context or {}
+
     # analysis.py が存在すれば読み込む（run_coding_agent が tool 経由で書き出した場合）
     current_code = result.code or ""
     analysis_py = Path(output_dir) / "analysis.py"
@@ -145,6 +158,7 @@ def _run_refinement_session(
     print("      「PCoA の点を大きくして、サンプル名を表示して」")
     print("      「色盲対応のパレットに変えて」")
     print("      「Shannon 多様性のグラフにグループ比較の p 値を追加して」")
+    print("  📄 レポート出力: 「レポート」と入力")
     print("  終了: 空 Enter / quit / done")
     _hr()
 
@@ -165,6 +179,44 @@ def _run_refinement_session(
             print("修正モードを終了します。")
             break
 
+        # ── レポート生成コマンド ──────────────────────────────────────
+        if feedback.strip().lower() in _REPORT_KEYWORDS or any(
+            kw in feedback for kw in ("レポート", "レポート", "まとめ", "report", "Report")
+        ):
+            print()
+            print("📄 レポートを生成しています...")
+            try:
+                report_path = generate_html_report(
+                    fig_dir=str(fig_dir_path),
+                    output_dir=output_dir,
+                    fastq_dir=report_context.get("fastq_dir", ""),
+                    n_samples=report_context.get("n_samples", 0),
+                    dada2_params=report_context.get("dada2_params", {}),
+                    completed_steps=report_context.get("completed_steps", []),
+                    failed_steps=report_context.get("failed_steps", []),
+                    export_files=export_files,
+                    user_prompt=report_context.get("user_prompt", ""),
+                    model=model,
+                    log_callback=_log,
+                )
+                _hr()
+                print("✅ レポート生成完了！")
+                print(f"\n📄 ファイル: {report_path}")
+                print("   ブラウザで開いてください。")
+                # macOS: open で自動起動を試みる
+                try:
+                    import subprocess
+                    subprocess.Popen(["open", report_path])
+                    print("   (Safari/Chrome で自動オープンを試みました)")
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"❌ レポート生成失敗: {e}")
+            _hr()
+            print()
+            continue
+
+        # ── 通常の修正指示 ────────────────────────────────────────────
         print()
         refined = run_refinement_loop(
             feedback=feedback,
@@ -612,6 +664,14 @@ def main():
                 fig_dir=fig_dir,
                 model=model,
                 metadata_path=args.metadata or "",
+                report_context={
+                    "fastq_dir": "",
+                    "n_samples": 0,
+                    "dada2_params": {},
+                    "completed_steps": [],
+                    "failed_steps": [],
+                    "user_prompt": user_prompt,
+                },
             )
         return
 
@@ -759,6 +819,21 @@ def main():
             fig_dir=fig_dir,
             model=model,
             metadata_path=metadata_path,
+            report_context={
+                "fastq_dir": fastq_dir,
+                "n_samples": n_samples,
+                "dada2_params": {
+                    "trim_left_f": trim_left_f,
+                    "trim_left_r": trim_left_r,
+                    "trunc_len_f": trunc_len_f,
+                    "trunc_len_r": trunc_len_r,
+                    "sampling_depth": sampling_dep,
+                    "n_threads": n_threads,
+                },
+                "completed_steps": getattr(pipeline_result, "completed_steps", []),
+                "failed_steps": getattr(pipeline_result, "failed_steps", []),
+                "user_prompt": user_prompt,
+            },
         )
 
 
