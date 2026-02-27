@@ -51,12 +51,16 @@ def _build_prompt(
     dpi     = cfg.get("dpi", 150)
     figsize = cfg.get("figsize", [10, 6])
 
+    # 存在するファイルと存在しないカテゴリを明示
+    existing_cats = [cat for cat, paths in export_files.items() if paths]
+    missing_cats  = [cat for cat, paths in export_files.items() if not paths]
+
     lines = [
         "You are a microbiome bioinformatics expert.",
         "Write a single, complete, self-contained Python script that analyzes and visualizes",
         "the QIIME2-exported data listed below.",
         "",
-        "## Available files",
+        "## AVAILABLE files — use ONLY these exact paths",
     ]
     for category, paths in export_files.items():
         for p in paths:
@@ -64,7 +68,21 @@ def _build_prompt(
     if metadata_path:
         lines.append(f"  [metadata] {metadata_path}")
 
+    if missing_cats:
+        lines += [
+            "",
+            "## MISSING categories — NO files exist for these, SKIP COMPLETELY",
+        ]
+        for cat in missing_cats:
+            lines.append(f"  [{cat}] — NOT AVAILABLE, do not generate any code for this category")
+
     lines += [
+        "",
+        "## CRITICAL RULES",
+        "1. Only load files listed in 'AVAILABLE files'. Do NOT guess or invent file paths.",
+        "2. If a category is listed as MISSING, skip that entire analysis section.",
+        "3. Use try/except with 'pass' (NOT 'raise') for all file loading.",
+        "   Each figure section must be independent — failure in one must not stop others.",
         "",
         f"## Output directory for figures: {figure_dir}",
         f"## DPI: {dpi}",
@@ -1596,9 +1614,24 @@ def run_coding_agent(
     ])
     task = user_prompt.strip() if user_prompt.strip() else auto_task
 
+    # 存在しないカテゴリの明示リスト
+    _missing_cats = [cat for cat, paths in export_files.items() if not paths]
+    _missing_lines = (
+        [
+            "",
+            "## MISSING categories — do NOT generate code for these",
+            *[f"  [{cat}] — NOT AVAILABLE, skip completely" for cat in _missing_cats],
+        ]
+        if _missing_cats else []
+    )
+
     initial_content = "\n".join([
-        "## Available QIIME2-exported data files (exact paths)",
+        "## Available QIIME2-exported data files (ONLY use these exact paths)",
         *file_lines,
+        *_missing_lines,
+        "",
+        "## CRITICAL: Use only the paths listed above. If a category is MISSING, skip it entirely.",
+        "## Use try/except with pass (NOT raise) for all file loading.",
         "",
         f"## FIGURE_DIR: {figure_dir}",
         f"## Script path: {output_dir}/analysis.py",

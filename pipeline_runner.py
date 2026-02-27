@@ -65,21 +65,35 @@ class _Tee:
         self._in_callback = False  # 再帰防止フラグ
 
     def write(self, s):
-        try:
-            self._orig.write(s)
-        except Exception:
-            pass
         if self._in_callback:
-            return  # _cb → print() → write() の無限再帰を防ぐ
+            # コールバック連鎖の内側 → 本物の stdout に直接書く（1回だけ）
+            try:
+                self._orig.write(s)
+            except Exception:
+                pass
+            return
+        # コールバック連鎖の外側
         line = s.rstrip('\n').rstrip()
         if line and self._cb:
+            # テキストあり＋コールバックあり → コールバック経由で stdout に届ける
+            # （_in_callback=True の write() が _orig に書くので直接書かない）
             self._in_callback = True
             try:
                 self._cb(line)
             except Exception:
-                pass
+                # コールバック失敗時のフォールバック
+                try:
+                    self._orig.write(s)
+                except Exception:
+                    pass
             finally:
                 self._in_callback = False
+        else:
+            # 空行・改行のみ → 直接書く（コールバックを通さない）
+            try:
+                self._orig.write(s)
+            except Exception:
+                pass
 
     def flush(self):
         try:

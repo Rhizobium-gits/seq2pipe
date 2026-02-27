@@ -2149,34 +2149,74 @@ def tool_run_qiime2_pipeline(
     else:
         completed.append("⚠️ STEP 6: 分類器が未指定のためスキップ（classifier_path を指定してください）")
 
-    # ── STEP 7: コア多様性解析 ───────────────────────────────────────────
-    if metadata_path and Path(metadata_path).exists() and ok_tree:
-        ok_div, _ = _exec(
-            f"qiime diversity core-metrics-phylogenetic"
-            f" --i-phylogeny rooted-tree.qza"
-            f" --i-table table.qza"
-            f" --p-sampling-depth {sampling_depth}"
-            f" --m-metadata-file {metadata_path}"
-            f" --output-dir core-metrics-results/",
-            "STEP 7: α・β多様性（core-metrics-phylogenetic）"
-        )
-        if ok_div:
-            for metric in ["faith_pd", "evenness", "shannon"]:
+    # ── STEP 7: 多様性解析 ───────────────────────────────────────────────
+    if ok_tree:
+        has_metadata = metadata_path and Path(metadata_path).exists()
+        if has_metadata:
+            # メタデータあり → core-metrics-phylogenetic（全指標を一括計算）
+            ok_div, _ = _exec(
+                f"qiime diversity core-metrics-phylogenetic"
+                f" --i-phylogeny rooted-tree.qza"
+                f" --i-table table.qza"
+                f" --p-sampling-depth {sampling_depth}"
+                f" --m-metadata-file {metadata_path}"
+                f" --output-dir core-metrics-results/",
+                "STEP 7: α・β多様性（core-metrics-phylogenetic）"
+            )
+            if ok_div:
+                for metric in ["faith_pd", "evenness", "shannon"]:
+                    _exec(
+                        f"qiime diversity alpha-group-significance"
+                        f" --i-alpha-diversity core-metrics-results/{metric}_vector.qza"
+                        f" --m-metadata-file {metadata_path}"
+                        f" --o-visualization core-metrics-results/{metric}-group-significance.qzv",
+                        f"STEP 7b: α多様性グループ比較 ({metric})"
+                    )
+                if group_column:
+                    _exec(
+                        f"qiime diversity beta-group-significance"
+                        f" --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza"
+                        f" --m-metadata-file {metadata_path}"
+                        f" --m-metadata-column {group_column}"
+                        f" --o-visualization core-metrics-results/unweighted-unifrac-beta-significance.qzv",
+                        "STEP 7c: β多様性グループ比較（UniFrac）"
+                    )
+        else:
+            # メタデータなし → 個別コマンドでα・β多様性を計算（グループ比較なし）
+            import os as _os
+            _os.makedirs(str(Path(out_dir) / "core-metrics-results"), exist_ok=True)
+            for _m in ["shannon", "observed_features", "evenness"]:
                 _exec(
-                    f"qiime diversity alpha-group-significance"
-                    f" --i-alpha-diversity core-metrics-results/{metric}_vector.qza"
-                    f" --m-metadata-file {metadata_path}"
-                    f" --o-visualization core-metrics-results/{metric}-group-significance.qzv",
-                    f"STEP 7b: α多様性グループ比較 ({metric})"
+                    f"qiime diversity alpha"
+                    f" --i-table table.qza"
+                    f" --p-metric {_m}"
+                    f" --o-alpha-diversity core-metrics-results/{_m}_vector.qza",
+                    f"STEP 7: α多様性 ({_m})"
                 )
-            if group_column:
+            _exec(
+                f"qiime diversity alpha-phylogenetic"
+                f" --i-table table.qza"
+                f" --i-phylogeny rooted-tree.qza"
+                f" --p-metric faith_pd"
+                f" --o-alpha-diversity core-metrics-results/faith_pd_vector.qza",
+                "STEP 7: α多様性 (faith_pd)"
+            )
+            for _m in ["braycurtis", "jaccard"]:
                 _exec(
-                    f"qiime diversity beta-group-significance"
-                    f" --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza"
-                    f" --m-metadata-file {metadata_path}"
-                    f" --m-metadata-column {group_column}"
-                    f" --o-visualization core-metrics-results/unweighted-unifrac-beta-significance.qzv",
-                    "STEP 7c: β多様性グループ比較（UniFrac）"
+                    f"qiime diversity beta"
+                    f" --i-table table.qza"
+                    f" --p-metric {_m}"
+                    f" --o-distance-matrix core-metrics-results/{_m}_distance_matrix.qza",
+                    f"STEP 7: β多様性 ({_m})"
+                )
+            for _m in ["unweighted_unifrac", "weighted_unifrac"]:
+                _exec(
+                    f"qiime diversity beta-phylogenetic"
+                    f" --i-table table.qza"
+                    f" --i-phylogeny rooted-tree.qza"
+                    f" --p-metric {_m}"
+                    f" --o-distance-matrix core-metrics-results/{_m}_distance_matrix.qza",
+                    f"STEP 7: β多様性 ({_m})"
                 )
 
     # ── STEP 8: QZA → TSV/BIOM エクスポート ─────────────────────────────
@@ -2207,18 +2247,29 @@ def tool_run_qiime2_pipeline(
         f"qiime tools export --input-path rep-seqs.qza --output-path {export_dir}/rep-seqs/",
         "STEP 8d: 代表配列 (rep-seqs) を FASTA にエクスポート"
     )
-    # Alpha diversity metrics
-    for _metric in ["shannon_vector", "faith_pd_vector", "evenness_vector", "observed_features_vector"]:
+    # Alpha diversity metrics（メタデータあり: *_vector.qza / なし: *_vector.qza）
+    for _metric in [
+        "shannon_vector", "faith_pd_vector", "evenness_vector", "observed_features_vector",
+        # メタデータなしコマンドの出力名
+        "shannon", "observed_features", "evenness", "faith_pd",
+    ]:
         _qza = str(Path(out_dir) / "core-metrics-results" / f"{_metric}.qza")
         if Path(_qza).exists():
+            # エクスポート先は "vector" サフィックスを正規化
+            _export_name = _metric.replace("_vector", "") + "_vector"
             _exec(
                 f"qiime tools export --input-path core-metrics-results/{_metric}.qza "
-                f"--output-path {export_dir}/alpha/{_metric}/",
+                f"--output-path {export_dir}/alpha/{_export_name}/",
                 f"STEP 8e: {_metric} をエクスポート"
             )
-    # Beta diversity distance matrices
-    for _mat in ["unweighted_unifrac_distance_matrix", "weighted_unifrac_distance_matrix",
-                 "bray_curtis_distance_matrix", "jaccard_distance_matrix"]:
+    # Beta diversity distance matrices（メタデータあり: *_distance_matrix.qza / なし: *.qza）
+    for _mat in [
+        "unweighted_unifrac_distance_matrix", "weighted_unifrac_distance_matrix",
+        "bray_curtis_distance_matrix", "jaccard_distance_matrix",
+        # メタデータなしコマンドの出力名
+        "braycurtis_distance_matrix", "jaccard_distance_matrix",
+        "unweighted_unifrac_distance_matrix", "weighted_unifrac_distance_matrix",
+    ]:
         _qza = str(Path(out_dir) / "core-metrics-results" / f"{_mat}.qza")
         if Path(_qza).exists():
             _exec(
