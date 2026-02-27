@@ -396,7 +396,16 @@ fi
 echo ""
 info "Python ダウンストリーム解析パッケージを確認します..."
 
-PYTHON_CMD="$(command -v python3 || command -v python || echo '')"
+# QIIME2 conda Python を優先、なければシステム Python
+if [[ -n "${_QIIME2_BIN:-}" && -x "${_QIIME2_BIN}/python3" ]]; then
+    PYTHON_CMD="${_QIIME2_BIN}/python3"
+    PIP_EXTRA=""
+else
+    PYTHON_CMD="$(command -v python3 || command -v python || echo '')"
+    # システム Python (Homebrew 管理) は --user を使わないとエラーになる
+    PIP_EXTRA="--user"
+fi
+
 if [[ -z "$PYTHON_CMD" ]]; then
     warn "Python が見つかりません。パッケージのインストールをスキップします。"
 else
@@ -420,12 +429,11 @@ else
         read -rp "Python ダウンストリーム解析パッケージをインストールしますか? [y/N]: " INSTALL_PY_PKGS
         if [[ "$(echo "$INSTALL_PY_PKGS" | tr "A-Z" "a-z")" == "y" ]]; then
             info "パッケージをインストールします..."
-            "$PYTHON_CMD" -m pip install --quiet \
+            # shellcheck disable=SC2086
+            "$PYTHON_CMD" -m pip install --quiet $PIP_EXTRA \
                 numpy pandas matplotlib seaborn scipy scikit-learn \
                 biom-format networkx statsmodels
             success "Python パッケージのインストールが完了しました"
-            success "  インストール済み: numpy, pandas, matplotlib, seaborn, scipy,"
-            success "                   scikit-learn, biom-format, networkx, statsmodels"
         else
             info "スキップしました。後でインストールする場合:"
             echo "  pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format networkx statsmodels"
