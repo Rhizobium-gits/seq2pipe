@@ -62,18 +62,24 @@ class _Tee:
         self._orig = original
         self._cb = callback
         self.encoding = getattr(original, 'encoding', 'utf-8')
+        self._in_callback = False  # 再帰防止フラグ
 
     def write(self, s):
         try:
             self._orig.write(s)
         except Exception:
             pass
+        if self._in_callback:
+            return  # _cb → print() → write() の無限再帰を防ぐ
         line = s.rstrip('\n').rstrip()
         if line and self._cb:
+            self._in_callback = True
             try:
                 self._cb(line)
             except Exception:
                 pass
+            finally:
+                self._in_callback = False
 
     def flush(self):
         try:
