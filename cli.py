@@ -34,7 +34,7 @@ from code_agent import (
 )
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
 from chat_agent import run_terminal_chat
-from report_generator import generate_html_report
+from report_generator import generate_html_report, generate_latex_report
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -108,8 +108,15 @@ def _print_auto_result(result: AutoAgentResult):
 
 _REPORT_KEYWORDS = {
     "レポート", "report", "レポートを出力", "レポート出力", "レポート生成",
-    "まとめ", "サマリー", "summary", "pdf", "html", "レポートを作って",
+    "まとめ", "サマリー", "summary", "html", "レポートを作って",
     "レポートください", "レポートを作成", "レポートをください",
+}
+
+# PDF/LaTeX レポートを優先するキーワード
+_PDF_REPORT_KEYWORDS = {
+    "pdf", "PDF", "latex", "LaTeX", "tex", "TeX",
+    "PDFレポート", "pdfレポート", "PDF出力", "pdf出力",
+    "PDFで", "pdfで", "PDF形式", "pdf形式",
 }
 
 
@@ -158,7 +165,9 @@ def _run_refinement_session(
     print("      「PCoA の点を大きくして、サンプル名を表示して」")
     print("      「色盲対応のパレットに変えて」")
     print("      「Shannon 多様性のグラフにグループ比較の p 値を追加して」")
-    print("  📄 レポート出力: 「レポート」と入力")
+    print("  📄 レポート出力:")
+    print("      HTML: 「レポート」と入力")
+    print("      PDF:  「PDFレポート」または「PDF」と入力")
     print("  終了: 空 Enter / quit / done")
     _hr()
 
@@ -180,34 +189,46 @@ def _run_refinement_session(
             break
 
         # ── レポート生成コマンド ──────────────────────────────────────
-        if feedback.strip().lower() in _REPORT_KEYWORDS or any(
-            kw in feedback for kw in ("レポート", "レポート", "まとめ", "report", "Report")
-        ):
+        _fb_lower = feedback.strip().lower()
+        _want_pdf = (
+            _fb_lower in {k.lower() for k in _PDF_REPORT_KEYWORDS}
+            or any(kw.lower() in _fb_lower for kw in ("pdf", "latex", "tex"))
+        )
+        _want_report = (
+            _fb_lower in {k.lower() for k in _REPORT_KEYWORDS}
+            or any(kw in feedback for kw in ("レポート", "まとめ", "report", "Report"))
+            or _want_pdf
+        )
+
+        if _want_report:
             print()
-            print("📄 レポートを生成しています...")
+            _report_kwargs = dict(
+                fig_dir=str(fig_dir_path),
+                output_dir=output_dir,
+                fastq_dir=report_context.get("fastq_dir", ""),
+                n_samples=report_context.get("n_samples", 0),
+                dada2_params=report_context.get("dada2_params", {}),
+                completed_steps=report_context.get("completed_steps", []),
+                failed_steps=report_context.get("failed_steps", []),
+                export_files=export_files,
+                user_prompt=report_context.get("user_prompt", ""),
+                model=model,
+                log_callback=_log,
+            )
             try:
-                report_path = generate_html_report(
-                    fig_dir=str(fig_dir_path),
-                    output_dir=output_dir,
-                    fastq_dir=report_context.get("fastq_dir", ""),
-                    n_samples=report_context.get("n_samples", 0),
-                    dada2_params=report_context.get("dada2_params", {}),
-                    completed_steps=report_context.get("completed_steps", []),
-                    failed_steps=report_context.get("failed_steps", []),
-                    export_files=export_files,
-                    user_prompt=report_context.get("user_prompt", ""),
-                    model=model,
-                    log_callback=_log,
-                )
+                if _want_pdf:
+                    print("📐 PDF レポートを生成しています（LaTeX）...")
+                    report_path = generate_latex_report(**_report_kwargs)
+                else:
+                    print("📄 HTML レポートを生成しています...")
+                    report_path = generate_html_report(**_report_kwargs)
                 _hr()
-                print("✅ レポート生成完了！")
+                ext = Path(report_path).suffix.upper().lstrip(".")
+                print(f"✅ {ext} レポート生成完了！")
                 print(f"\n📄 ファイル: {report_path}")
-                print("   ブラウザで開いてください。")
-                # macOS: open で自動起動を試みる
                 try:
-                    import subprocess
                     subprocess.Popen(["open", report_path])
-                    print("   (Safari/Chrome で自動オープンを試みました)")
+                    print("   (自動オープンを試みました)")
                 except Exception:
                     pass
             except Exception as e:

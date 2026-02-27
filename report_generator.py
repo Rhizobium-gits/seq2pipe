@@ -11,6 +11,8 @@ QIIME2 解析結果を HTML レポートとして出力する。
 
 import base64
 import datetime
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -396,3 +398,331 @@ def generate_html_report(
     report_path.write_text(html, encoding="utf-8")
     _log(f"📄 レポートを保存しました: {report_path}")
     return str(report_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LaTeX / PDF レポート生成
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _escape_latex(text: str) -> str:
+    """LaTeX 特殊文字をエスケープする（通常テキスト用）"""
+    conv = [
+        ("\\", r"\textbackslash{}"),
+        ("&",  r"\&"),
+        ("%",  r"\%"),
+        ("$",  r"\$"),
+        ("#",  r"\#"),
+        ("_",  r"\_"),
+        ("{",  r"\{"),
+        ("}",  r"\}"),
+        ("~",  r"\textasciitilde{}"),
+        ("^",  r"\textasciicircum{}"),
+        ("<",  r"\textless{}"),
+        (">",  r"\textgreater{}"),
+    ]
+    for old, new in conv:
+        text = text.replace(old, new)
+    return text
+
+
+def _find_latex_engine() -> Optional[str]:
+    """利用可能な LaTeX エンジン名を返す。なければ None。"""
+    for engine in ("lualatex", "xelatex"):
+        try:
+            r = subprocess.run([engine, "--version"], capture_output=True, timeout=10)
+            if r.returncode == 0:
+                return engine
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    return None
+
+
+def _build_latex_doc(
+    engine: Optional[str],
+    date_str: str,
+    summary_text: str,
+    fastq_dir: str,
+    n_samples: int,
+    dada2_params: dict,
+    completed_steps: list,
+    failed_steps: list,
+    model: str,
+    fig_paths: list,
+    interpretations: dict,
+) -> str:
+    """LaTeX ドキュメント文字列を返す"""
+
+    # ── プリアンブル ─────────────────────────────────────────────────
+    if engine == "lualatex":
+        preamble = r"""\documentclass[a4paper,12pt]{article}
+\usepackage[hiragino-pron]{luatexja-preset}
+"""
+    elif engine == "xelatex":
+        preamble = r"""\documentclass[a4paper,12pt]{article}
+\usepackage{xeCJK}
+\setCJKmainfont{Hiragino Mincho ProN}
+\setCJKsansfont{Hiragino Kaku Gothic ProN}
+"""
+    else:
+        # コンパイル不可の場合も有効な .tex として出力
+        preamble = r"""\documentclass[a4paper,12pt]{article}
+% NOTE: Japanese support requires lualatex + luatexja-preset, or xelatex + xeCJK.
+% Compile with: lualatex report.tex
+"""
+
+    preamble += r"""
+\usepackage[top=25mm,bottom=25mm,left=28mm,right=28mm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+
+\definecolor{teal}{RGB}{17,122,101}
+\definecolor{navy}{RGB}{21,67,96}
+\hypersetup{colorlinks=true, linkcolor=navy, urlcolor=teal, pdfborder={0 0 0}}
+\captionsetup{font=small, labelfont=bf, labelsep=period, justification=centering}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{navy}seq2pipe 解析レポート}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.5pt}
+"""
+
+    # ── タイトル ─────────────────────────────────────────────────────
+    title_block = r"""
+\title{\textbf{seq2pipe 解析レポート}\\[0.5em]
+  \large QIIME2 マイクロバイオームパイプライン}
+\date{""" + _escape_latex(date_str) + r"""}
+\author{自動生成 --- """ + _escape_latex(model or "local LLM") + r"""}
+"""
+
+    # ── 本文 ─────────────────────────────────────────────────────────
+    body_parts = [
+        r"\begin{document}",
+        r"\maketitle",
+        r"\thispagestyle{fancy}",
+    ]
+
+    # サマリー
+    if summary_text:
+        body_parts += [
+            r"\section*{総合サマリー}",
+            r"\begin{tcolorbox}[colback=teal!8!white, colframe=teal, boxrule=1pt, arc=4pt]",
+            _escape_latex(summary_text),
+            r"\end{tcolorbox}",
+        ]
+
+    # パラメータ表
+    _PARAM_LABELS = {
+        "trim_left_f":    r"trim-left-f（フォワード先頭トリム塩基数）",
+        "trim_left_r":    r"trim-left-r（リバース先頭トリム塩基数）",
+        "trunc_len_f":    r"trunc-len-f（フォワードトランケーション長）",
+        "trunc_len_r":    r"trunc-len-r（リバーストランケーション長）",
+        "sampling_depth": r"sampling-depth（多様性解析サンプリング深度）",
+        "n_threads":      r"スレッド数",
+    }
+    rows = []
+    if fastq_dir:
+        rows.append(("FASTQディレクトリ", fastq_dir))
+    if n_samples:
+        rows.append(("サンプル数", f"{n_samples} サンプル（ペアエンド）"))
+    for k, v in dada2_params.items():
+        if v:
+            rows.append((_PARAM_LABELS.get(k, k), str(v)))
+
+    if rows:
+        tbl = "\n".join(
+            r"  " + _escape_latex(k) + r" & " + _escape_latex(str(v)) + r" \\"
+            for k, v in rows
+        )
+        body_parts += [
+            r"\section*{解析パラメータ}",
+            r"\begin{center}",
+            r"\begin{tabular}{>{\bfseries}p{0.45\linewidth}p{0.48\linewidth}}",
+            r"\toprule",
+            tbl,
+            r"\bottomrule",
+            r"\end{tabular}",
+            r"\end{center}",
+        ]
+
+    # 手法・ステップ
+    all_steps = [("ok", s) for s in completed_steps] + [("fail", s) for s in failed_steps]
+    if all_steps:
+        items = []
+        for kind, s in all_steps:
+            text = _escape_latex(s.lstrip("✅⚠️❌ "))
+            mark = r"\textcolor{red}{$\times$}" if kind == "fail" else r"\textcolor{teal}{$\checkmark$}"
+            items.append(rf"  \item[{mark}] {text}")
+        body_parts += [
+            r"\section*{解析手法・パイプラインステップ}",
+            r"\noindent\textbf{使用ソフトウェア}: QIIME2（DADA2 / MAFFT-FastTree / 多様性解析）+ Python（matplotlib, seaborn, pandas）\\[0.5em]",
+            r"\begin{description}",
+        ] + items + [r"\end{description}"]
+
+    # 図セクション
+    if fig_paths:
+        body_parts.append(
+            rf"\section*{{解析結果図（{len(fig_paths)} 件）}}"
+        )
+        # 2列レイアウト
+        pairs = [fig_paths[i:i+2] for i in range(0, len(fig_paths), 2)]
+        for pair in pairs:
+            body_parts.append(r"\begin{figure}[H]")
+            body_parts.append(r"  \centering")
+            width = r"0.48\linewidth" if len(pair) == 2 else r"0.85\linewidth"
+            for fp in pair:
+                p = Path(fp)
+                title = _escape_latex(_fig_title(str(fp)))
+                interp_raw = interpretations.get(p.stem, "")
+                interp = _escape_latex(interp_raw)
+                # graphicx: パスに空白が含まれる場合はブレース内に
+                safe_path = str(p).replace("\\", "/")
+                caption_text = (
+                    r"\textbf{" + title + r"}"
+                    + (r"\\[0.2em] \small " + interp if interp else "")
+                )
+                body_parts += [
+                    r"  \begin{minipage}{" + width + r"}",
+                    r"    \centering",
+                    r"    \includegraphics[width=\linewidth]{" + safe_path + r"}",
+                    r"    \captionof{figure}{" + caption_text + r"}",
+                    r"  \end{minipage}",
+                ]
+                if len(pair) == 2 and fp == pair[0]:
+                    body_parts.append(r"  \hfill")
+            body_parts.append(r"\end{figure}")
+            body_parts.append("")
+
+    body_parts.append(r"\end{document}")
+
+    return preamble + title_block + "\n".join(body_parts) + "\n"
+
+
+def generate_latex_report(
+    fig_dir: str,
+    output_dir: str,
+    fastq_dir: str = "",
+    n_samples: int = 0,
+    dada2_params: Optional[dict] = None,
+    completed_steps: Optional[list] = None,
+    failed_steps: Optional[list] = None,
+    export_files: Optional[dict] = None,
+    user_prompt: str = "",
+    model: str = "",
+    log_callback: Optional[Callable] = None,
+) -> str:
+    """
+    LaTeX レポートを生成して output_dir/report.tex を保存し、
+    LaTeX エンジンが利用可能なら output_dir/report.pdf にコンパイルする。
+    戻り値: PDF パス（コンパイル成功時）または TEX パス
+    """
+    def _log(msg):
+        if log_callback:
+            log_callback(msg)
+
+    dada2_params    = dada2_params    or {}
+    completed_steps = completed_steps or []
+    failed_steps    = failed_steps    or []
+
+    # ── 図ファイル収集 ────────────────────────────────────────────────
+    fig_dir_path = Path(fig_dir)
+    fig_files = sorted(
+        list(fig_dir_path.glob("*.jpg"))
+        + list(fig_dir_path.glob("*.jpeg"))
+        + list(fig_dir_path.glob("*.png")),
+        key=lambda p: p.name,
+    )
+
+    # ── LLM 解釈生成 ─────────────────────────────────────────────────
+    interpretations: dict = {}
+    if model and fig_files:
+        interpretations = _llm_interpretations(
+            [str(f) for f in fig_files],
+            user_prompt, model, n_samples, dada2_params, log_callback,
+        )
+
+    now = datetime.datetime.now()
+    date_str = now.strftime("%Y年%m月%d日")
+
+    # ── LaTeX エンジン検出 ────────────────────────────────────────────
+    engine = _find_latex_engine()
+    if engine:
+        _log(f"📐 LaTeX エンジン検出: {engine}")
+    else:
+        _log("⚠️  lualatex / xelatex が見つかりません。.tex ファイルのみ保存します。")
+        _log("   MacTeX のインストール: https://tug.org/mactex/")
+
+    # ── .tex 生成 ─────────────────────────────────────────────────────
+    summary_text = interpretations.get("SUMMARY", "")
+    tex_content = _build_latex_doc(
+        engine=engine,
+        date_str=date_str,
+        summary_text=summary_text,
+        fastq_dir=fastq_dir,
+        n_samples=n_samples,
+        dada2_params=dada2_params,
+        completed_steps=completed_steps,
+        failed_steps=failed_steps,
+        model=model,
+        fig_paths=[str(f) for f in fig_files],
+        interpretations=interpretations,
+    )
+
+    out_dir = Path(output_dir)
+    tex_path = out_dir / "report.tex"
+    tex_path.write_text(tex_content, encoding="utf-8")
+    _log(f"📄 report.tex を保存しました: {tex_path}")
+
+    if not engine:
+        return str(tex_path)
+
+    # ── PDF コンパイル（2 回実行で参照解決） ──────────────────────────
+    pdf_path = out_dir / "report.pdf"
+    compile_ok = False
+    for pass_num in range(1, 3):
+        _log(f"🔧 {engine} コンパイル中... ({pass_num}/2)")
+        try:
+            proc = subprocess.run(
+                [
+                    engine,
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    f"-output-directory={out_dir}",
+                    str(tex_path),
+                ],
+                capture_output=True,
+                timeout=120,
+                cwd=str(out_dir),
+            )
+            if proc.returncode != 0:
+                # エラーログを表示（最後の 30 行）
+                err_lines = proc.stdout.decode(errors="replace").splitlines()
+                for ln in err_lines[-30:]:
+                    if ln.strip():
+                        _log(f"  [latex] {ln}")
+                _log(f"❌ {engine} がエラーで終了しました (pass {pass_num})")
+                break
+            compile_ok = True
+        except subprocess.TimeoutExpired:
+            _log("❌ LaTeX コンパイルがタイムアウトしました（120秒）")
+            break
+        except FileNotFoundError:
+            _log(f"❌ {engine} が見つかりません")
+            break
+
+    if compile_ok and pdf_path.exists():
+        # 補助ファイルを削除
+        for ext in (".aux", ".log", ".out", ".toc"):
+            (out_dir / ("report" + ext)).unlink(missing_ok=True)
+        _log(f"✅ PDF レポートを生成しました: {pdf_path}")
+        return str(pdf_path)
+    else:
+        _log(f"⚠️  PDF 生成失敗。.tex ファイルを手動でコンパイルしてください: {tex_path}")
+        return str(tex_path)
