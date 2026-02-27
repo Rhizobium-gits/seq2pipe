@@ -19,8 +19,10 @@ seq2pipe ターミナル版エントリポイント。
 
 import sys
 import csv
+import gzip
 import argparse
 import datetime
+import statistics
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -290,6 +292,102 @@ def _print_banner():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FASTQ 自動解析ユーティリティ
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_dada2_params(fastq_dir: str) -> dict:
+    """
+    FASTQ ディレクトリを解析して DADA2 パラメータを自動推定する。
+
+    戻り値例:
+    {
+        "trim_left_f": 0,    # プライマー長が不明なので 0
+        "trim_left_r": 0,
+        "trunc_len_f": 260,  # リード長 * 0.87 (末尾品質低下分カット)
+        "trunc_len_r": 200,
+        "n_samples": 10,
+        "read_len_f": 301,
+        "read_len_r": 301,
+        "sampling_depth": 5000,  # 最小リード数 * 0.8 を目安
+    }
+    """
+    d = Path(fastq_dir).expanduser()
+    r1_files = sorted(d.glob("*_R1*.fastq.gz")) + sorted(d.glob("*_R1*.fastq"))
+    r2_files = sorted(d.glob("*_R2*.fastq.gz")) + sorted(d.glob("*_R2*.fastq"))
+
+    def _sample_read_lengths(fq_path: Path, n: int = 200) -> list:
+        try:
+            opener = gzip.open if str(fq_path).endswith(".gz") else open
+            lengths = []
+            with opener(fq_path, "rt") as f:
+                for i, line in enumerate(f):
+                    if i % 4 == 1:
+                        lengths.append(len(line.strip()))
+                    if len(lengths) >= n:
+                        break
+            return lengths
+        except Exception:
+            return []
+
+    def _count_reads(fq_path: Path) -> int:
+        """ファイル全体のリード数を概算（先頭 4000 行 → 1000 リード）"""
+        try:
+            opener = gzip.open if str(fq_path).endswith(".gz") else open
+            count = 0
+            with opener(fq_path, "rt") as f:
+                for i, _ in enumerate(f):
+                    if i % 4 == 0:
+                        count += 1
+            return count
+        except Exception:
+            return 0
+
+    params = {
+        "trim_left_f": 0,
+        "trim_left_r": 0,
+        "trunc_len_f": 250,
+        "trunc_len_r": 200,
+        "n_samples": len(r1_files),
+        "read_len_f": 0,
+        "read_len_r": 0,
+        "sampling_depth": 5000,
+    }
+
+    if not r1_files:
+        return params
+
+    # ── フォワードリード長を検出 ──────────────────────────────────────
+    fwd_lengths = _sample_read_lengths(r1_files[0])
+    if fwd_lengths:
+        med_f = int(statistics.median(fwd_lengths))
+        params["read_len_f"] = med_f
+        # 末尾約 10~15% をカット（品質低下領域を除去）
+        params["trunc_len_f"] = max(200, int(med_f * 0.87))
+
+    # ── リバースリード長を検出 ────────────────────────────────────────
+    if r2_files:
+        rev_lengths = _sample_read_lengths(r2_files[0])
+        if rev_lengths:
+            med_r = int(statistics.median(rev_lengths))
+            params["read_len_r"] = med_r
+            # リバースは品質低下が早いので約 20% カット
+            params["trunc_len_r"] = max(150, int(med_r * 0.80))
+
+    # ── サンプリング深度の推定（全サンプルからリード数を取得）──────────
+    read_counts = []
+    for f in r1_files[:5]:  # 先頭 5 サンプルのみカウント（速度優先）
+        n = _count_reads(f)
+        if n > 0:
+            read_counts.append(n)
+    if read_counts:
+        min_reads = min(read_counts)
+        # 最少リード数の 80% を sampling_depth に（最低 1000）
+        params["sampling_depth"] = max(1000, int(min_reads * 0.8))
+
+    return params
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # メイン
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -298,16 +396,23 @@ def main():
         prog="seq2pipe",
         description="seq2pipe — マニフェスト TSV と自然言語プロンプトで QIIME2 + 解析を自動実行",
     )
-    parser.add_argument("--fastq-dir",  help="FASTQ ファイルが入ったディレクトリのパス")
-    parser.add_argument("--manifest",   help="（後方互換）マニフェスト TSV のパス。--fastq-dir 優先")
-    parser.add_argument("--metadata",   help="メタデータ TSV のパス（省略可）")
-    parser.add_argument("--prompt",     help="やりたい解析の内容（省略時は対話入力）")
-    parser.add_argument("--output-dir", help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
-    parser.add_argument("--model",      help="Ollama モデル名（省略時は自動選択）")
-    parser.add_argument("--export-dir", help="既存の exported/ ディレクトリ（コード生成のみ実行）")
-    parser.add_argument("--auto",       action="store_true", help="自律エージェントモードで起動")
-    parser.add_argument("--chat",       action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
-    parser.add_argument("--max-rounds", type=int, default=15, help="自律エージェントの最大ラウンド数（デフォルト 15）")
+    parser.add_argument("--fastq-dir",    help="FASTQ ファイルが入ったディレクトリのパス")
+    parser.add_argument("--manifest",     help="（後方互換）マニフェスト TSV のパス。--fastq-dir 優先")
+    parser.add_argument("--metadata",     help="メタデータ TSV のパス（省略可）")
+    parser.add_argument("--prompt",       help="やりたい解析の内容（省略時は対話入力）")
+    parser.add_argument("--output-dir",   help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
+    parser.add_argument("--model",        help="Ollama モデル名（省略時は自動選択）")
+    parser.add_argument("--export-dir",   help="既存の exported/ ディレクトリ（コード生成のみ実行）")
+    parser.add_argument("--auto",         action="store_true", help="自律エージェントモードで起動（完全無人実行）")
+    parser.add_argument("--chat",         action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
+    parser.add_argument("--max-rounds",   type=int, default=15, help="自律エージェントの最大ラウンド数（デフォルト 15）")
+    # DADA2 パラメータ（省略時は FASTQ から自動検出）
+    parser.add_argument("--trim-left-f",  type=int, default=None, help="DADA2: フォワード先頭トリム長（デフォルト: 自動検出）")
+    parser.add_argument("--trim-left-r",  type=int, default=None, help="DADA2: リバース先頭トリム長（デフォルト: 自動検出）")
+    parser.add_argument("--trunc-len-f",  type=int, default=None, help="DADA2: フォワードトランケーション長（デフォルト: 自動検出）")
+    parser.add_argument("--trunc-len-r",  type=int, default=None, help="DADA2: リバーストランケーション長（デフォルト: 自動検出）")
+    parser.add_argument("--threads",      type=int, default=4,    help="スレッド数（デフォルト: 4）")
+    parser.add_argument("--sampling-depth", type=int, default=None, help="多様性解析のサンプリング深度（デフォルト: 自動検出）")
     args = parser.parse_args()
 
     _print_banner()
@@ -397,15 +502,20 @@ def main():
         return
 
     # ── フルパイプライン: FASTQ ディレクトリを直接指定 ───────────────
-    print("FASTQ ファイルが入ったディレクトリのパスを指定してください。")
-    print("（例: /Users/yourname/input  または  ~/microbiome-data）")
+    if not args.fastq_dir and not args.manifest and not args.auto:
+        print("FASTQ ファイルが入ったディレクトリのパスを指定してください。")
+        print("（例: /Users/yourname/input  または  ~/microbiome-data）")
     fastq_dir_raw = args.fastq_dir or args.manifest or _ask("FASTQ ディレクトリのパス")
     fastq_dir = str(Path(fastq_dir_raw).expanduser().resolve())
     if not Path(fastq_dir).exists():
         print(f"❌ ディレクトリが存在しません: {fastq_dir}")
         sys.exit(1)
 
-    metadata_path = args.metadata or _ask("メタデータ TSV のパス（省略可）", "")
+    # --auto モードではメタデータは省略（対話なし）
+    if args.auto:
+        metadata_path = args.metadata or ""
+    else:
+        metadata_path = args.metadata or _ask("メタデータ TSV のパス（省略可）", "")
     if metadata_path and not Path(metadata_path).exists():
         print(f"⚠️  メタデータファイルが見つかりません（スキップ）: {metadata_path}")
         metadata_path = ""
@@ -417,15 +527,44 @@ def main():
         print("例: 属レベルの積み上げ棒グラフ、Shannon 多様性のグループ比較、Bray-Curtis PCoA")
         user_prompt = args.prompt or _ask("解析内容", "")
 
+    # ── DADA2 パラメータ: CLI 指定 → 自動検出 の優先順位で決定 ──────
+    print()
+    print("🔍 FASTQ を解析中...")
+    auto_params = _detect_dada2_params(fastq_dir)
+    n_samples   = auto_params["n_samples"]
+    read_len_f  = auto_params["read_len_f"]
+    read_len_r  = auto_params["read_len_r"]
+
+    trim_left_f  = args.trim_left_f  if args.trim_left_f  is not None else auto_params["trim_left_f"]
+    trim_left_r  = args.trim_left_r  if args.trim_left_r  is not None else auto_params["trim_left_r"]
+    trunc_len_f  = args.trunc_len_f  if args.trunc_len_f  is not None else auto_params["trunc_len_f"]
+    trunc_len_r  = args.trunc_len_r  if args.trunc_len_r  is not None else auto_params["trunc_len_r"]
+    sampling_dep = args.sampling_depth if args.sampling_depth is not None else auto_params["sampling_depth"]
+    n_threads    = args.threads
+
     _hr()
-    print(f"📂 FASTQ ディレクトリ: {fastq_dir}")
+    print(f"📂 FASTQ ディレクトリ : {fastq_dir}")
+    print(f"   サンプル数         : {n_samples} サンプル（ペアエンド）")
+    if read_len_f:
+        print(f"   リード長 (F/R)     : {read_len_f}bp / {read_len_r or '?'}bp")
     if metadata_path:
-        print(f"📋 メタデータ  : {metadata_path}")
-    print(f"💾 出力先      : {output_dir}")
+        print(f"📋 メタデータ         : {metadata_path}")
+    print(f"💾 出力先             : {output_dir}")
+    print(f"🧬 DADA2 パラメータ:")
+    print(f"   trim_left  F={trim_left_f}  R={trim_left_r}")
+    print(f"   trunc_len  F={trunc_len_f}  R={trunc_len_r}")
+    print(f"   sampling_depth={sampling_dep}  threads={n_threads}")
     if mode == "2":
-        print(f"🤖 モード       : 自律エージェント（最大 {args.max_rounds} ラウンド）")
+        print(f"🤖 モード              : 自律エージェント（最大 {args.max_rounds} ラウンド）")
     _hr()
     print()
+
+    # --auto でない場合は続行確認
+    if not args.auto:
+        if not _ask_bool("上記の設定で解析を開始しますか?", True):
+            print("中断しました。")
+            sys.exit(0)
+        print()
 
     # ── STEP 1: QIIME2 パイプライン実行（既存の実証済みコードを使用）──
     print("─" * 48)
@@ -434,13 +573,13 @@ def main():
     config = PipelineConfig(
         fastq_dir=fastq_dir,
         paired_end=True,
-        trim_left_f=0,
-        trim_left_r=0,
-        trunc_len_f=250,
-        trunc_len_r=200,
+        trim_left_f=trim_left_f,
+        trim_left_r=trim_left_r,
+        trunc_len_f=trunc_len_f,
+        trunc_len_r=trunc_len_r,
         metadata_path=metadata_path,
-        n_threads=4,
-        sampling_depth=5000,
+        n_threads=n_threads,
+        sampling_depth=sampling_dep,
         output_dir=str(output_dir),
     )
     pipeline_result = run_pipeline(config=config, log_callback=_log)
