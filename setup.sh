@@ -278,7 +278,7 @@ else
 
         _CONDA_BASE="$("$CONDA_CMD" info --base 2>/dev/null || echo '')"
         _QIIME2_BIN="$_CONDA_BASE/envs/$_ENV_NAME/bin"
-        success "QIIME2 ($ENV_NAME) のインストールが完了しました"
+        success "QIIME2 ($_ENV_NAME) のインストールが完了しました"
         success "  パス: $_QIIME2_BIN"
     else
         warn "QIIME2 のインストールをスキップしました。"
