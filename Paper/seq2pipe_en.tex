@@ -1,5 +1,5 @@
 % seq2pipe: A Local LLM-Powered AI Agent for Automated QIIME2 Pipeline Generation
-% Compile with: pdflatex seq2pipe_en.tex  or  tectonic seq2pipe_en.tex
+% Compile with: pdflatex seq2pipe_en.tex  or  lualatex seq2pipe_en.tex
 
 \documentclass[12pt, a4paper]{article}
 
@@ -89,7 +89,7 @@
   {\large A Local LLM-Powered AI Agent for Automated QIIME2 Pipeline Generation}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small February 23, 2026}
+  {\small February 27, 2026}
 \end{center}
 
 \vspace{4mm}
@@ -112,6 +112,11 @@ it rewrites and retries until \texttt{EXIT CODE: 0}.
 In autonomous mode it automatically produces 14 publication-quality figures
 across 5 analysis phases (quality control, alpha diversity, beta diversity
 including CLR-PCA and NMDS, taxonomic composition, and sample correlation).
+After analysis completes, a \textbf{post-analysis refinement mode} is activated
+where users can iteratively refine figures through natural language instructions
+(e.g.\ ``change colors'', ``move legend outside'').
+Typing ``report'' generates an HTML report; typing ``PDF'' compiles a
+LaTeX document using \texttt{lualatex} or \texttt{xelatex}.
 The entire workflow runs on the user's local machine, eliminating
 dependencies on cloud services or paid APIs.
 A startup language selector (Japanese/English), automatic Python dependency
@@ -504,22 +509,64 @@ Comprehensive error handling covers:
     socket-level timeout fallback
 \end{itemize}
 
-\subsection{Python Downstream Analysis and Automatic Report Generation}
+\subsection{Automatic JPEG Conversion for Figures}
+
+When the LLM generates \texttt{plt.savefig()} calls with \texttt{.pdf} or
+\texttt{.svg} extensions, the resulting files cannot be opened in macOS Preview.
+The \texttt{\_convert\_new\_figs()} helper automatically detects such files
+immediately after code execution and converts them to JPEG using the macOS
+built-in \texttt{sips} command, then removes the original.
+The system prompt was also strengthened with an explicit instruction that
+the extension ``MUST be \texttt{.jpg}'', reducing the frequency of incorrect
+extension choices from the LLM.
+
+\subsection{Diversity Analysis Without Metadata}
+
+The standard \texttt{qiime diversity core-metrics-phylogenetic} command
+requires \texttt{--m-metadata-file} as a mandatory argument; when no metadata
+file is provided, the entire diversity analysis step (Step 7) was previously
+skipped. This was corrected by adding a fallback branch that individually
+invokes \texttt{qiime diversity alpha}, \texttt{qiime diversity beta},
+\texttt{qiime diversity alpha-phylogenetic}, and
+\texttt{qiime diversity beta-phylogenetic} for each metric
+(Shannon, Faith's PD, Bray-Curtis, UniFrac, etc.) when metadata is absent.
+
+\subsection{Post-Analysis Refinement Mode and Report Generation}
+
+After analysis completes, \texttt{\_run\_refinement\_session()} launches
+an interactive loop where users can issue natural-language instructions to
+refine the generated figures. Each instruction is passed to
+\texttt{run\_refinement\_loop()}, which has the LLM modify the existing
+\texttt{analysis.py} script and re-execute it. The loop exits on empty
+Enter or \texttt{quit}.
+
+Within the refinement session, keyword detection triggers report generation:
+
+\begin{itemize}
+  \item ``report'' / ``html'' $\rightarrow$ \texttt{generate\_html\_report()}:
+    a self-contained HTML file with figures embedded as base64 data URIs,
+    LLM-generated Japanese captions per figure, an overall summary, and
+    a parameter table.
+  \item ``PDF'' / ``latex'' $\rightarrow$ \texttt{generate\_latex\_report()}:
+    auto-detects \texttt{lualatex} (preferred, using \texttt{luatexja-preset}
+    for Japanese) or \texttt{xelatex} (fallback, using \texttt{xeCJK} +
+    Hiragino fonts on macOS). Compiles twice for cross-reference resolution.
+    If no LaTeX engine is found, \texttt{report.tex} is saved for
+    manual compilation.
+\end{itemize}
+
+This replaces the previous \texttt{tectonic}-based approach with
+standard TeX Live / MacTeX tooling, broadening compatibility.
+
+\subsection{Python Downstream Analysis}
 
 \texttt{tool\_execute\_python()} executes Python code via
-\texttt{subprocess.run()} with a timeout of 300 seconds.
+\texttt{subprocess.run()} with a configurable timeout.
 Before execution, a preamble is prepended that injects
-\texttt{FIGURE\_DIR}, \texttt{PLOT\_CONFIG}, and \texttt{FIGURE\_FORMAT}
-variables, allowing the LLM to generate analysis code without
-knowing the exact file paths.
-Each execution appends a structured entry (step name, figure paths,
-statistical results) to the global \texttt{ANALYSIS\_LOG}.
-
-\texttt{tool\_build\_report\_tex()} reads \texttt{ANALYSIS\_LOG}
-and programmatically generates complete TeX source --- no LLM
-involvement required, making it fast and deterministic.
-Separate Japanese (XeLaTeX + xeCJK) and English (pdflatex) documents
-are produced and compiled to PDF via tectonic.
+\texttt{FIGURE\_DIR}, \texttt{DPI}, and required imports,
+allowing the LLM to generate analysis code without knowing exact paths.
+Generated figures are detected by comparing the directory listing before
+and after execution, and PDF/SVG files are immediately converted to JPEG.
 
 \subsection{Automatic Manifest Generation}
 
@@ -619,8 +666,9 @@ then writes and executes analysis code.
     Pairwise sample correlation matrix with hierarchical clustering heatmap
 \end{enumerate}
 
-Upon completion, \texttt{build\_report\_tex} automatically generates
-bilingual TeX/PDF reports from \texttt{ANALYSIS\_LOG}.
+Upon completion, the post-analysis refinement mode activates, allowing
+natural-language figure refinement and report generation
+(\texttt{report\_generator.py}).
 
 % -------------------------------------------------------
 \section{Supported Models and Performance}
@@ -676,8 +724,8 @@ Table~\ref{tab:requirements} summarizes the required software stack.
     Docker Desktop/Engine & QIIME2 execution environment & Manual install \\
     numpy, pandas, etc. & Python downstream analysis &
       Automated via \texttt{setup.sh} \\
-    tectonic (optional) & PDF report compilation &
-      \texttt{brew install tectonic} \\
+    lualatex / xelatex (optional) & PDF report compilation &
+      \texttt{brew install --cask mactex-no-gui} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -797,10 +845,10 @@ mean line superimposed.
 \end{figure}
 
 All six figures and accompanying interpretive text were incorporated
-into a Japanese PDF report (\texttt{report\_ja.pdf}) automatically by
-\texttt{InteractiveSession.generate\_report()}, which calls the LLM to
-write a figure caption for each plot and compiles the result with
-\texttt{tectonic}.
+into a report automatically by \texttt{generate\_html\_report()} or
+\texttt{generate\_latex\_report()} (\texttt{report\_generator.py}).
+The LLM generates a Japanese caption for each figure and an overall summary;
+the LaTeX variant is compiled with \texttt{lualatex}.
 
 % -------------------------------------------------------
 \section{Discussion}
@@ -832,10 +880,18 @@ seq2pipe achieves the following:
     (\texttt{\_parse\_text\_tool\_calls}, auto-inject \texttt{run\_python},
     step-6 1-shot fallback, repetition detector) ensures reliable figure
     generation even with 7B parameter models
-  \item Two operation modes: directed (Mode 1 — natural language prompt)
-    and fully autonomous (Mode 2 — \texttt{--auto} flag)
-  \item Automatic bilingual (Japanese/English) TeX/PDF report generation
-    from \texttt{ANALYSIS\_LOG} without LLM involvement
+  \item Two operation modes: directed (Mode 1 --- natural language prompt)
+    and fully autonomous (Mode 2 --- \texttt{--auto} flag)
+  \item \textbf{Post-analysis refinement mode (\texttt{run\_refinement\_loop})}:
+    iterative figure refinement via natural language; loop exits on empty Enter
+  \item \textbf{Automatic PDF/SVG to JPEG conversion (\texttt{sips})}:
+    no extra dependencies on macOS; prevents ``unsupported format'' errors in Preview
+  \item \textbf{Metadata-free diversity analysis}:
+    individual \texttt{qiime diversity alpha/beta} commands as fallback
+    when \texttt{core-metrics-phylogenetic} cannot run without metadata
+  \item \textbf{HTML and LaTeX/PDF report auto-generation} (\texttt{report\_generator.py}):
+    type ``report'' for HTML, ``PDF'' for \texttt{lualatex}/\texttt{xelatex} PDF;
+    LLM generates Japanese figure captions and summary
   \item Startup language selection UI (Japanese / English)
   \item Robust handling of connection errors, timeouts, empty responses,
     and filesystem errors
@@ -849,10 +905,14 @@ seq2pipe achieves the following:
   \item Performance with large datasets (100+ samples) has not been formally evaluated.
   \item Initial SILVA 138 classifier training requires approximately 30 GB
     of disk space and several hours of computation.
-  \item PDF report compilation requires tectonic to be installed separately.
+  \item PDF report compilation requires \texttt{lualatex} or \texttt{xelatex}
+    (MacTeX / TeX Live); if unavailable, \texttt{report.tex} is saved for
+    manual compilation.
   \item The QIIME2 pipeline agent (\texttt{qiime2\_agent.py}) does not yet
     apply the read-first pattern; integrating it with \texttt{code\_agent.py}'s
     approach is a future goal.
+  \item PDF/SVG auto-conversion relies on macOS \texttt{sips}; Linux/Windows
+    users must convert manually (Pillow-based conversion is planned).
 \end{itemize}
 
 \subsection{Future Directions}
@@ -860,12 +920,11 @@ seq2pipe achieves the following:
 \begin{itemize}
   \item A Streamlit browser GUI (\texttt{app.py}) has been implemented as an optional interface; the terminal CLI remains the primary workflow
   \item Support for additional marker genes (ITS, 18S rRNA)
-  \item Feedback loop incorporating pipeline execution results
-    to iteratively refine parameters
-  \item Parallel tool execution for faster autonomous exploration
-  \item Integration of statistical result annotation directly into figures
+  \item Pillow-based PDF/SVG $\to$ JPEG conversion for Linux and Windows
   \item Extending the autonomous task list with differential abundance
     (volcano plots) and machine learning (Random Forest) analyses
+  \item Integration of statistical result annotation directly into figures
+  \item Automatic launch of the refinement loop after \texttt{--auto} mode completion
 \end{itemize}
 
 % -------------------------------------------------------
@@ -880,9 +939,12 @@ QIIME2 pipeline generation, while \texttt{code\_agent.py} --- a
 vibe-local-style tool-calling agent with 5 tools --- generates
 accurate Python analysis code by reading actual file contents
 before writing code and automatically correcting errors until success.
+A post-analysis refinement mode allows iterative figure improvement via
+natural language, and \texttt{report\_generator.py} produces HTML or
+LaTeX/PDF reports compiled with \texttt{lualatex} or \texttt{xelatex}.
 Together they enable researchers to automate an entire 16S rRNA analysis workflow ---
-from raw FASTQ data through 14 publication-quality figures across 5 analysis phases,
-and bilingual research reports --- entirely offline and without any cloud dependencies.
+from raw FASTQ data through 14 publication-quality figures across 5 analysis phases
+and a formatted PDF report --- entirely offline and without any cloud dependencies.
 
 seq2pipe is released as open source under the MIT License and is available at:
 \texttt{https://github.com/Rhizobium-gits/seq2pipe}

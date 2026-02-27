@@ -1,6 +1,6 @@
 % seq2pipe: ローカルLLMによるQIIME2パイプライン自動生成AIエージェント
-% XeLaTeX + xeCJK でコンパイル
-% tectonic seq2pipe_ja.tex  または  xelatex seq2pipe_ja.tex
+% LuaLaTeX + luatexja-preset でコンパイル（推奨）
+% lualatex seq2pipe_ja.tex  または  xelatex seq2pipe_ja.tex
 
 \documentclass[12pt, a4paper]{article}
 
@@ -94,7 +94,7 @@
   {\large ローカル LLM による QIIME2 パイプライン自動生成 AI エージェント}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small 2026 年 2 月 23 日}
+  {\small 2026 年 2 月 27 日}
 \end{center}
 
 \vspace{4mm}
@@ -114,6 +114,10 @@ seq2pipe はユーザーが保有する生 FASTQ データを入力として受�
 エラーが発生するたびにコードを修正して \texttt{EXIT CODE: 0} になるまで実行を繰り返す。
 自律モードでは 5 フェーズ・14 種類の図を全自動で生成する
 （クオリティ確認、α多様性、β多様性、分類組成、サンプル相関）。
+解析完了後は \textbf{振り返り・修正モード} が起動し、
+「色を変えて」「凡例を外に出して」などの自然言語指示で図を対話的に修正できる。
+修正セッション中に「レポート」と入力すると HTML レポート、
+「PDF」と入力すると \texttt{lualatex} / \texttt{xelatex} による LaTeX/PDF レポートを自動生成する。
 処理はすべてユーザーのローカル環境で完結し、
 クラウドサービスや有料 API への依存を排除する。
 \end{abstract}
@@ -248,8 +252,12 @@ vibe-local 方式のツール呼び出し型コード生成を行う。
     +-- inspect_directory / read_file / write_file / edit_file
     +-- generate_manifest / run_command / check_system
     +-- set_plot_config / execute_python / build_report_tex / log_analysis_step
+
+  [report_generator.py]  HTML / LaTeX+PDF レポート生成
+    +-- generate_html_report()   base64 埋め込み HTML レポート
+    `-- generate_latex_report()  lualatex / xelatex で PDF をコンパイル
   \end{verbatim}
-  \caption{seq2pipe の 3 層アーキテクチャ}
+  \caption{seq2pipe のアーキテクチャ}
   \label{fig:arch}
 \end{figure}
 
@@ -460,19 +468,52 @@ Python の \texttt{urllib.request} モジュールのみを使用しており、
   \item \texttt{socket.timeout / TimeoutError}: ソケットレベルのタイムアウト
 \end{itemize}
 
-\subsection{Python 下流解析と自動レポート生成}
+\subsection{図の自動 JPEG 変換}
 
-\texttt{tool\_execute\_python()} は Python コードを
-\texttt{subprocess.run()} 経由で実行する。
-実行前に \texttt{FIGURE\_DIR}・\texttt{PLOT\_CONFIG}・
-\texttt{FIGURE\_FORMAT} 変数を自動注入するプリアンブルを付加するため、
-LLM はファイルパスを意識せずに解析コードを生成できる。
-実行結果のステップ・図パス・統計結果は \texttt{ANALYSIS\_LOG} に自動蓄積される。
+LLM が \texttt{plt.savefig()} に \texttt{.pdf} や \texttt{.svg} 拡張子を使ってしまう場合があった。
+seq2pipe は \texttt{\_convert\_new\_figs()} ヘルパーにより、
+コード実行直後に生成された PDF/SVG ファイルを macOS 内蔵の
+\texttt{sips} コマンドで自動的に JPEG へ変換し、元ファイルを削除する。
+これにより macOS プレビュー等で問題なく図を確認できる。
+また、プロンプトに「拡張子は必ず \texttt{.jpg}」という指示を追加し、
+LLM による不適切な拡張子の生成頻度を低減した。
 
-\texttt{tool\_build\_report\_tex()} は \texttt{ANALYSIS\_LOG} の内容から
-TeX ソースを Python で完全生成する（LLM を使用しない）。
-日本語版（XeLaTeX + xeCJK）と英語版（pdflatex）を別々に生成し、
-tectonic でコンパイルして PDF を出力する。
+\subsection{メタデータなし多様性解析}
+
+従来の \texttt{qiime diversity core-metrics-phylogenetic} コマンドは
+\texttt{--m-metadata-file} が必須引数であるため、
+メタデータファイルがない場合は STEP 7（多様性解析）が丸ごとスキップされていた。
+これを修正し、メタデータが存在しない場合は
+個別コマンド（\texttt{qiime diversity alpha}, \texttt{qiime diversity beta},
+\texttt{qiime diversity alpha-phylogenetic}, \texttt{qiime diversity beta-phylogenetic}）を
+Shannon・Faith PD・Bray--Curtis・UniFrac 等の各指標について順次実行するフォールバックを実装した。
+
+\subsection{振り返り・修正モードと HTML / LaTeX レポート生成}
+
+解析が完了すると \texttt{\_run\_refinement\_session()} が起動し、
+ユーザーは生成された図に対して自然言語で修正指示を与えられる。
+指示はそのまま \texttt{run\_refinement\_loop()} に渡され、
+LLM が既存コードを修正して再実行する。
+このループは空 Enter または \texttt{quit} で終了する。
+
+修正セッション中に特定のキーワードが入力されるとレポートが生成される:
+
+\begin{itemize}
+  \item 「レポート」・\texttt{html} など → \texttt{generate\_html\_report()}:
+    図を base64 で埋め込んだ自己完結型 HTML ファイルを生成する。
+    LLM が各図の日本語解釈文と総合サマリーを生成し、
+    解析パラメータ表・パイプラインステップを合わせて記録する。
+  \item 「PDF」・\texttt{latex} など → \texttt{generate\_latex\_report()}:
+    \texttt{lualatex}（優先）または \texttt{xelatex} を自動検出してコンパイルする。
+    日本語対応には \texttt{luatexja-preset}（lualatex）または
+    \texttt{xeCJK} + Hiragino フォント（xelatex）を使用する。
+    LaTeX エンジンが見つからない場合は \texttt{report.tex} のみ保存し、
+    手動コンパイル手順をユーザーに通知する。
+\end{itemize}
+
+従来 \texttt{tectonic} に依存していたレポート生成を
+macOS/Linux 標準の LaTeX ツールチェーン（MacTeX）で置き換えたことにより、
+追加インストールなしで PDF レポートを生成できる環境が拡大した。
 
 \subsection{マニフェスト自動生成}
 
@@ -555,8 +596,9 @@ QIIME2 解析後、自律エージェントモード（\texttt{--auto}）では�
   \item \textbf{Phase 4 (correlation)}: サンプル間相関行列 + 階層クラスタリング heatmap
 \end{enumerate}
 
-全フェーズ完了後、\texttt{build\_report\_tex} が \texttt{ANALYSIS\_LOG} から
-日英 TeX/PDF レポートを自動生成する。
+全フェーズ完了後、振り返り・修正モードが起動し、
+自然言語指示による図の修正と
+\texttt{report\_generator.py} による HTML / LaTeX+PDF レポート出力が行える。
 
 % -------------------------------------------------------
 \section{対応モデルと性能比較}
@@ -712,7 +754,14 @@ seq2pipe は以下の目標を達成した。
     ステップ 6 の 1 ショットフォールバック・繰り返し検出）により、
     7B モデルでも確実に図を生成
   \item 2 つの操作モード: 指定解析（モード 1）・完全自律（モード 2 / \texttt{--auto}）
-  \item \texttt{ANALYSIS\_LOG} からの日英 TeX/PDF レポート自動生成（LLM 不使用）
+  \item \textbf{解析後の振り返り・修正モード（\texttt{run\_refinement\_loop}）}:
+    自然言語指示で図を対話的に修正・再実行
+  \item \textbf{PDF/SVG → JPEG 自動変換（\texttt{sips}）}:
+    macOS 内蔵コマンドで追加依存なし、プレビューで開けない PDF 図を自動 JPEG 変換
+  \item \textbf{メタデータなし多様性解析}:
+    \texttt{core-metrics-phylogenetic} 不可時に個別コマンドへフォールバック
+  \item \textbf{HTML / LaTeX+PDF レポート自動生成}（\texttt{report\_generator.py}）:
+    「レポート」→ HTML、「PDF」→ \texttt{lualatex}/\texttt{xelatex} による PDF
   \item 日本語 / 英語の起動時言語選択 UI
   \item 接続エラー・タイムアウト・空レスポンス・ファイルシステムエラーへの堅牢な処理
 \end{itemize}
@@ -724,9 +773,13 @@ seq2pipe は以下の目標を達成した。
     誤ったパラメータが生成される可能性がある。
   \item 大規模データセット（100 サンプル以上）に対するパフォーマンスは未検証である。
   \item SILVA 138 参照ファイルのダウンロードには約 30 GB のディスク容量と数時間を要する。
-  \item TeX レポートのコンパイルには tectonic のインストールが必要である。
+  \item PDF レポートのコンパイルには \texttt{lualatex} または \texttt{xelatex}
+    （MacTeX / TeX Live）のインストールが必要である。インストールされていない環境では
+    \texttt{.tex} ファイルのみが保存される。
   \item \texttt{qiime2\_agent.py}（QIIME2 パイプライン生成）には read-first パターンが未適用であり、
     \texttt{code\_agent.py} との統合が今後の課題である。
+  \item PDF/SVG の自動 JPEG 変換は macOS の \texttt{sips} に依存しており、
+    Linux / Windows では変換は行われない（将来的に \texttt{Pillow} による代替を検討）。
 \end{itemize}
 
 \subsection{今後の課題}
@@ -734,11 +787,11 @@ seq2pipe は以下の目標を達成した。
 \begin{itemize}
   \item Streamlit ブラウザ GUI（\texttt{app.py}）は任意利用可として実装済み。今後は主要インターフェースをターミナル CLI に統一しつつ UI の拡充を図る
   \item ITS / 18S rRNA など他のマーカー遺伝子への対応
-  \item パイプライン実行結果のフィードバックループ実装
-  \item 並列ツール実行による処理の高速化
+  \item \texttt{Pillow} を利用した Linux / Windows 向け PDF/SVG → JPEG 変換の実装
   \item 差次存在量解析（volcano plot）・機械学習（Random Forest）の
     自律タスクへの追加
   \item 統計的検定結果の図への自動アノテーション
+  \item \texttt{--auto} モード終了後の振り返りループの自動起動
 \end{itemize}
 
 % -------------------------------------------------------
@@ -752,8 +805,10 @@ seq2pipe の設計・実装を報告した。
 \texttt{code\_agent.py} が vibe-local 方式の 5 ツールで
 実際のファイル内容を読んでから Python 解析コードを生成し、
 エラーが出ても自動修正して最終的に成功させる。
+解析完了後は振り返り・修正モードにより自然言語で図を対話的に改善でき、
+\texttt{report\_generator.py} が HTML または LaTeX+PDF レポートを自動生成する。
 これにより研究者は生 FASTQ データから 5 フェーズ・14 種類の出版品質の図と
-日英 PDF レポートまでを、完全オフラインかつクラウド不要の環境で自動化できる。
+PDF レポートまでを、完全オフラインかつクラウド不要の環境で自動化できる。
 
 seq2pipe はオープンソース（MIT ライセンス）として公開されており、
 \texttt{https://github.com/Rhizobium-gits/seq2pipe} からアクセスできる。

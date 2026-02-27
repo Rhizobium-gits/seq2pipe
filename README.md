@@ -25,7 +25,7 @@
 ## これは何？
 
 **seq2pipe** は、あなたの PC で動くローカル AI エージェントです。
-生の FASTQ データを渡すだけで、QIIME2 解析パイプラインの**設計・実行・Python 解析・レポート生成**まで自動で行います。
+生の FASTQ データを渡すだけで、QIIME2 解析パイプラインの**設計・実行・Python 解析・図の修正・レポート生成**まで自動で行います。
 
 - **起動時に日本語 / 英語を選択**し、以降の AI 応答・レポートを統一
 - 起動時に Python 依存パッケージ（numpy / pandas 等）の存在を自動確認
@@ -34,10 +34,12 @@
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
 - **2 つの操作モード**: チャット（自然言語でやりたい解析を指定）・自律エージェント（AI が自律的に全解析を設計・実行）
 - **ツール呼び出し型コード生成エージェント（vibe-local 方式）**: LLM がまず `read_file` でデータの列名・形式を確認してからコードを生成するため精度が高く、エラーが出ても `NEVER GIVE UP` で自動修正を繰り返す
-- QIIME2 の出力を **Python（pandas / scipy / scikit-learn / matplotlib）で高度解析**
-- 解析図をすべて **PNG/PDF として自動保存**（view.qiime2.org 不要）
-- **自律解析（chat_agent / InteractiveSession）**: α多様性・β多様性・DADA2 統計などを自動生成
-- 解析終了後に **日本語・英語の TeX / PDF レポートを自動生成**
+- **解析後の振り返り・修正モード**: 生成された図に対して「色を変えて」「凡例を外に出して」など自然言語で修正を指示し、LLM が自動でコードを修正・再実行
+- QIIME2 の出力を **Python（pandas / scipy / scikit-learn / matplotlib / seaborn）で高度解析**
+- 解析図をすべて **JPEG として自動保存**（PDF/SVG が出力された場合も macOS 内蔵 `sips` で自動変換）
+- **メタデータなしでも多様性解析を実行**: メタデータファイル不要で α 多様性・β 多様性を自動計算
+- 解析終了後に **「レポート」と入力 → HTML レポート** / **「PDF」と入力 → LaTeX/PDF レポート** を自動生成
+  - PDF レポートは `lualatex`（推奨）または `xelatex` でコンパイル（MacTeX 不要な場合は `.tex` ファイルのみ保存）
 
 すべて **あなたのマシン上** で完結。クラウドや有料 API は一切使いません。
 
@@ -156,79 +158,92 @@ pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format netwo
 
 ## 使い方
 
-### QIIME2 パイプライン生成（CLI）
-
-起動すると、まず言語を選択してから AI がパイプラインを自動生成します。
+### モード 1 — 自然言語でリクエスト（指定解析）
 
 ```
-言語を選択してください / Select language:
-  1. 日本語 (ja)
-  2. English (en)
-> 1
-
-AI: こんにちは！以下を教えてください:
-    1. データディレクトリのパス
-    2. 実験系の説明（領域・プライマー・比較グループ）
-    3. 行いたい解析
-    4. 図のスタイル（省略可）
-
-あなた > データ: /Users/yourname/microbiome-data/
-         実験系: ヒト腸内細菌、16S V3-V4（341F/806R）、MiSeq PE 2×250bp
-                 コントロール 5 サンプル vs 処理群 5 サンプル
-         解析: 分類組成 + α/β 多様性 + 差次解析
-
-[ツール実行: inspect_directory]
-  -> ペアエンド FASTQ 10 サンプルを検出、metadata.tsv も確認...
-
-AI: V3-V4 パイプラインを生成します。
-    -> manifest.tsv, run_pipeline.sh, ANALYSIS_README.md
-```
-
-### 自律エージェントモード（モード 2 / --auto）
-
-QIIME2 解析後、AI が自律的に多様性・統計図を全自動で生成します。
-
-```
-$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --auto --manifest manifest.tsv
-
-  🚀 STEP 1/2: QIIME2 パイプライン実行中
-    -> dada2 denoise-paired, core-metrics-phylogenetic...
-  ✅ パイプライン完了
-
-  🤖 STEP 2/2: chat_agent 自律解析
-
-  [Step 1] α 多様性 4 指標（2×2 グリッド）
-  [Step 2] Bray-Curtis PCoA
-  [Step 3] UniFrac PCoA
-  [Step 4] Jaccard ヒートマップ
-  [Step 5] DADA2 統計棒グラフ
-
-  ✅ 自律解析完了！PDF レポート生成 → report_ja.pdf
-```
-
-### 解析モード（モード 1）- 自然言語でリクエスト
-
-```
-$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_results/20260225_120000/exported/
+$ ./launch.sh --fastq-dir ~/input
 
 やりたい解析を入力: Shannon 多様性をグループ別に violin plot で比較
 
-[read_file]  alpha/shannon_vector.tsv（列名確認）
-[write_file] analysis.py を生成
-[run_python] EXIT CODE: 0
-  -> figures/shannon_violin.png 保存
+[list_files]  エクスポートファイル一覧を確認
+[read_file]   alpha/shannon_vector.tsv の列名を確認
+[write_file]  analysis.py を生成
+[run_python]  EXIT CODE: 0 → figures/shannon_violin.jpg 保存
 
 ✅ 解析完了！
+
+  ✏️  振り返り・修正モード
+  生成された図に対して自然言語で修正を指示できます。
+  例: 「積み上げ棒グラフの凡例を外に出して」
+      「PCoA の点を大きくして、サンプル名を表示して」
+      「色盲対応のパレットに変えて」
+  📄 レポート出力:
+      HTML: 「レポート」と入力
+      PDF:  「PDFレポート」または「PDF」と入力
+  終了: 空 Enter / quit / done
+
+✏️  修正内容> PCoA の点を大きくしてサンプル名も表示して
+
+[write_file] analysis.py を修正
+[run_python] EXIT CODE: 0 → figures/fig10_beta_pcoa.jpg 更新
+
+✏️  修正内容> PDF
+
+📐 PDF レポートを生成しています（LaTeX）...
+📐 LaTeX エンジン検出: lualatex
+✅ PDF レポート生成完了！
+📄 ファイル: /path/to/results/report.pdf
 ```
 
-### 図のスタイル変更
+### モード 2 — 完全自律（--auto）
+
+FASTQ ディレクトリを指定するだけで、QIIME2 パイプライン + 全解析図 + レポートまで自動実行します。
+
+```bash
+cd ~/seq2pipe
+./launch.sh --fastq-dir ~/input --auto
+```
 
 ```
-あなた > 図を論文向けに 300 DPI の PNG に変えて
+  🚀 STEP 1/2: QIIME2 パイプライン実行中
+    -> dada2 denoise-paired, phylogeny, diversity...
+  ✅ パイプライン完了（14 STEP）
 
-[ツール実行: set_plot_config]
-  -> dpi: 300, format: png に変更
+  🤖 STEP 2/2: 自律コード生成エージェント
+
+  Phase 0: デノイジング統計
+  Phase 1: α 多様性（Shannon / Faith PD / Evenness / Observed Features）
+  Phase 2: β 多様性（Bray-Curtis PCoA / UniFrac PCoA / NMDS / CLR-PCA）
+  Phase 3: 分類組成（門・属レベル stacked bar / heatmap）
+  Phase 4: サンプル相関（相関行列）
+
+  ✅ 自律解析完了！全 14 図を生成
 ```
+
+### DADA2 パラメータの自動検出
+
+`--auto` フラグ使用時、リード長から DADA2 パラメータを自動検出します:
+
+```bash
+./launch.sh --fastq-dir ~/input --auto
+# → trunc_len_f, trunc_len_r, sampling_depth を自動推定
+
+# 手動上書きも可能
+./launch.sh --fastq-dir ~/input --auto \
+  --trim-left-f 20 --trim-left-r 20 \
+  --trunc-len-f 260 --trunc-len-r 230
+```
+
+### レポート出力
+
+モード 1 の修正ループ内で入力するだけで生成されます:
+
+| 入力例 | 出力 |
+|--------|------|
+| `レポート` / `html` | HTML レポート（図を base64 埋め込み、ブラウザで開く） |
+| `PDF` / `PDFレポート` / `latex` | LaTeX → PDF レポート（lualatex/xelatex でコンパイル） |
+
+HTML/PDF 両方に LLM が生成した日本語の図解釈・総合サマリーが含まれます。
 
 ### 生成されるファイル
 
@@ -236,19 +251,22 @@ $ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_
 ~/seq2pipe_results/<タイムスタンプ>/
 ├── exported/                 ← QIIME2 エクスポートデータ
 │   ├── feature-table.tsv
+│   ├── taxonomy/taxonomy.tsv
 │   ├── alpha/<指標>/alpha-diversity.tsv
 │   ├── beta/<行列>/distance-matrix.tsv
 │   └── denoising_stats/stats.tsv
-├── figures/
-│   ├── alpha_diversity.png   ← α 多様性 4 パネル
-│   ├── bray_curtis_pcoa.png  ← Bray-Curtis PCoA
-│   ├── unifrac_pcoa.png      ← UniFrac PCoA
-│   ├── jaccard_heatmap.png   ← Jaccard ヒートマップ
-│   ├── dada2_stats.png       ← DADA2 デノイジング統計
-│   └── shannon_violin.png    ← Shannon バイオリン
-└── report/
-    ├── report_ja.tex         ← 日本語レポート（自動生成）
-    └── report_ja.pdf         ← 日本語 PDF（全図入り）
+├── figures/                  ← すべて JPEG 形式で保存
+│   ├── fig01_read_depth.jpg
+│   ├── fig02_asv_freq.jpg
+│   ├── fig04_phylum_bar.jpg
+│   ├── fig05_genus_bar.jpg
+│   ├── fig08_alpha_diversity.jpg
+│   ├── fig10_beta_pcoa.jpg
+│   └── ... (最大 15 図)
+├── analysis.py               ← 自動生成された解析スクリプト
+├── report.html               ← HTML レポート（「レポート」で生成）
+├── report.tex                ← LaTeX ソース（「PDF」で生成）
+└── report.pdf                ← PDF レポート（lualatex/xelatex でコンパイル）
 ```
 
 ---
@@ -262,22 +280,26 @@ $ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_
 | DADA2 デノイジング | `qiime dada2 denoise-paired/single` |
 | 分類（SILVA 138） | `qiime feature-classifier classify-sklearn` |
 | 分類組成バーチャート | `qiime taxa barplot` |
-| α・β 多様性 | `qiime diversity core-metrics-phylogenetic` |
+| α・β 多様性（メタデータあり） | `qiime diversity core-metrics-phylogenetic` |
+| α・β 多様性（メタデータなし） | `qiime diversity alpha` / `qiime diversity beta` など個別実行 |
 | 差次解析 ANCOM-BC | `qiime composition ancombc` |
 
-### Python ダウンストリーム解析（chat_agent / code_agent — LLM 自動生成）
+### Python ダウンストリーム解析（code_agent — LLM 自動生成）
 | 解析手法 | パッケージ |
 |---|---|
 | α 多様性 4 指標（Shannon / Faith PD / Evenness / Observed Features） | pandas, seaborn |
 | Bray-Curtis PCoA（sklearn MDS） | pandas, sklearn |
 | UniFrac PCoA（unweighted / weighted） | pandas, sklearn |
+| NMDS（Bray-Curtis 非計量多次元尺度法） | pandas, sklearn |
+| CLR 変換 PCA（組成データ向け主成分分析） | pandas, sklearn |
+| ラレファクションカーブ | pandas, matplotlib |
 | Jaccard 距離ヒートマップ（seaborn clustermap） | pandas, seaborn |
 | DADA2 デノイジング統計棒グラフ | pandas, matplotlib |
 | Shannon バイオリンプロット | pandas, seaborn |
 | 門・属レベル stacked bar（taxonomy あり） | pandas, seaborn |
 | 属レベル heatmap（taxonomy あり） | pandas, seaborn |
 | サンプル相関行列 | pandas, scipy, seaborn |
-| TeX / PDF レポート自動生成 | tectonic |
+| HTML / LaTeX+PDF レポート自動生成 | report_generator.py（lualatex / xelatex） |
 
 ---
 
@@ -288,7 +310,7 @@ $ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_
 | `QIIME2_AI_MODEL` | `qwen2.5-coder:7b` | 使用する Ollama モデル |
 | `SEQ2PIPE_AUTO_YES` | `0` | `1` にするとコマンド確認をスキップ（自律モード） |
 | `SEQ2PIPE_MAX_STEPS` | `100` | エージェントループの最大ステップ数 |
-| `SEQ2PIPE_PYTHON_TIMEOUT` | `600` | `execute_python` のタイムアウト秒数 |
+| `SEQ2PIPE_PYTHON_TIMEOUT` | `600` | Python 実行のタイムアウト秒数 |
 | `QIIME2_CONDA_BIN` | 自動検出 | QIIME2 conda 環境の bin ディレクトリ（手動指定用） |
 
 ```bash
@@ -337,23 +359,24 @@ QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
 [ launch.sh / cli.py ]  (任意: app.py Streamlit GUI)
         |
         v
-[ pipeline_runner.py ]  ←─────────────────────→  [ qiime2_agent.py ]
-  QIIME2 パイプライン実行                          QIIME2 コマンド生成
-  (manifest モンキーパッチ対応)                    (11 ツール)
+[ pipeline_runner.py ]  ←──────────────────────→  [ qiime2_agent.py ]
+  QIIME2 パイプライン実行                            QIIME2 コマンド生成
+  stdout → _Tee でログ収集                          (11 ツール、STEP 0〜8)
         |
         v
-[ chat_agent.py / InteractiveSession ]
-  自律解析セッション管理
-  ├── plan_analysis_suite()  解析プランを LLM に生成させる
-  ├── run_planned(analyses)  解析リストを順次実行
-  └── generate_report()      TeX/PDF レポート生成
-        |
-        v
-[ code_agent.py / run_code_agent() ]
-  LLM コード生成 → サブプロセス実行 → エラー時自動修正（最大 3 回）
+[ code_agent.py / run_coding_agent() ]
+  LLM コード生成エージェント（vibe-local 方式）
+  ├── list_files / read_file / write_file / run_python / install_package
   ├── _ensure_required_imports()  plt/pd の自動補完
-  ├── ModuleNotFoundError 検出 → install_callback でユーザー確認
+  ├── _convert_new_figs()         PDF/SVG → JPEG 自動変換（sips）
+  ├── NEVER GIVE UP: exit code ≠ 0 → write_file 修正 → run_python 再実行
+  ├── run_refinement_loop()       解析後の振り返り・修正モード
   └── 実行成功 + 図生成確認 → CodeExecutionResult 返却
+        |
+        v
+[ report_generator.py ]
+  ├── generate_html_report()  HTML レポート（base64 図埋め込み）
+  └── generate_latex_report() LaTeX → PDF レポート（lualatex / xelatex）
         |
         v
   Ollama (localhost:11434)  ← ローカル LLM
@@ -379,7 +402,7 @@ ollama serve
 QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
 ```
 
-自動検出される候補: `~/miniforge3/envs/qiime2/bin`, `~/miniconda3/envs/qiime2/bin`, `~/anaconda3/envs/qiime2/bin`
+自動検出される候補: `~/miniforge3/envs/qiime2*/bin`, `~/miniconda3/envs/qiime2*/bin`, `~/anaconda3/envs/qiime2*/bin`
 
 </details>
 
@@ -403,14 +426,40 @@ pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format netwo
 </details>
 
 <details>
-<summary>tectonic（PDF コンパイル）が見つからない</summary>
+<summary>PDF レポートの LaTeX コンパイルに失敗する</summary>
+
+`lualatex` または `xelatex` が必要です（MacTeX に含まれています）。
 
 ```bash
-# macOS
-brew install tectonic
+# macOS（推奨・約 100 MB の minimal インストール）
+brew install --cask mactex-no-gui
 
-# Linux
-curl --proto '=https' --tlsv1.2 -fsSL https://drop.rs/tectonic | sh
+# または MacTeX フルインストール（約 4 GB）
+# https://tug.org/mactex/
+
+# Linux（TeX Live）
+sudo apt install texlive-luatex texlive-xetex texlive-lang-japanese
+```
+
+LaTeX がインストールされていない場合、`report.tex` ファイルのみ保存されます。
+以下のコマンドで手動コンパイルできます:
+```bash
+lualatex report.tex   # 日本語対応（推奨）
+xelatex  report.tex   # 代替オプション
+```
+
+</details>
+
+<details>
+<summary>図が PDF/SVG で出力される（macOS プレビューで開けない）</summary>
+
+seq2pipe は生成された PDF/SVG を macOS 内蔵の `sips` で自動的に JPEG へ変換します。
+既存の PDF ファイルがある場合は以下で一括変換できます:
+
+```bash
+for f in ~/seq2pipe_results/*/figures/*.pdf; do
+  sips -s format jpeg -s formatOptions 90 "$f" --out "${f%.pdf}.jpg" && rm "$f"
+done
 ```
 
 </details>
@@ -440,15 +489,17 @@ QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
 
 ```
 seq2pipe/
-├── cli.py             # ターミナル エントリーポイント（虹色バナー・モード選択）
-├── chat_agent.py      # 自律解析セッション管理 + TeX/PDF レポート生成
-├── app.py             # Streamlit ブラウザ GUI（任意）
-├── qiime2_agent.py    # QIIME2 パイプライン生成エージェント（11 ツール）
-├── pipeline_runner.py # QIIME2 実行ラッパー + 結果エクスポート
-├── code_agent.py      # LLM コード生成エージェント（vibe-local 方式）
-├── _run_pipeline.py   # フルパイプライン実行スクリプト（バッチ用）
-├── _run_analysis.py   # 解析のみ実行スクリプト（既存エクスポート用）
-├── Figure/            # デモ出力図（実データ解析結果）
+├── cli.py              # ターミナル エントリーポイント（虹色バナー・モード選択）
+├── qiime2_agent.py     # QIIME2 パイプライン生成エージェント（11 ツール）
+├── pipeline_runner.py  # QIIME2 実行ラッパー + 結果エクスポート（_Tee ログ収集）
+├── code_agent.py       # LLM コード生成エージェント（vibe-local 方式）
+│                       #   └── run_refinement_loop()  振り返り・修正ループ
+├── report_generator.py # HTML / LaTeX+PDF レポート生成
+├── chat_agent.py       # 自律解析セッション管理（レガシー）
+├── app.py              # Streamlit ブラウザ GUI（任意）
+├── _run_pipeline.py    # フルパイプライン実行スクリプト（バッチ用）
+├── _run_analysis.py    # 解析のみ実行スクリプト（既存エクスポート用）
+├── Figure/             # デモ出力図（実データ解析結果）
 │   ├── alpha_diversity.png
 │   ├── bray_curtis_pcoa.png
 │   ├── unifrac_pcoa.png
@@ -456,17 +507,17 @@ seq2pipe/
 │   ├── dada2_stats.png
 │   ├── shannon_violin.png
 │   └── analysis_report.pdf
-├── Paper/             # 技術レポート（TeX / PDF）
+├── Paper/              # 技術レポート（TeX / PDF）
 │   ├── seq2pipe_ja.tex / seq2pipe_ja.pdf
 │   └── seq2pipe_en.tex / seq2pipe_en.pdf
-├── launch.sh          # macOS / Linux 起動スクリプト
-├── launch.ps1         # Windows 起動スクリプト（PowerShell）
-├── launch.bat         # Windows 起動スクリプト（ダブルクリック用）
-├── setup.sh           # macOS / Linux セットアップ
-├── setup.ps1          # Windows セットアップ（PowerShell）
-├── setup.bat          # Windows セットアップ（ダブルクリック用）
-├── LICENSE            # MIT License
-└── README.md          # このファイル
+├── launch.sh           # macOS / Linux 起動スクリプト
+├── launch.ps1          # Windows 起動スクリプト（PowerShell）
+├── launch.bat          # Windows 起動スクリプト（ダブルクリック用）
+├── setup.sh            # macOS / Linux セットアップ
+├── setup.ps1           # Windows セットアップ（PowerShell）
+├── setup.bat           # Windows セットアップ（ダブルクリック用）
+├── LICENSE             # MIT License
+└── README.md           # このファイル
 ```
 
 ---
@@ -487,6 +538,7 @@ seq2pipe/
 - [QIIME2 Forum](https://forum.qiime2.org/)
 - [SILVA データベース](https://www.arb-silva.de/)
 - [Ollama 公式サイト](https://ollama.com/)
+- [MacTeX（LaTeX for macOS）](https://tug.org/mactex/)
 
 ---
 
@@ -528,7 +580,7 @@ seq2pipe/
 ## What is this?
 
 **seq2pipe** is a local AI agent that runs entirely on your own machine.
-Give it your raw FASTQ data, and it automatically handles **pipeline design, execution, Python analysis, and report generation**.
+Give it your raw FASTQ data, and it automatically handles **pipeline design, execution, Python analysis, figure refinement, and report generation**.
 
 - **Select Japanese or English at startup** — all AI responses and reports follow your choice
 - Automatically checks for required Python packages (numpy / pandas / etc.) at startup
@@ -536,11 +588,13 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - Builds the right QIIME2 commands from scratch for your dataset
 - Writes ready-to-run `.sh` / `.ps1` scripts
 - **Two operation modes**: Chat (specify analysis in natural language) · Autonomous agent (AI designs and runs all analyses)
-- **Tool-calling code generation agent (vibe-local style)**: LLM first calls `read_file` to understand column names and data format before writing code — far fewer format errors; if an error occurs, `NEVER GIVE UP` — it rewrites and retries until EXIT CODE: 0
-- Runs **Python downstream analysis** (pandas / scipy / scikit-learn / matplotlib) on QIIME2 outputs
-- **Auto-saves all figures as PNG/PDF** — no need for view.qiime2.org
-- **Autonomous analysis (chat_agent / InteractiveSession)**: Auto-generates α/β diversity, DADA2 statistics, and more
-- **Auto-generates Japanese and English TeX / PDF reports**
+- **Tool-calling code generation agent (vibe-local style)**: LLM first calls `read_file` to understand column names and data format before writing code — far fewer format errors; if an error occurs, `NEVER GIVE UP` — it rewrites and retries until `EXIT CODE: 0`
+- **Post-analysis refinement mode**: After analysis completes, instruct the LLM in natural language to refine figures ("change colors", "move legend outside") — code is automatically rewritten and re-executed
+- Runs **Python downstream analysis** (pandas / scipy / scikit-learn / matplotlib / seaborn) on QIIME2 outputs
+- **Auto-saves all figures as JPEG** — PDF/SVG outputs are automatically converted via macOS built-in `sips`
+- **Diversity analysis without metadata**: Alpha and beta diversity metrics computed automatically even without a metadata file
+- After analysis, type **"report"** for an HTML report / **"PDF"** for a LaTeX/PDF report
+  - PDF reports compiled with `lualatex` (preferred) or `xelatex`; `.tex` saved if LaTeX is unavailable
 
 Everything runs **on your machine**. No cloud, no paid API, no internet required during analysis.
 
@@ -659,41 +713,51 @@ After launching, select your language (Japanese / English) and an interactive te
 
 ## Usage
 
-### Autonomous agent mode (--auto)
-
-After QIIME2, the AI autonomously generates diversity and statistics figures.
+### Mode 1 — Natural language analysis + refinement loop
 
 ```
-$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --auto --manifest manifest.tsv
-
-  🚀 STEP 1/2: Running QIIME2 pipeline
-    -> dada2 denoise-paired, core-metrics-phylogenetic...
-  ✅ Pipeline complete
-
-  🤖 STEP 2/2: chat_agent autonomous analysis
-
-  [Step 1] Alpha diversity 4-panel (2×2 grid)
-  [Step 2] Bray-Curtis PCoA
-  [Step 3] UniFrac PCoA
-  [Step 4] Jaccard heatmap
-  [Step 5] DADA2 denoising statistics
-
-  ✅ Analysis complete! PDF report → report_ja.pdf
-```
-
-### Analysis mode (Mode 1) — natural language requests
-
-```
-$ ~/miniforge3/envs/qiime2/bin/python ~/seq2pipe/cli.py --export-dir ~/seq2pipe_results/.../exported/
+$ ./launch.sh --fastq-dir ~/input
 
 Enter request: Shannon diversity violin plot by group
 
-[read_file]  alpha/shannon_vector.tsv (check column names)
-[write_file] analysis.py
-[run_python] EXIT CODE: 0 → figures/shannon_violin.png
+[list_files]  scan exported directory
+[read_file]   alpha/shannon_vector.tsv (check column names)
+[write_file]  analysis.py
+[run_python]  EXIT CODE: 0 → figures/shannon_violin.jpg
 
 ✅ Analysis complete!
+
+  ✏️  Refinement mode
+  Refine generated figures with natural language instructions.
+  Examples: "move legend outside the plot"
+            "enlarge PCoA dots and show sample names"
+            "use a colorblind-friendly palette"
+  📄 Reports:
+      HTML: type "report"
+      PDF:  type "PDF" or "latex"
+  Exit: empty Enter / quit / done
+
+✏️  Refine> enlarge dots and add sample labels to PCoA
+
+[write_file] analysis.py (modified)
+[run_python] EXIT CODE: 0 → figures/fig10_beta_pcoa.jpg updated
+
+✏️  Refine> PDF
+
+📐 Generating PDF report (LaTeX)...
+📐 LaTeX engine detected: lualatex
+✅ PDF report generated!
+📄 File: /path/to/results/report.pdf
 ```
+
+### Mode 2 — Fully autonomous (--auto)
+
+```bash
+cd ~/seq2pipe
+./launch.sh --fastq-dir ~/input --auto
+```
+
+Runs the full QIIME2 pipeline + all analysis figures + saves results automatically.
 
 ### Output file structure
 
@@ -701,19 +765,20 @@ Enter request: Shannon diversity violin plot by group
 ~/seq2pipe_results/<timestamp>/
 ├── exported/                  ← QIIME2 exported data
 │   ├── feature-table.tsv
+│   ├── taxonomy/taxonomy.tsv
 │   ├── alpha/<metric>/alpha-diversity.tsv
 │   ├── beta/<matrix>/distance-matrix.tsv
 │   └── denoising_stats/stats.tsv
-├── figures/
-│   ├── alpha_diversity.png    ← Alpha diversity 4-panel
-│   ├── bray_curtis_pcoa.png   ← Bray-Curtis PCoA
-│   ├── unifrac_pcoa.png       ← UniFrac PCoA
-│   ├── jaccard_heatmap.png    ← Jaccard heatmap
-│   ├── dada2_stats.png        ← DADA2 denoising statistics
-│   └── shannon_violin.png     ← Shannon violin plot
-└── report/
-    ├── report_ja.tex          ← Japanese report (auto-generated)
-    └── report_ja.pdf          ← Japanese PDF (all figures included)
+├── figures/                   ← all saved as JPEG
+│   ├── fig01_read_depth.jpg
+│   ├── fig04_phylum_bar.jpg
+│   ├── fig08_alpha_diversity.jpg
+│   ├── fig10_beta_pcoa.jpg
+│   └── ... (up to 15 figures)
+├── analysis.py                ← auto-generated analysis script
+├── report.html                ← HTML report (type "report")
+├── report.tex                 ← LaTeX source (type "PDF")
+└── report.pdf                 ← PDF report (lualatex/xelatex compiled)
 ```
 
 ---
@@ -727,22 +792,26 @@ Enter request: Shannon diversity violin plot by group
 | DADA2 denoising | `qiime dada2 denoise-paired/single` |
 | Taxonomic classification (SILVA 138) | `qiime feature-classifier classify-sklearn` |
 | Composition bar chart | `qiime taxa barplot` |
-| Alpha & beta diversity | `qiime diversity core-metrics-phylogenetic` |
+| Alpha & beta diversity (with metadata) | `qiime diversity core-metrics-phylogenetic` |
+| Alpha & beta diversity (without metadata) | `qiime diversity alpha` / `qiime diversity beta` (individual) |
 | Differential abundance ANCOM-BC | `qiime composition ancombc` |
 
-### Python downstream (chat_agent / code_agent — LLM auto-generated)
+### Python downstream (code_agent — LLM auto-generated)
 | Analysis | Packages |
 |---|---|
 | Alpha diversity 4-panel (Shannon / Faith PD / Evenness / Observed Features) | pandas, seaborn |
 | Bray-Curtis PCoA (sklearn MDS) | pandas, sklearn |
 | UniFrac PCoA (unweighted / weighted) | pandas, sklearn |
+| NMDS (non-metric multidimensional scaling) | pandas, sklearn |
+| CLR-transformed PCA | pandas, sklearn |
+| Rarefaction curves | pandas, matplotlib |
 | Jaccard distance heatmap (seaborn clustermap) | pandas, seaborn |
 | DADA2 denoising statistics bar chart | pandas, matplotlib |
 | Shannon violin plot | pandas, seaborn |
 | Phylum/genus stacked bar (with taxonomy) | pandas, seaborn |
 | Genus-level heatmap (with taxonomy) | pandas, seaborn |
 | Sample correlation matrix | pandas, scipy, seaborn |
-| TeX / PDF report auto-generation | tectonic |
+| HTML / LaTeX+PDF report auto-generation | report_generator.py (lualatex / xelatex) |
 
 ---
 
@@ -753,7 +822,7 @@ Enter request: Shannon diversity violin plot by group
 | `QIIME2_AI_MODEL` | `qwen2.5-coder:7b` | Ollama model to use |
 | `SEQ2PIPE_AUTO_YES` | `0` | Set to `1` to skip command confirmation (autonomous mode) |
 | `SEQ2PIPE_MAX_STEPS` | `100` | Maximum agent loop steps |
-| `SEQ2PIPE_PYTHON_TIMEOUT` | `600` | Timeout in seconds for `execute_python` |
+| `SEQ2PIPE_PYTHON_TIMEOUT` | `600` | Timeout in seconds for Python execution |
 | `QIIME2_CONDA_BIN` | auto-detected | Path to QIIME2 conda env bin directory (manual override) |
 
 ---
@@ -778,23 +847,22 @@ You
 [ launch.sh / cli.py ]  (optional: app.py Streamlit GUI)
         |
         v
-[ pipeline_runner.py ]  ←─────────────────────→  [ qiime2_agent.py ]
-  QIIME2 pipeline execution                        QIIME2 command generation
-  (manifest monkey-patch support)                  (11 tools)
+[ pipeline_runner.py ]  ←──────────────────────→  [ qiime2_agent.py ]
+  QIIME2 pipeline execution                         QIIME2 command generation
+  stdout captured by _Tee logger                    (11 tools, STEP 0–8)
         |
         v
-[ chat_agent.py / InteractiveSession ]
-  Autonomous analysis session management
-  ├── plan_analysis_suite()   LLM generates analysis plan
-  ├── run_planned(analyses)   Execute analysis steps in sequence
-  └── generate_report()       Build TeX/PDF report
+[ code_agent.py / run_coding_agent() ]
+  LLM code generation agent (vibe-local style)
+  ├── list_files / read_file / write_file / run_python / install_package
+  ├── _convert_new_figs()    PDF/SVG → JPEG auto-conversion (sips)
+  ├── NEVER GIVE UP: exit ≠ 0 → rewrite → retry
+  └── run_refinement_loop()  post-analysis natural-language refinement
         |
         v
-[ code_agent.py / run_code_agent() ]
-  LLM code generation → subprocess execution → auto-fix on error (max 3 retries)
-  ├── _ensure_required_imports()  auto-inject plt/pd if missing
-  ├── ModuleNotFoundError → install_callback for user approval
-  └── success + figure check → return CodeExecutionResult
+[ report_generator.py ]
+  ├── generate_html_report()  base64-embedded HTML report
+  └── generate_latex_report() LaTeX → PDF (lualatex / xelatex)
         |
         v
   Ollama (localhost:11434)  ← Local LLM
@@ -842,14 +910,45 @@ pip install numpy pandas matplotlib seaborn scipy scikit-learn biom-format netwo
 </details>
 
 <details>
-<summary>tectonic (PDF compilation) not found</summary>
+<summary>LaTeX PDF compilation fails</summary>
+
+Install MacTeX (includes lualatex and xelatex):
 
 ```bash
-# macOS
-brew install tectonic
+# macOS — minimal install (~100 MB)
+brew install --cask mactex-no-gui
 
 # Linux
-curl --proto '=https' --tlsv1.2 -fsSL https://drop.rs/tectonic | sh
+sudo apt install texlive-luatex texlive-xetex texlive-lang-japanese
+
+# Manual compile (if auto-compile fails)
+lualatex report.tex   # preferred (Japanese support)
+xelatex  report.tex   # alternative
+```
+
+If no LaTeX engine is found, `report.tex` is saved for manual compilation.
+
+</details>
+
+<details>
+<summary>Figures saved as PDF/SVG (cannot open in macOS Preview)</summary>
+
+seq2pipe automatically converts PDF/SVG to JPEG using macOS built-in `sips`.
+For existing PDF files, batch-convert with:
+
+```bash
+for f in ~/seq2pipe_results/*/figures/*.pdf; do
+  sips -s format jpeg -s formatOptions 90 "$f" --out "${f%.pdf}.jpg" && rm "$f"
+done
+```
+
+</details>
+
+<details>
+<summary>Model is slow / responses take too long</summary>
+
+```bash
+QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
 ```
 
 </details>
@@ -870,15 +969,17 @@ curl --proto '=https' --tlsv1.2 -fsSL https://drop.rs/tectonic | sh
 
 ```
 seq2pipe/
-├── cli.py             # Terminal entry point (rainbow banner / mode selection)
-├── chat_agent.py      # Autonomous analysis session + TeX/PDF report
-├── app.py             # Streamlit browser GUI (optional)
-├── qiime2_agent.py    # QIIME2 pipeline generation agent (11 tools)
-├── pipeline_runner.py # QIIME2 execution wrapper + result export
-├── code_agent.py      # LLM code generation agent (vibe-local style)
-├── _run_pipeline.py   # Full pipeline batch script
-├── _run_analysis.py   # Analysis-only batch script (for existing exports)
-├── Figure/            # Demo output figures (real data analysis results)
+├── cli.py              # Terminal entry point (rainbow banner / mode selection)
+├── qiime2_agent.py     # QIIME2 pipeline generation agent (11 tools)
+├── pipeline_runner.py  # QIIME2 execution wrapper + result export (_Tee logger)
+├── code_agent.py       # LLM code generation agent (vibe-local style)
+│                       #   └── run_refinement_loop()  post-analysis refinement
+├── report_generator.py # HTML and LaTeX/PDF report generation
+├── chat_agent.py       # Autonomous analysis session (legacy)
+├── app.py              # Streamlit browser GUI (optional)
+├── _run_pipeline.py    # Full pipeline batch script
+├── _run_analysis.py    # Analysis-only batch script (for existing exports)
+├── Figure/             # Demo output figures (real data analysis results)
 │   ├── alpha_diversity.png
 │   ├── bray_curtis_pcoa.png
 │   ├── unifrac_pcoa.png
@@ -886,17 +987,17 @@ seq2pipe/
 │   ├── dada2_stats.png
 │   ├── shannon_violin.png
 │   └── analysis_report.pdf
-├── Paper/             # Technical report (TeX / PDF)
+├── Paper/              # Technical report (TeX / PDF)
 │   ├── seq2pipe_ja.tex / seq2pipe_ja.pdf
 │   └── seq2pipe_en.tex / seq2pipe_en.pdf
-├── launch.sh          # macOS / Linux launcher
-├── launch.ps1         # Windows launcher (PowerShell)
-├── launch.bat         # Windows launcher (double-click)
-├── setup.sh           # macOS / Linux setup
-├── setup.ps1          # Windows setup (PowerShell)
-├── setup.bat          # Windows setup (double-click)
-├── LICENSE            # MIT License
-└── README.md          # This file
+├── launch.sh           # macOS / Linux launcher
+├── launch.ps1          # Windows launcher (PowerShell)
+├── launch.bat          # Windows launcher (double-click)
+├── setup.sh            # macOS / Linux setup
+├── setup.ps1           # Windows setup (PowerShell)
+├── setup.bat           # Windows setup (double-click)
+├── LICENSE             # MIT License
+└── README.md           # This file
 ```
 
 ---
@@ -917,6 +1018,7 @@ seq2pipe/
 - [QIIME2 Forum](https://forum.qiime2.org/)
 - [SILVA Database](https://www.arb-silva.de/)
 - [Ollama](https://ollama.com/)
+- [MacTeX (LaTeX for macOS)](https://tug.org/mactex/)
 
 ---
 
