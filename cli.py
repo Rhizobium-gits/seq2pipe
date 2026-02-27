@@ -298,7 +298,8 @@ def main():
         prog="seq2pipe",
         description="seq2pipe — マニフェスト TSV と自然言語プロンプトで QIIME2 + 解析を自動実行",
     )
-    parser.add_argument("--manifest",   help="マニフェスト TSV のパス")
+    parser.add_argument("--fastq-dir",  help="FASTQ ファイルが入ったディレクトリのパス")
+    parser.add_argument("--manifest",   help="（後方互換）マニフェスト TSV のパス。--fastq-dir 優先")
     parser.add_argument("--metadata",   help="メタデータ TSV のパス（省略可）")
     parser.add_argument("--prompt",     help="やりたい解析の内容（省略時は対話入力）")
     parser.add_argument("--output-dir", help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
@@ -395,11 +396,13 @@ def main():
         _print_result(result)
         return
 
-    # ── マニフェストからフルパイプライン（メインフロー）──────────────
-    print("マニフェスト TSV（sample-id / forward / reverse のパスを含む）を指定してください。")
-    manifest_path = args.manifest or _ask("マニフェスト TSV のパス")
-    if not manifest_path or not Path(manifest_path).exists():
-        print(f"❌ ファイルが存在しません: {manifest_path}")
+    # ── フルパイプライン: FASTQ ディレクトリを直接指定 ───────────────
+    print("FASTQ ファイルが入ったディレクトリのパスを指定してください。")
+    print("（例: /Users/yourname/input  または  ~/microbiome-data）")
+    fastq_dir_raw = args.fastq_dir or args.manifest or _ask("FASTQ ディレクトリのパス")
+    fastq_dir = str(Path(fastq_dir_raw).expanduser().resolve())
+    if not Path(fastq_dir).exists():
+        print(f"❌ ディレクトリが存在しません: {fastq_dir}")
         sys.exit(1)
 
     metadata_path = args.metadata or _ask("メタデータ TSV のパス（省略可）", "")
@@ -415,34 +418,13 @@ def main():
         user_prompt = args.prompt or _ask("解析内容", "")
 
     _hr()
-    print(f"📂 マニフェスト : {manifest_path}")
+    print(f"📂 FASTQ ディレクトリ: {fastq_dir}")
     if metadata_path:
         print(f"📋 メタデータ  : {metadata_path}")
     print(f"💾 出力先      : {output_dir}")
     if mode == "2":
         print(f"🤖 モード       : 自律エージェント（最大 {args.max_rounds} ラウンド）")
     _hr()
-    print()
-
-    # ── マニフェストから FASTQ ディレクトリを取得 ─────────────────────
-    fastq_dir = None
-    try:
-        with open(manifest_path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f, delimiter="\t")
-            for row in reader:
-                fp = row.get("forward-absolute-filepath", "")
-                if fp:
-                    fastq_dir = str(Path(fp).parent)
-                    break
-    except Exception as e:
-        print(f"❌ マニフェスト読み込みエラー: {e}")
-        sys.exit(1)
-
-    if not fastq_dir:
-        print("❌ マニフェストから FASTQ ディレクトリを特定できませんでした")
-        sys.exit(1)
-
-    print(f"📂 FASTQ ディレクトリ: {fastq_dir}")
     print()
 
     # ── STEP 1: QIIME2 パイプライン実行（既存の実証済みコードを使用）──

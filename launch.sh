@@ -119,4 +119,39 @@ echo -e "${CYAN}${BOLD}seq2pipe を起動しています...${RESET}"
 echo -e "${CYAN}   モデル: ${QIIME2_AI_MODEL}${RESET}"
 echo ""
 
-exec python3 "$SCRIPT_DIR/qiime2_agent.py"
+# QIIME2 conda Python を優先（qiime2 パッケージへのアクセスのため）
+QIIME2_CONDA_BIN="${QIIME2_CONDA_BIN:-}"
+if [[ -z "$QIIME2_CONDA_BIN" ]]; then
+    for _candidate in \
+        "$HOME/miniforge3/envs/qiime2/bin" \
+        "$HOME/miniconda3/envs/qiime2/bin" \
+        "$HOME/anaconda3/envs/qiime2/bin" \
+        "$HOME/mambaforge/envs/qiime2/bin"; do
+        if [[ -x "$_candidate/qiime" ]]; then
+            QIIME2_CONDA_BIN="$_candidate"
+            break
+        fi
+    done
+    # バージョン付き環境名（例: qiime2-2024.10）も検索
+    if [[ -z "$QIIME2_CONDA_BIN" ]]; then
+        for _base in "$HOME/miniforge3" "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/mambaforge"; do
+            if [[ -d "$_base/envs" ]]; then
+                for _env in $(ls -r "$_base/envs/" 2>/dev/null); do
+                    if [[ "$_env" == qiime2* && -x "$_base/envs/$_env/bin/qiime" ]]; then
+                        QIIME2_CONDA_BIN="$_base/envs/$_env/bin"
+                        break 2
+                    fi
+                done
+            fi
+        done
+    fi
+fi
+export QIIME2_CONDA_BIN
+
+if [[ -n "$QIIME2_CONDA_BIN" && -x "$QIIME2_CONDA_BIN/python3" ]]; then
+    PYTHON="$QIIME2_CONDA_BIN/python3"
+else
+    PYTHON="python3"
+fi
+
+exec "$PYTHON" "$SCRIPT_DIR/cli.py" "$@"
