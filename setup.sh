@@ -265,21 +265,21 @@ else
         else
             _YML_URL="https://data.qiime2.org/distro/amplicon/qiime2-amplicon-${_QIIME2_VER}-py310-linux-conda.yml"
         fi
-        _ENV_NAME="qiime2-amplicon-${_QIIME2_VER}"
-        _YML_FILE="/tmp/qiime2-env.yml"
+        QENV_NAME="qiime2-amplicon-${_QIIME2_VER}"
+        QYML_FILE="/tmp/qiime2-env.yml"
 
-        info "環境定義ファイルをダウンロード中: $_YML_URL"
-        curl -fsSL -o "$_YML_FILE" "$_YML_URL"
+        info "YML download: ${_YML_URL}"
+        curl -fsSL -o "${QYML_FILE}" "${_YML_URL}"
 
-        info "QIIME2 conda 環境を作成中（$_ENV_NAME）..."
-        info "  ⏳ ネットワーク速度により 10〜60 分かかる場合があります"
-        "$CONDA_CMD" env create -n "$_ENV_NAME" --file "$_YML_FILE" -y
-        rm -f "$_YML_FILE"
+        info "QIIME2 conda env create: ${QENV_NAME}"
+        info "  (network speed: 10-60 min)"
+        "${CONDA_CMD}" env create -n "${QENV_NAME}" --file "${QYML_FILE}" -y
+        rm -f "${QYML_FILE}"
 
-        _CONDA_BASE="$("$CONDA_CMD" info --base 2>/dev/null || echo '')"
-        _QIIME2_BIN="$_CONDA_BASE/envs/$_ENV_NAME/bin"
-        success "QIIME2 ($_ENV_NAME) のインストールが完了しました"
-        success "  パス: $_QIIME2_BIN"
+        QCONDA_BASE="$("${CONDA_CMD}" info --base 2>/dev/null || echo '')"
+        _QIIME2_BIN="${QCONDA_BASE}/envs/${QENV_NAME}/bin"
+        success "QIIME2 (${QENV_NAME}) install done"
+        success "  path: ${_QIIME2_BIN}"
     else
         warn "QIIME2 のインストールをスキップしました。"
         warn "後でインストールする場合は ./setup.sh を再実行してください。"
