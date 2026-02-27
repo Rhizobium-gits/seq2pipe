@@ -1858,6 +1858,212 @@ def run_coding_agent(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 振り返り・修正エージェント
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_refinement_loop(
+    feedback: str,
+    existing_code: str,
+    export_files: dict,
+    output_dir: str,
+    figure_dir: str,
+    metadata_path: str = "",
+    model: Optional[str] = None,
+    max_retries: int = 3,
+    log_callback: Optional[Callable[[str], None]] = None,
+    install_callback: Optional[Callable[[str], bool]] = None,
+) -> CodeExecutionResult:
+    """
+    ユーザーのフィードバックを既存解析コードに反映して修正・再実行する。
+
+    Parameters
+    ----------
+    feedback : str
+        自然言語での修正指示（例: 「積み上げ棒グラフの色をもっと鮮やかにして」）
+    existing_code : str
+        現在の analysis.py の内容
+    export_files : dict
+        get_exported_files() の戻り値
+    output_dir : str
+        analysis.py の保存先ディレクトリ
+    figure_dir : str
+        図の保存先ディレクトリ
+    """
+    if model is None:
+        model = _agent.DEFAULT_MODEL
+
+    def _log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    # ── 現在の図一覧 ──────────────────────────────────────────────────
+    fig_dir_path = Path(figure_dir)
+    existing_fig_set = (
+        set(fig_dir_path.glob("*.png")) | set(fig_dir_path.glob("*.jpg"))
+        | set(fig_dir_path.glob("*.jpeg")) | set(fig_dir_path.glob("*.pdf"))
+        | set(fig_dir_path.glob("*.svg"))
+    )
+    fig_names = sorted(f.name for f in existing_fig_set)
+
+    # ── データファイル一覧 ────────────────────────────────────────────
+    file_lines = []
+    for cat, paths in export_files.items():
+        for p in paths:
+            file_lines.append(f"  [{cat}] {p}")
+    if metadata_path:
+        file_lines.append(f"  [metadata] {metadata_path}")
+
+    # ── コードを 8000 文字以内に丸める ───────────────────────────────
+    code_snippet = existing_code[:8000] if len(existing_code) > 8000 else existing_code
+
+    # ── システムプロンプト ────────────────────────────────────────────
+    system_content = "\n".join([
+        "You are a microbiome bioinformatics expert who refines existing Python analysis code.",
+        "",
+        "## RULES — follow exactly, no exceptions",
+        "1. Return ONLY the complete modified Python script in ```python ... ```.",
+        "   Do NOT write anything outside the code block.",
+        "2. Keep ALL working figure sections intact. Only modify what the user asks to change.",
+        "3. Use the EXACT same file paths as in the original code. Do NOT hardcode data.",
+        "4. Save figures to FIGURE_DIR using plt.savefig(). NEVER use plt.show().",
+        "5. For new figures, append them at the end with the next figXX_ prefix.",
+        "6. matplotlib.use('Agg') must appear before any other matplotlib import.",
+        "7. Wrap each figure section in try/except so one failure does not stop others.",
+        "8. Print 'figXX saved' after each plt.savefig() to confirm the save.",
+    ])
+
+    fig_list_lines = [f"  {n}" for n in fig_names] if fig_names else ["  (none yet)"]
+    user_content = "\n".join([
+        f"## FIGURE_DIR: {figure_dir}",
+        f"## Script path: {output_dir}/analysis.py",
+        "",
+        "## Currently generated figures",
+        *fig_list_lines,
+        "",
+        "## Available QIIME2-exported data files",
+        *file_lines,
+        "",
+        "## Existing Python code (current analysis.py)",
+        "```python",
+        code_snippet,
+        "```",
+        "",
+        "## Modification request",
+        feedback,
+        "",
+        "Return the COMPLETE modified script that addresses the request above.",
+    ])
+
+    _log(f"🔄 フィードバックを LLM に送信中...")
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user",   "content": user_content},
+    ]
+
+    code = ""
+    stderr = ""
+    new_figs: list = []
+
+    for attempt in range(1, max_retries + 1):
+        # ── LLM 呼び出し ──────────────────────────────────────────────
+        try:
+            response = _agent.call_ollama(messages, model)
+        except Exception as e:
+            return CodeExecutionResult(success=False, error_message=f"Ollama エラー: {e}")
+
+        code = _extract_code(response.get("content", ""))
+        if not code:
+            _log(f"  ⚠️  コードが生成されませんでした（試行 {attempt}/{max_retries}）")
+            if attempt < max_retries:
+                messages.append({"role": "assistant", "content": response.get("content", "")})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You did not return Python code. "
+                        "Return the COMPLETE modified script in ```python ... ``` now."
+                    ),
+                })
+            continue
+
+        _log(f"  コード修正完了 ({len(code.splitlines())} 行) → 実行中...")
+
+        # analysis.py に書き出す
+        script_path = Path(output_dir) / "analysis.py"
+        try:
+            script_path.write_text(code, encoding="utf-8")
+        except Exception as e:
+            _log(f"  [write error] {e}")
+
+        # ── 実行ループ（エラー修正を含む） ────────────────────────────
+        for run_attempt in range(max_retries):
+            success, stdout, stderr, new_figs = _run_code(
+                code, output_dir, figure_dir, log_callback
+            )
+            if success:
+                all_figs = sorted(
+                    set(fig_dir_path.glob("*.png")) | set(fig_dir_path.glob("*.jpg"))
+                    | set(fig_dir_path.glob("*.jpeg")) | set(fig_dir_path.glob("*.pdf"))
+                    | set(fig_dir_path.glob("*.svg"))
+                )
+                return CodeExecutionResult(
+                    success=True,
+                    stdout=stdout,
+                    code=code,
+                    figures=[str(f) for f in sorted(all_figs)],
+                    retry_count=attempt - 1 + run_attempt,
+                )
+
+            # ModuleNotFoundError 検出 → インストール確認
+            missing_pkg = _detect_missing_module(stderr)
+            if missing_pkg and install_callback and install_callback(missing_pkg):
+                pip_install(missing_pkg, log_callback)
+                continue  # インストール後に再実行
+
+            if run_attempt < max_retries - 1:
+                _log(f"  ⚠️  実行エラー（試行 {run_attempt + 1}）→ LLM に修正依頼...")
+                messages.append({"role": "assistant", "content": response.get("content", "")})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"The modified script failed with the following error:\n\n"
+                        f"{stderr[:2000]}\n\n"
+                        "Fix the error and return the COMPLETE corrected script in ```python ... ```."
+                    ),
+                })
+                try:
+                    response = _agent.call_ollama(messages, model)
+                    fixed = _extract_code(response.get("content", ""))
+                    if fixed:
+                        code = fixed
+                        _log(f"  修正コード ({len(code.splitlines())} 行) → 再実行")
+                        script_path.write_text(code, encoding="utf-8")
+                except Exception as e:
+                    _log(f"  Ollama エラー: {e}")
+                    break
+
+        # 全 run_attempt 失敗でも次の attempt に進む
+        if attempt < max_retries:
+            messages.append({"role": "assistant", "content": response.get("content", "")})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "The script still fails. Please rewrite it from scratch, "
+                    "addressing the original modification request. "
+                    "Return a COMPLETE, working Python script in ```python ... ```."
+                ),
+            })
+
+    return CodeExecutionResult(
+        success=False,
+        code=code,
+        figures=new_figs,
+        retry_count=max_retries,
+        error_message=stderr[:500] if stderr else "最大試行回数に達しました",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # マニフェストエージェント（フルパイプライン + 解析）
 # ─────────────────────────────────────────────────────────────────────────────
 

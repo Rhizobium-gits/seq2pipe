@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import qiime2_agent as _agent
 from code_agent import (
-    run_code_agent, run_auto_agent, run_coding_agent,
+    run_code_agent, run_auto_agent, run_coding_agent, run_refinement_loop,
     CodeExecutionResult, AutoAgentResult,
 )
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
@@ -102,6 +102,97 @@ def _print_auto_result(result: AutoAgentResult):
         for f in result.total_figures:
             print(f"   {f}")
     _hr()
+
+
+def _run_refinement_session(
+    result: CodeExecutionResult,
+    export_files: dict,
+    output_dir: str,
+    fig_dir,
+    model: str,
+    metadata_path: str = "",
+):
+    """
+    解析完了後の振り返り・修正ループ。
+
+    ユーザーが自然言語で修正指示を入力するたびに LLM がコードを修正・再実行する。
+    空 Enter / 'quit' / 'done' で終了。
+    """
+    # analysis.py が存在すれば読み込む（run_coding_agent が tool 経由で書き出した場合）
+    current_code = result.code or ""
+    analysis_py = Path(output_dir) / "analysis.py"
+    if not current_code and analysis_py.exists():
+        try:
+            current_code = analysis_py.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    if not current_code:
+        print("⚠️  修正モードを起動できません（解析コードが見つかりません）。")
+        return
+
+    # 現在の図一覧を表示
+    fig_dir_path = Path(fig_dir)
+    all_figs = sorted(
+        list(fig_dir_path.glob("*.jpg")) + list(fig_dir_path.glob("*.png"))
+        + list(fig_dir_path.glob("*.jpeg"))
+    )
+
+    _hr()
+    print("  ✏️  振り返り・修正モード")
+    print("  生成された図に対して自然言語で修正を指示できます。")
+    print("  例: 「積み上げ棒グラフの凡例を外に出して」")
+    print("      「PCoA の点を大きくして、サンプル名を表示して」")
+    print("      「色盲対応のパレットに変えて」")
+    print("      「Shannon 多様性のグラフにグループ比較の p 値を追加して」")
+    print("  終了: 空 Enter / quit / done")
+    _hr()
+
+    if all_figs:
+        print(f"\n📊 現在の図 ({len(all_figs)} 件):")
+        for f in all_figs:
+            print(f"   {f}")
+        print()
+
+    while True:
+        try:
+            feedback = input("✏️  修正内容> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not feedback or feedback.lower() in ("quit", "exit", "done", "終了", "q"):
+            print("修正モードを終了します。")
+            break
+
+        print()
+        refined = run_refinement_loop(
+            feedback=feedback,
+            existing_code=current_code,
+            export_files=export_files,
+            output_dir=output_dir,
+            figure_dir=str(fig_dir_path),
+            metadata_path=metadata_path,
+            model=model,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+
+        _hr()
+        if refined.success:
+            print("✅ 修正完了！")
+            if refined.figures:
+                print(f"\n📊 更新された図 ({len(refined.figures)} 件):")
+                for f in refined.figures:
+                    print(f"   {f}")
+            # 次の反復のためにコードを更新
+            current_code = refined.code or current_code
+        else:
+            print(f"❌ 修正失敗（{refined.retry_count} 回試行）")
+            if refined.error_message:
+                print(f"\nエラー:\n{refined.error_message[:400]}")
+        _hr()
+        print()
 
 
 def _select_mode() -> str:
@@ -512,6 +603,16 @@ def main():
             install_callback=_install_callback,
         )
         _print_result(result)
+        # 振り返り・修正モード（--auto でなければ起動）
+        if not args.auto and result.success:
+            _run_refinement_session(
+                result=result,
+                export_files=export_files,
+                output_dir=str(Path(export_dir).parent),
+                fig_dir=fig_dir,
+                model=model,
+                metadata_path=args.metadata or "",
+            )
         return
 
     # ── フルパイプライン: FASTQ ディレクトリを直接指定 ───────────────
@@ -649,6 +750,16 @@ def main():
         install_callback=_install_callback,
     )
     _print_result(result)
+    # 振り返り・修正モード（--auto でなければ起動）
+    if not args.auto and result.success:
+        _run_refinement_session(
+            result=result,
+            export_files=export_files,
+            output_dir=pipeline_result.output_dir,
+            fig_dir=fig_dir,
+            model=model,
+            metadata_path=metadata_path,
+        )
 
 
 if __name__ == "__main__":
