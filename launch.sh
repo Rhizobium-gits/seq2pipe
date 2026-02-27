@@ -148,6 +148,38 @@ if [[ -z "$QIIME2_CONDA_BIN" ]]; then
 fi
 export QIIME2_CONDA_BIN
 
+# QIIME2 が見つからない場合は setup.sh を実行してインストール
+if [[ -z "$QIIME2_CONDA_BIN" ]]; then
+    echo -e "${YELLOW}⚠️  QIIME2 conda 環境が見つかりません。セットアップを実行します...${RESET}"
+    echo ""
+    bash "$SCRIPT_DIR/setup.sh"
+
+    # setup.sh 後に再検出
+    for _candidate in \
+        "$HOME/miniforge3/envs/qiime2/bin" \
+        "$HOME/miniconda3/envs/qiime2/bin" \
+        "$HOME/anaconda3/envs/qiime2/bin" \
+        "$HOME/mambaforge/envs/qiime2/bin"; do
+        if [[ -x "$_candidate/qiime" ]]; then
+            QIIME2_CONDA_BIN="$_candidate"
+            break
+        fi
+    done
+    if [[ -z "$QIIME2_CONDA_BIN" ]]; then
+        for _base in "$HOME/miniforge3" "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/mambaforge"; do
+            if [[ -d "$_base/envs" ]]; then
+                for _env in $(ls -r "$_base/envs/" 2>/dev/null); do
+                    if [[ "$_env" == qiime2* && -x "$_base/envs/$_env/bin/qiime" ]]; then
+                        QIIME2_CONDA_BIN="$_base/envs/$_env/bin"
+                        break 2
+                    fi
+                done
+            fi
+        done
+    fi
+    export QIIME2_CONDA_BIN
+fi
+
 if [[ -n "$QIIME2_CONDA_BIN" && -x "$QIIME2_CONDA_BIN/python3" ]]; then
     PYTHON="$QIIME2_CONDA_BIN/python3"
 else

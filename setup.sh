@@ -183,7 +183,126 @@ if [[ -n "$MODEL" ]]; then
 fi
 
 # ============================================================
-# STEP 5: Docker の確認・インストール（Linux のみ自動インストール）
+# STEP 5: conda / miniforge の確認・インストール
+# ============================================================
+echo ""
+info "conda（miniforge）を確認します..."
+
+CONDA_CMD=""
+for _c in conda mamba micromamba; do
+    if command -v "$_c" &>/dev/null; then
+        CONDA_CMD="$_c"
+        break
+    fi
+done
+# PATH 非登録でも直接バイナリを探す
+if [[ -z "$CONDA_CMD" ]]; then
+    for _p in \
+        "$HOME/miniforge3/bin/conda" "$HOME/miniconda3/bin/conda" \
+        "$HOME/anaconda3/bin/conda" "$HOME/mambaforge/bin/conda"; do
+        if [[ -x "$_p" ]]; then
+            CONDA_CMD="$_p"
+            break
+        fi
+    done
+fi
+
+if [[ -n "$CONDA_CMD" ]]; then
+    success "conda: $("$CONDA_CMD" --version 2>/dev/null || echo '検出済み')"
+else
+    warn "conda が見つかりません。Miniforge3 をインストールします..."
+    if [[ "$OS" == "Darwin" ]]; then
+        if [[ "$ARCH" == "arm64" ]]; then
+            _MF_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh"
+        else
+            _MF_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-x86_64.sh"
+        fi
+    else
+        _MF_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+    fi
+    curl -fsSL -o /tmp/miniforge_install.sh "$_MF_URL"
+    bash /tmp/miniforge_install.sh -b -p "$HOME/miniforge3"
+    rm -f /tmp/miniforge_install.sh
+    CONDA_CMD="$HOME/miniforge3/bin/conda"
+    # 現シェルで conda を有効化
+    # shellcheck disable=SC1091
+    source "$HOME/miniforge3/etc/profile.d/conda.sh" 2>/dev/null || true
+    success "Miniforge3 のインストールが完了しました: $HOME/miniforge3"
+fi
+
+# ============================================================
+# STEP 6: QIIME2 conda 環境の確認・インストール
+# ============================================================
+echo ""
+info "QIIME2 conda 環境を確認します..."
+
+# 既存の qiime2* 環境を検索
+_QIIME2_BIN=""
+if [[ -n "$CONDA_CMD" ]]; then
+    _CONDA_BASE="$("$CONDA_CMD" info --base 2>/dev/null || echo '')"
+    if [[ -n "$_CONDA_BASE" && -d "$_CONDA_BASE/envs" ]]; then
+        for _env_dir in "$_CONDA_BASE/envs"/qiime2*; do
+            if [[ -x "$_env_dir/bin/qiime" ]]; then
+                _QIIME2_BIN="$_env_dir/bin"
+                break
+            fi
+        done
+    fi
+fi
+
+if [[ -n "$_QIIME2_BIN" ]]; then
+    success "QIIME2 conda 環境: $_QIIME2_BIN"
+else
+    echo ""
+    warn "QIIME2 conda 環境が見つかりません。"
+    echo ""
+    read -rp "QIIME2 を今すぐインストールしますか？（約 3-5 GB・数十分かかります）[y/N]: " _INSTALL_QIIME2
+    if [[ "${_INSTALL_QIIME2,,}" == "y" ]]; then
+        # プラットフォーム別 yml URL
+        _QIIME2_VER="2024.10"
+        if [[ "$OS" == "Darwin" ]]; then
+            _YML_URL="https://data.qiime2.org/distro/amplicon/qiime2-amplicon-${_QIIME2_VER}-py310-osx-conda.yml"
+        else
+            _YML_URL="https://data.qiime2.org/distro/amplicon/qiime2-amplicon-${_QIIME2_VER}-py310-linux-conda.yml"
+        fi
+        _ENV_NAME="qiime2-amplicon-${_QIIME2_VER}"
+        _YML_FILE="/tmp/qiime2-env.yml"
+
+        info "環境定義ファイルをダウンロード中: $_YML_URL"
+        curl -fsSL -o "$_YML_FILE" "$_YML_URL"
+
+        info "QIIME2 conda 環境を作成中（$_ENV_NAME）..."
+        info "  ⏳ ネットワーク速度により 10〜60 分かかる場合があります"
+        "$CONDA_CMD" env create -n "$_ENV_NAME" --file "$_YML_FILE" -y
+        rm -f "$_YML_FILE"
+
+        _CONDA_BASE="$("$CONDA_CMD" info --base 2>/dev/null || echo '')"
+        _QIIME2_BIN="$_CONDA_BASE/envs/$_ENV_NAME/bin"
+        success "QIIME2 ($ENV_NAME) のインストールが完了しました"
+        success "  パス: $_QIIME2_BIN"
+    else
+        warn "QIIME2 のインストールをスキップしました。"
+        warn "後でインストールする場合は ./setup.sh を再実行してください。"
+    fi
+fi
+
+# QIIME2 環境の Python パッケージ（pandas / matplotlib 等）確認
+if [[ -n "$_QIIME2_BIN" && -x "$_QIIME2_BIN/python3" ]]; then
+    _QIIME2_PYTHON="$_QIIME2_BIN/python3"
+    MISSING_QIIME2_PKGS=()
+    for _pkg in matplotlib seaborn scikit-learn statsmodels; do
+        if ! "$_QIIME2_PYTHON" -c "import $_pkg" &>/dev/null 2>&1; then
+            MISSING_QIIME2_PKGS+=("$_pkg")
+        fi
+    done
+    if [[ ${#MISSING_QIIME2_PKGS[@]} -gt 0 ]]; then
+        info "QIIME2 環境に不足パッケージを追加: ${MISSING_QIIME2_PKGS[*]}"
+        "$_QIIME2_BIN/pip" install --quiet "${MISSING_QIIME2_PKGS[@]}" tectonic 2>/dev/null || true
+    fi
+fi
+
+# ============================================================
+# STEP 7: Docker の確認・インストール（Linux のみ自動インストール）
 # ============================================================
 echo ""
 info "Docker の状態を確認します..."
@@ -247,7 +366,7 @@ else
 fi
 
 # ============================================================
-# STEP 6: Python ダウンストリーム解析パッケージのインストール
+# STEP 8: Python ダウンストリーム解析パッケージのインストール
 # ============================================================
 echo ""
 info "Python ダウンストリーム解析パッケージを確認します..."
@@ -290,7 +409,7 @@ else
 fi
 
 # ============================================================
-# STEP 7: QIIME2 Docker イメージの確認（オプション）
+# STEP 9: QIIME2 Docker イメージの確認（オプション）
 # ============================================================
 if [[ -n "$DOCKER_CMD" ]] && [[ -x "$DOCKER_CMD" ]] && "$DOCKER_CMD" info &>/dev/null 2>&1; then
     echo ""
