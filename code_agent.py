@@ -131,14 +131,14 @@ def _build_prompt(
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
         "      import os; os.makedirs(FIGURE_DIR, exist_ok=True)",
-        "3. Save every figure as JPEG (NOT png):",
+        "3. Save every figure as JPEG — extension MUST be .jpg (NEVER .pdf, .svg, or .png):",
         "      plt.savefig(os.path.join(FIGURE_DIR, 'name.jpg'), dpi=DPI, bbox_inches='tight',",
         "                  pil_kwargs={'quality': 92, 'optimize': True})",
         "      plt.close()",
         "4. All axis labels, titles, legend entries in English.",
         "5. Use try/except around each section so one failure does not stop the whole script.",
         "6. Output ONLY the Python code, wrapped in ```python ... ```.",
-        "7. Do NOT use plt.show().",
+        "7. Do NOT use plt.show(). Do NOT use .pdf or .svg extensions.",
         "",
         "## FIGURE STYLE — modern, publication-quality",
         "Use this boilerplate at the TOP of every script (after imports):",
@@ -335,6 +335,47 @@ def _ensure_required_imports(code: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PDF/SVG → JPEG 自動変換
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pdf_to_jpg(pdf_path: Path) -> Optional[Path]:
+    """
+    PDF または SVG を JPEG に変換して元ファイルを削除する。
+    macOS 組み込みの sips コマンドを使用（poppler 不要）。
+    """
+    jpg_path = pdf_path.with_suffix(".jpg")
+    try:
+        result = subprocess.run(
+            [
+                "sips", "-s", "format", "jpeg",
+                "-s", "formatOptions", "90",
+                str(pdf_path), "--out", str(jpg_path),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and jpg_path.exists():
+            pdf_path.unlink(missing_ok=True)
+            return jpg_path
+    except Exception:
+        pass
+    return None
+
+
+def _convert_new_figs(new_figs: list) -> list:
+    """new_figs 内の PDF/SVG を JPEG に変換して返す。"""
+    converted = []
+    for f in new_figs:
+        p = Path(f)
+        if p.suffix.lower() in (".pdf", ".svg"):
+            jpg = _pdf_to_jpg(p)
+            converted.append(str(jpg) if jpg else f)
+        else:
+            converted.append(f)
+    return converted
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # コード実行
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -389,11 +430,12 @@ def _run_code(
                 | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg"))
             ) - existing
         )
+        new_figs_str = _convert_new_figs([str(f) for f in new_figs])
         return (
             proc.returncode == 0,
             proc.stdout,
             proc.stderr,
-            [str(f) for f in new_figs],
+            new_figs_str,
         )
     finally:
         try:
@@ -1160,9 +1202,8 @@ def _exec_tool(
         fig_dir = Path(figure_dir)
         fig_dir.mkdir(parents=True, exist_ok=True)
         before = (
-            set(fig_dir.glob("*.png"))
-            | set(fig_dir.glob("*.pdf"))
-            | set(fig_dir.glob("*.svg"))
+            set(fig_dir.glob("*.png")) | set(fig_dir.glob("*.jpg")) | set(fig_dir.glob("*.jpeg"))
+            | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg"))
         )
 
         try:
@@ -1177,11 +1218,10 @@ def _exec_tool(
             return f"ERROR launching process: {e}", []
 
         after = (
-            set(fig_dir.glob("*.png"))
-            | set(fig_dir.glob("*.pdf"))
-            | set(fig_dir.glob("*.svg"))
+            set(fig_dir.glob("*.png")) | set(fig_dir.glob("*.jpg")) | set(fig_dir.glob("*.jpeg"))
+            | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg"))
         )
-        new_figs = [str(f) for f in sorted(after - before)]
+        new_figs = _convert_new_figs([str(f) for f in sorted(after - before)])
 
         parts = []
         if proc.stdout.strip():
