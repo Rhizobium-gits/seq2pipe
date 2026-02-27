@@ -273,7 +273,15 @@ else
 
         info "QIIME2 conda env create: ${QENV_NAME}"
         info "  (network speed: 10-60 min)"
-        "${CONDA_CMD}" env create -n "${QENV_NAME}" --file "${QYML_FILE}" -y
+        # Apple Silicon (arm64): QIIME2 deps require x86_64 packages via Rosetta 2
+        if [[ "$(uname -m)" == "arm64" && "${OS}" == "Darwin" ]]; then
+            info "  Apple Silicon detected: using CONDA_SUBDIR=osx-64 (Rosetta 2)"
+            CONDA_SUBDIR=osx-64 "${CONDA_CMD}" env create -n "${QENV_NAME}" --file "${QYML_FILE}" -y
+            # persist subdir so future conda installs in this env also use osx-64
+            "${CONDA_CMD}" env config vars set CONDA_SUBDIR=osx-64 -n "${QENV_NAME}" 2>/dev/null || true
+        else
+            "${CONDA_CMD}" env create -n "${QENV_NAME}" --file "${QYML_FILE}" -y
+        fi
         rm -f "${QYML_FILE}"
 
         QCONDA_BASE="$("${CONDA_CMD}" info --base 2>/dev/null || echo '')"
