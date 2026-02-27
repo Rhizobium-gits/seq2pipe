@@ -1368,7 +1368,7 @@ def run_coding_agent(
     figure_dir: str,
     metadata_path: str = "",
     model: Optional[str] = None,
-    max_steps: int = 30,
+    max_steps: int = 50,
     log_callback: Optional[Callable[[str], None]] = None,
     install_callback: Optional[Callable[[str], bool]] = None,
 ) -> CodeExecutionResult:

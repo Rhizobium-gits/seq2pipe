@@ -306,7 +306,7 @@ def main():
     parser.add_argument("--export-dir", help="既存の exported/ ディレクトリ（コード生成のみ実行）")
     parser.add_argument("--auto",       action="store_true", help="自律エージェントモードで起動")
     parser.add_argument("--chat",       action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
-    parser.add_argument("--max-rounds", type=int, default=10, help="自律エージェントの最大ラウンド数（デフォルト 10）")
+    parser.add_argument("--max-rounds", type=int, default=15, help="自律エージェントの最大ラウンド数（デフォルト 15）")
     args = parser.parse_args()
 
     _print_banner()

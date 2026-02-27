@@ -35,8 +35,8 @@ DEFAULT_MODEL = os.environ.get("QIIME2_AI_MODEL", "qwen2.5-coder:7b")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "600"))
 # 🐱 execute_python のタイムアウト（issue #32: 300s → 600s に延長, 環境変数で上書き可）
 PYTHON_EXEC_TIMEOUT = int(os.environ.get("SEQ2PIPE_PYTHON_TIMEOUT", "600"))
-# 🐱 エージェントループの最大ステップ数（issue #33: 30 → 100, 環境変数で上書き可）
-MAX_AGENT_STEPS = int(os.environ.get("SEQ2PIPE_MAX_STEPS", "100"))
+# 🐱 エージェントループの最大ステップ数（100 → 200: QIIME2 + 複数図生成で消費が多い）
+MAX_AGENT_STEPS = int(os.environ.get("SEQ2PIPE_MAX_STEPS", "200"))
 # 🐱 自律モード: SEQ2PIPE_AUTO_YES=1 でコマンド確認をスキップ（issue #31）
 AUTO_YES = os.environ.get("SEQ2PIPE_AUTO_YES", "0") == "1"
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -1958,6 +1958,23 @@ def tool_run_qiime2_pipeline(
     if QIIME2_CONDA_BIN:
         run_env["PATH"] = QIIME2_CONDA_BIN + ":" + run_env.get("PATH", "")
 
+    # ── プリフライトチェック: qiime コマンドが見つかるか確認 ─────────────
+    qiime_exec = shutil.which("qiime", path=run_env.get("PATH")) if QIIME2_CONDA_BIN else None
+    if not qiime_exec:
+        # システム PATH でも探す
+        qiime_exec = shutil.which("qiime")
+    if not qiime_exec:
+        return (
+            "❌ QIIME2 が見つかりません。\n"
+            "以下を確認してください:\n"
+            "  1. QIIME2 conda 環境がインストールされているか\n"
+            "     例: conda create -n qiime2 ...\n"
+            "  2. 環境変数 QIIME2_CONDA_BIN に conda/bin パスを指定しているか\n"
+            "     例: QIIME2_CONDA_BIN=~/miniconda3/envs/qiime2/bin ./launch.sh\n"
+            f"  自動検出候補: ~/miniforge3/envs/qiime2/bin, ~/miniconda3/envs/qiime2/bin\n"
+            f"  現在の QIIME2_CONDA_BIN: '{QIIME2_CONDA_BIN or '未検出'}'"
+        )
+
     completed = []
     failed = []
 
@@ -3070,6 +3087,20 @@ def main():
     model = select_model(available)
     print(f"{c(ui('model_selected', model), GREEN)}")
     print(f"{c(ui('hint_exit'), DIM)}\n")
+
+    # 🐱 QIIME2 インストール確認（警告のみ、未検出でも起動は続行）
+    if QIIME2_CONDA_BIN:
+        print(f"{c('✅ QIIME2 conda 環境: ' + QIIME2_CONDA_BIN, GREEN)}")
+    else:
+        print(c(
+            "⚠️  QIIME2 conda 環境が自動検出できませんでした。\n"
+            "   QIIME2 パイプライン実行には以下のいずれかが必要です:\n"
+            "   a) ~/miniforge3/envs/qiime2/bin に QIIME2 をインストール\n"
+            "   b) QIIME2_CONDA_BIN=/path/to/envs/qiime2/bin ./launch.sh で起動\n"
+            "   ※ 既存の exported/ ディレクトリがあれば図の生成は可能です。",
+            YELLOW
+        ))
+    print()
 
     # 🐱 セッション出力ディレクトリを起動時に作成（タイムスタンプ付き）
     _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
