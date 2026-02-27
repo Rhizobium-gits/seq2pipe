@@ -273,11 +273,28 @@ else
 
         info "QIIME2 conda env create: ${QENV_NAME}"
         info "  (network speed: 10-60 min)"
-        # Apple Silicon (arm64): QIIME2 deps require x86_64 packages via Rosetta 2
+        # Apple Silicon (arm64): QIIME2 deps are x86_64 only → need Rosetta 2
         if [[ "$(uname -m)" == "arm64" && "${OS}" == "Darwin" ]]; then
-            info "  Apple Silicon detected: using CONDA_SUBDIR=osx-64 (Rosetta 2)"
+            # Step 1: Install Rosetta 2 if not present
+            if ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+                info "  Rosetta 2 not found. Installing..."
+                sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license 2>&1 \
+                    || /usr/sbin/softwareupdate --install-rosetta --agree-to-license 2>&1 \
+                    || { warn "  Rosetta 2 install failed. Trying anyway..."; }
+                # Verify
+                if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+                    success "  Rosetta 2 installed"
+                else
+                    warn "  Rosetta 2 may not be active yet. If install fails, run:"
+                    warn "  sudo softwareupdate --install-rosetta --agree-to-license"
+                fi
+            else
+                info "  Rosetta 2: already installed"
+            fi
+            # Step 2: Create env with x86_64 packages
+            info "  Using CONDA_SUBDIR=osx-64 (Rosetta 2)"
             CONDA_SUBDIR=osx-64 "${CONDA_CMD}" env create -n "${QENV_NAME}" --file "${QYML_FILE}" -y
-            # persist subdir so future conda installs in this env also use osx-64
+            # Persist subdir so future conda installs in this env also use osx-64
             "${CONDA_CMD}" env config vars set CONDA_SUBDIR=osx-64 -n "${QENV_NAME}" 2>/dev/null || true
         else
             "${CONDA_CMD}" env create -n "${QENV_NAME}" --file "${QYML_FILE}" -y
