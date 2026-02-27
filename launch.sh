@@ -85,7 +85,7 @@ if [[ -z "$MODELS" ]]; then
     echo -e "   推奨: ${CYAN}ollama pull qwen2.5-coder:7b${RESET}"
     echo ""
     read -rp "今すぐ qwen2.5-coder:7b をダウンロードしますか? [y/N]: " DO_PULL
-    if [[ "${DO_PULL,,}" == "y" ]]; then
+    if [[ "$(echo "$DO_PULL" | tr "A-Z" "a-z")" == "y" ]]; then
         ollama pull qwen2.5-coder:7b
     else
         exit 1

@@ -257,7 +257,7 @@ else
     warn "QIIME2 conda 環境が見つかりません。"
     echo ""
     read -rp "QIIME2 を今すぐインストールしますか？（約 3-5 GB・数十分かかります）[y/N]: " _INSTALL_QIIME2
-    if [[ "${_INSTALL_QIIME2,,}" == "y" ]]; then
+    if [[ "$(echo "$_INSTALL_QIIME2" | tr "A-Z" "a-z")" == "y" ]]; then
         # プラットフォーム別 yml URL
         _QIIME2_VER="2024.10"
         if [[ "$OS" == "Darwin" ]]; then
@@ -346,7 +346,7 @@ else
         warn "Docker が見つかりません。Docker Engine をインストールします..."
         echo ""
         read -rp "Docker Engine を自動インストールしますか? (sudo 権限が必要) [y/N]: " INSTALL_DOCKER
-        if [[ "${INSTALL_DOCKER,,}" == "y" ]]; then
+        if [[ "$(echo "$INSTALL_DOCKER" | tr "A-Z" "a-z")" == "y" ]]; then
             info "Docker 公式スクリプトでインストールします..."
             curl -fsSL https://get.docker.com | sudo sh
             # 現ユーザーを docker グループに追加（sudo なしで使えるように）
@@ -393,7 +393,7 @@ else
         warn "以下のパッケージが不足しています: ${MISSING_PKGS[*]}"
         echo ""
         read -rp "Python ダウンストリーム解析パッケージをインストールしますか? [y/N]: " INSTALL_PY_PKGS
-        if [[ "${INSTALL_PY_PKGS,,}" == "y" ]]; then
+        if [[ "$(echo "$INSTALL_PY_PKGS" | tr "A-Z" "a-z")" == "y" ]]; then
             info "パッケージをインストールします..."
             "$PYTHON_CMD" -m pip install --quiet \
                 numpy pandas matplotlib seaborn scipy scikit-learn \
@@ -414,7 +414,7 @@ fi
 if [[ -n "$DOCKER_CMD" ]] && [[ -x "$DOCKER_CMD" ]] && "$DOCKER_CMD" info &>/dev/null 2>&1; then
     echo ""
     read -rp "QIIME2 Docker イメージ (quay.io/qiime2/amplicon:2026.1) を今すぐプルしますか? [y/N]: " PULL_QIIME2
-    if [[ "${PULL_QIIME2,,}" == "y" ]]; then
+    if [[ "$(echo "$PULL_QIIME2" | tr "A-Z" "a-z")" == "y" ]]; then
         info "QIIME2 Docker イメージをダウンロードします（約 2-4 GB）..."
         "$DOCKER_CMD" pull quay.io/qiime2/amplicon:2026.1
         success "QIIME2 Docker イメージの取得が完了しました"
