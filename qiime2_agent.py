@@ -44,21 +44,47 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 # 🐱 QIIME2 conda 環境の自動検出
 def _find_qiime2_conda_bin() -> str:
     """QIIME2 conda 環境の bin ディレクトリを自動検出する"""
-    candidates = [
-        Path.home() / "miniforge3/envs/qiime2/bin",
-        Path.home() / "miniconda3/envs/qiime2/bin",
-        Path.home() / "anaconda3/envs/qiime2/bin",
-        Path.home() / "mambaforge/envs/qiime2/bin",
-        Path("/opt/miniconda3/envs/qiime2/bin"),
-        Path("/opt/miniforge3/envs/qiime2/bin"),
-    ]
-    # 環境変数で上書き可
+    # 環境変数で上書き可（最優先）
     env_override = os.environ.get("QIIME2_CONDA_BIN", "")
     if env_override and Path(env_override).exists():
         return env_override
-    for p in candidates:
-        if p.exists() and (p / "qiime").exists():
-            return str(p)
+
+    # conda のベースディレクトリ候補
+    conda_bases = [
+        Path.home() / "miniforge3",
+        Path.home() / "miniconda3",
+        Path.home() / "anaconda3",
+        Path.home() / "mambaforge",
+        Path.home() / "opt/miniconda3",
+        Path.home() / "opt/miniforge3",
+        Path("/opt/miniconda3"),
+        Path("/opt/miniforge3"),
+        Path("/usr/local/miniconda3"),
+    ]
+
+    # まず名前が "qiime2" で始まる環境を優先して探す（バージョン付きも対象）
+    for base in conda_bases:
+        envs_dir = base / "envs"
+        if not envs_dir.exists():
+            continue
+        # "qiime2" で始まる環境を新しい順（バージョン番号降順）に試す
+        matches = sorted(
+            [d for d in envs_dir.iterdir() if d.name.startswith("qiime2") and (d / "bin" / "qiime").exists()],
+            key=lambda d: d.name,
+            reverse=True,
+        )
+        if matches:
+            return str(matches[0] / "bin")
+
+    # フォールバック: 全 conda 環境から qiime 実行ファイルを持つものを探す
+    for base in conda_bases:
+        envs_dir = base / "envs"
+        if not envs_dir.exists():
+            continue
+        for env_dir in sorted(envs_dir.iterdir(), reverse=True):
+            if (env_dir / "bin" / "qiime").exists():
+                return str(env_dir / "bin")
+
     return ""
 
 QIIME2_CONDA_BIN: str = _find_qiime2_conda_bin()
