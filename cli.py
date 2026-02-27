@@ -419,26 +419,39 @@ def main():
 
     model = _select_model(args.model or "")
 
-    # ── 対話モード（--chat または --export-dir + モード3）───────────────────
+    # ── 対話モード（--chat）───────────────────────────────────────────────
+    # --fastq-dir が指定されていれば先に QIIME2 パイプラインを実行してからチャットへ
+    # --export-dir だけが指定されている場合は既存データから直接チャットへ
     if args.chat:
-        export_dir = args.export_dir or _ask("QIIME2 エクスポートディレクトリのパス")
-        if not export_dir or not Path(export_dir).exists():
-            print(f"❌ ディレクトリが存在しません: {export_dir}")
-            sys.exit(1)
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = args.output_dir or str(Path.home() / "seq2pipe_results" / ts)
-        run_terminal_chat(
-            export_dir=export_dir,
-            output_dir=output_dir,
-            model=model,
-            log_callback=_log,
-            install_callback=_install_callback,
-        )
-        return
+        if args.fastq_dir or args.manifest:
+            # FASTQ ディレクトリが指定 → --chat は「モード3」として後続パイプライン経由で処理
+            # args.chat を一時的に無効化し mode="3" として通常フローへ流す
+            pass  # fall through to main pipeline with mode="3"
+        else:
+            # export-dir だけ → 既存データから直接チャット
+            export_dir = args.export_dir or _ask("QIIME2 エクスポートディレクトリのパス")
+            if not export_dir or not Path(export_dir).exists():
+                print(f"❌ ディレクトリが存在しません: {export_dir}")
+                sys.exit(1)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = args.output_dir or str(Path.home() / "seq2pipe_results" / ts)
+            fig_dir_chat = Path(output_dir) / "figures"
+            fig_dir_chat.mkdir(parents=True, exist_ok=True)
+            run_terminal_chat(
+                export_dir=export_dir,
+                output_dir=output_dir,
+                figure_dir=str(fig_dir_chat),
+                model=model,
+                log_callback=_log,
+                install_callback=_install_callback,
+            )
+            return
 
-    # モード選択（--auto フラグで省略可）
+    # モード選択（--auto / --chat フラグで省略可）
     if args.auto:
         mode = "2"
+    elif args.chat:
+        mode = "3"
     else:
         mode = _select_mode()
 
@@ -590,6 +603,21 @@ def main():
 
     print(f"\n✅ パイプライン完了 → {pipeline_result.output_dir}")
     print()
+
+    # ── モード 3: パイプライン完了後に対話チャットへ移行 ──────────────
+    if mode == "3":
+        print("─" * 48)
+        print("  💬 STEP 2/2 : 対話モード（チャット）")
+        print("─" * 48)
+        run_terminal_chat(
+            export_dir=pipeline_result.export_dir,
+            output_dir=pipeline_result.output_dir,
+            figure_dir=str(fig_dir),
+            model=model,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+        return
 
     # ── STEP 2: LLM による解析コード生成・実行 ────────────────────────
     print("─" * 48)

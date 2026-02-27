@@ -113,8 +113,9 @@ def _build_prompt(
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
         "      import os; os.makedirs(FIGURE_DIR, exist_ok=True)",
-        "3. Save every figure:",
-        "      plt.savefig(os.path.join(FIGURE_DIR, 'name.png'), dpi=DPI, bbox_inches='tight')",
+        "3. Save every figure as JPEG (NOT png):",
+        "      plt.savefig(os.path.join(FIGURE_DIR, 'name.jpg'), dpi=DPI, bbox_inches='tight',",
+        "                  pil_kwargs={'quality': 92, 'optimize': True})",
         "      plt.close()",
         "4. All axis labels, titles, legend entries in English.",
         "5. Use try/except around each section so one failure does not stop the whole script.",
@@ -337,7 +338,10 @@ def _run_code(
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     # 実行前の図ファイル一覧
-    existing = set(fig_dir.glob("*.png")) | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg"))
+    existing = (
+        set(fig_dir.glob("*.png")) | set(fig_dir.glob("*.jpg")) | set(fig_dir.glob("*.jpeg"))
+        | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg"))
+    )
 
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.py', delete=False, encoding='utf-8'
@@ -362,8 +366,10 @@ def _run_code(
                     log_callback(f"[stderr] {line}")
 
         new_figs = sorted(
-            (set(fig_dir.glob("*.png")) | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg")))
-            - existing
+            (
+                set(fig_dir.glob("*.png")) | set(fig_dir.glob("*.jpg")) | set(fig_dir.glob("*.jpeg"))
+                | set(fig_dir.glob("*.pdf")) | set(fig_dir.glob("*.svg"))
+            ) - existing
         )
         return (
             proc.returncode == 0,
@@ -699,8 +705,8 @@ def _build_auto_initial_prompt(
         "",
         "### [taxonomy] taxonomy.tsv",
         "  - Columns : Feature ID (index) | Taxon | Confidence",
-        "  - Phylum  : tax['phylum'] = tax['Taxon'].str.extract(r'p__([^;]+)').fillna('Unknown').str.strip()",
-        "  - Genus   : tax['genus']  = tax['Taxon'].str.extract(r'g__([^;]+)').fillna('Unknown').str.strip()",
+        "  - Phylum  : tax['phylum'] = tax['Taxon'].str.extract(r'p__([^;]+)')[0].fillna('Unknown').str.strip()",
+        "  - Genus   : tax['genus']  = tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
         "",
         "### [alpha] alpha-diversity TSV (one file per metric)",
         "  - Columns : sample-id (index) | metric value",
@@ -770,9 +776,10 @@ def _build_auto_initial_prompt(
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
         "      import os; os.makedirs(FIGURE_DIR, exist_ok=True)",
-        "3. Include the round number in every filename: e.g. 'round1_summary.png'",
-        "4. Save and close every figure:",
-        "      plt.savefig(os.path.join(FIGURE_DIR, 'roundN_name.png'), dpi=DPI, bbox_inches='tight')",
+        "3. Include the round number in every filename (JPEG format): e.g. 'round1_summary.jpg'",
+        "4. Save and close every figure as JPEG (NOT png):",
+        "      plt.savefig(os.path.join(FIGURE_DIR, 'roundN_name.jpg'), dpi=DPI, bbox_inches='tight',",
+        "                  pil_kwargs={'quality': 92, 'optimize': True})",
         "      plt.close()",
         "5. All labels, titles, legend entries in English.",
         "6. try/except around each major section — one failure must not stop other sections.",
