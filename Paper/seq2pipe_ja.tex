@@ -94,7 +94,7 @@
   {\large ローカル LLM による QIIME2 パイプライン自動生成 AI エージェント}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small 2026 年 2 月 27 日}
+  {\small 2026 年 2 月 28 日}
 \end{center}
 
 \vspace{4mm}
@@ -107,17 +107,19 @@
 \textbf{seq2pipe} の設計と実装について報告する。
 seq2pipe はユーザーが保有する生 FASTQ データを入力として受け取り、
 データ構造の自動認識・QIIME2 解析パイプラインの設計・実行可能シェルスクリプトの生成を行い、
-続いて \textbf{ツール呼び出し型コード生成エージェント}（\texttt{code\_agent.py}）が
+続いて \textbf{決定論的包括解析モジュール}（\texttt{analysis.py}）が
+LLM に依存せず \textbf{15 種類の出版品質 PNG 図を確実に生成} する。
+さらに \textbf{ツール呼び出し型コード生成エージェント}（\texttt{code\_agent.py}）が
 実際のエクスポートファイルの内容を先に読んでからコードを生成するため、
 フォーマットの不一致によるエラーを根本的に排除する。
 コードエージェントは「NEVER GIVE UP」方針に従い、
 エラーが発生するたびにコードを修正して \texttt{EXIT CODE: 0} になるまで実行を繰り返す。
-自律モードでは 5 フェーズ・14 種類の図を全自動で生成する
-（クオリティ確認、α多様性、β多様性、分類組成、サンプル相関）。
+自律モード（\texttt{--auto}）では 3 ステップで全解析を完了する:
+STEP 1（QIIME2 パイプライン）→ STEP 2（決定論的解析・15 図）→ STEP 3（HTML レポート）。
+\texttt{--classifier} オプションにより SILVA 138 分類器を指定すると、
+属・門レベルの分類組成図（fig13〜fig15）も自動生成される。
 解析完了後は \textbf{振り返り・修正モード} が起動し、
 「色を変えて」「凡例を外に出して」などの自然言語指示で図を対話的に修正できる。
-修正セッション中に「レポート」と入力すると HTML レポート、
-「PDF」と入力すると \texttt{lualatex} / \texttt{xelatex} による LaTeX/PDF レポートを自動生成する。
 処理はすべてユーザーのローカル環境で完結し、
 クラウドサービスや有料 API への依存を排除する。
 \end{abstract}
@@ -146,8 +148,10 @@ Ollama~\cite{ollama} をはじめとするローカル LLM 実行フレームワ
 
 本研究では、これらの技術を統合した対話型 AI エージェント \textbf{seq2pipe} を開発し、
 その設計原則・アーキテクチャ・実装詳細を報告する。
-seq2pipe は QIIME2 解析の自動化に留まらず、Python による下流解析・統計検定・
-機械学習・可視化、そして日本語・英語両対応の自動レポート生成まで
+seq2pipe は QIIME2 解析の自動化に留まらず、
+決定論的な包括解析モジュールによる 15 種類の図の確実な生成、
+LLM による柔軟な追加解析、
+そして日本語・英語両対応の自動レポート生成まで
 一貫したパイプラインを提供する点で、従来ツールを大きく超える。
 
 % -------------------------------------------------------
@@ -201,16 +205,21 @@ seq2pipe は以下の設計原則に従って開発した。
     AI 応答・自動生成レポートを統一する。
   \item \textbf{堅牢なエラー処理}: 接続エラー・タイムアウト・空レスポンス・
     ファイルシステムエラーをすべて適切にキャッチし、ユーザーに分かりやすいメッセージを返す。
+  \item \textbf{決定論的解析の保証}: LLM に依存しない包括解析モジュール（\texttt{analysis.py}）
+    により、15 種類の図を確実に生成する。
 \end{enumerate}
 
 \subsection{全体アーキテクチャ}
 
-図~\ref{fig:arch} に seq2pipe の 3 層アーキテクチャを示す。
+図~\ref{fig:arch} に seq2pipe の 3 ステップアーキテクチャを示す。
 ユーザーは起動スクリプトを通じてエントリーポイント（\texttt{cli.py}）を起動する。
 \texttt{cli.py} は虹色 ASCII バナーを表示し、
 2 つの操作モード（指定解析モード / 自律エージェントモード）を選択させる。
-いずれのモードでも \texttt{pipeline\_runner.py} が QIIME2 パイプラインを実行して
-結果をエクスポートし、続いて \texttt{code\_agent.py} が
+\texttt{--auto} モードでは 3 ステップの自動化パイプラインが実行される:
+STEP 1 で \texttt{pipeline\_runner.py} が QIIME2 パイプラインを実行し結果をエクスポート、
+STEP 2 で \texttt{analysis.py} が決定論的に 15 種類の PNG 図を生成、
+STEP 3 で HTML レポートを自動生成する。
+指定解析モード（モード 1）では \texttt{code\_agent.py} が
 vibe-local 方式のツール呼び出し型コード生成を行う。
 
 \begin{figure}[h]
@@ -219,45 +228,29 @@ vibe-local 方式のツール呼び出し型コード生成を行う。
   ユーザー
     |
     v
-  [launch.sh / launch.bat] -> [cli.py]  (バナー・モード選択)
-                                  |
-         +------------------------+---------------------------+
-         |                        |                           |
-         v                        v                           v
-  モード 1: 指定解析      [pipeline_runner.py]        モード 2: 自律
-  （自然言語でプロンプト）  QIIME2 実行 + エクスポート   （--auto フラグ）
-         |                        |                           |
-         v                        v                           v
-  [code_agent.py] <--------------+--------------------> [code_agent.py]
-    ツール呼び出し型コード生成エージェント（vibe-local 方式）
-    |
-    +---> Ollama (localhost:11434)  <-- ローカル LLM
-    |       TOOL FIRST: 先にファイルを読んでからコードを書く
-    |       NEVER GIVE UP: エラー → write_file 修正 → run_python 再実行
-    |
-    +-- list_files      (エクスポートファイル一覧)
-    +-- read_file       (ファイル内容 → LLM が列名・形式を確認)
-    +-- write_file      (atomic write で Python スクリプト生成)
-    +-- run_python      (QIIME2 conda Python で実行 → exit code 確認)
-    `-- install_package (ModuleNotFoundError 検出 → pip + ユーザー承認)
-
-  自動解析タスク（モード 2）: 5 フェーズ・14 種類の図
-    Phase 0: クオリティ確認（デノイジング統計）
-    Phase 1: α多様性（Shannon/Chao1/Simpson/Faith's PD + 統計検定）
-    Phase 2: β多様性（PCoA + CLR-PCA + NMDS + レアファクション曲線）
-    Phase 3: 分類組成（phylum bar + genus heatmap + CLR bar）
-    Phase 4: サンプル相関（相関行列 + 階層クラスタリング）
-
-  [qiime2_agent.py]  QIIME2 パイプライン生成（11 ツール、pipeline_runner.py 内部）
-    +-- inspect_directory / read_file / write_file / edit_file
-    +-- generate_manifest / run_command / check_system
-    +-- set_plot_config / execute_python / build_report_tex / log_analysis_step
-
-  [report_generator.py]  HTML / LaTeX+PDF レポート生成
-    +-- generate_html_report()   base64 埋め込み HTML レポート
-    `-- generate_latex_report()  lualatex / xelatex で PDF をコンパイル
+  [launch.sh] -> [cli.py]  (バナー・モード選択)
+                     |
+    +----------------+---------------------------+
+    |                |                           |
+    v                v                           v
+  モード 1      [pipeline_runner.py]        モード 2
+  指定解析       QIIME2 実行 + エクスポート   --auto フラグ
+    |                |   (STEP 1/3)              |
+    |                v                           |
+    |       [analysis.py]  (STEP 2/3)            |
+    |         決定論的包括解析（LLM 不要）          |
+    |         15 種類の PNG 図を確実に生成          |
+    |         fig01-12: 基本解析                  |
+    |         fig13-15: 分類組成（分類器あり時）    |
+    |                |                           |
+    v                v                           v
+  [code_agent.py] <-+----> [report_generator.py]
+    ツール呼び出し型          HTML / LaTeX+PDF
+    コード生成エージェント     レポート生成
+    |                          (STEP 3/3)
+    +---> Ollama (localhost:11434)
   \end{verbatim}
-  \caption{seq2pipe のアーキテクチャ}
+  \caption{seq2pipe の 3 ステップアーキテクチャ}
   \label{fig:arch}
 \end{figure}
 
@@ -331,7 +324,7 @@ seq2pipe は 2 種類のツールセットを持つ。
     \texttt{execute\_python} &
       Python コードを実行し図を保存、\texttt{ANALYSIS\_LOG} に記録 \\
     \texttt{build\_report\_tex} &
-      \texttt{ANALYSIS\_LOG} から TeX 構築・tectonic でコンパイル \\
+      \texttt{ANALYSIS\_LOG} から TeX 構築・lualatex でコンパイル \\
     \texttt{log\_analysis\_step} &
       QIIME2 操作を \texttt{ANALYSIS\_LOG} に手動登録 \\
     \bottomrule
@@ -361,6 +354,47 @@ seq2pipe は 2 種類のツールセットを持つ。
       \texttt{ModuleNotFoundError} を検出してユーザーに承認を求め、
       承認されれば \texttt{pip install} を実行する \\
     \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{決定論的包括解析モジュール（\texttt{analysis.py}）}
+
+\texttt{--auto} モードの信頼性を向上させるため、
+LLM に依存しない決定論的包括解析モジュール \texttt{analysis.py} を導入した。
+\texttt{run\_comprehensive\_analysis()} 関数は QIIME2 エクスポートデータを
+直接読み込み、pandas / matplotlib / seaborn / scikit-learn を使用して
+15 種類の出版品質 PNG 図を生成する（表~\ref{tab:analysis_figures}）。
+
+このモジュールは LLM の応答品質に左右されないため、
+どのモデルを使用しても同一の解析結果が得られる。
+SILVA 138 分類器による分類学的解析結果が利用可能な場合は
+fig13〜fig15（属・門レベルの組成図）も自動的に生成される。
+
+\begin{table}[h]
+  \centering
+  \caption{\texttt{analysis.py} が生成する 15 種類の図}
+  \label{tab:analysis_figures}
+  \begin{tabular}{clp{6cm}}
+    \toprule
+    \textbf{図番号} & \textbf{解析内容} & \textbf{主要パッケージ} \\
+    \midrule
+    fig01 & DADA2 デノイジング統計 & pandas, matplotlib \\
+    fig02 & シーケンシング深度 & pandas, matplotlib \\
+    fig03 & α 多様性ボックスプロット & pandas, seaborn \\
+    fig04 & Shannon 多様性（サンプル別） & pandas, seaborn \\
+    fig05 & PCoA (Bray-Curtis) & sklearn MDS \\
+    fig06 & PCoA (Jaccard) & sklearn MDS \\
+    fig07 & PCoA (Unweighted UniFrac) & sklearn MDS \\
+    fig08 & PCoA (Weighted UniFrac) & sklearn MDS \\
+    fig09 & β 多様性距離ヒートマップ (2$\times$2) & seaborn \\
+    fig10 & Top 30 ASV ヒートマップ & seaborn \\
+    fig11 & α 多様性相関 & matplotlib \\
+    fig12 & ASV リッチネス vs 深度 & matplotlib \\
+    fig13 & 属レベル積み上げ棒グラフ$^*$ & matplotlib \\
+    fig14 & 門レベル積み上げ棒グラフ$^*$ & matplotlib \\
+    fig15 & 属レベルヒートマップ$^*$ & seaborn \\
+    \bottomrule
+    \multicolumn{3}{l}{\small $^*$ SILVA 138 分類器が利用可能な場合のみ生成}
   \end{tabular}
 \end{table}
 
@@ -443,6 +477,8 @@ seq2pipe はこれを \texttt{run\_coding\_agent()} 内の 4 層フォールバ�
 \end{enumerate}
 
 これらの機構により、7B モデルでも少なくとも 1 種類以上の図を確実に生成できる。
+さらに \texttt{analysis.py} による決定論的解析が LLM の前に実行されるため、
+LLM の性能に関わらず 15 種類の基本図は常に生成される。
 
 \subsection{QIIME2 パイプラインエージェントループ}
 
@@ -451,6 +487,18 @@ QIIME2 パイプライン生成の推論・行動サイクルを制御する。
 LLM の応答にツール呼び出しが含まれる場合は順次実行して結果を会話履歴に追加し、
 テキスト応答のみになるまで繰り返す。
 空レスポンスのガード処理も実装している。
+
+\subsection{SILVA 138 分類器の自動探索（\texttt{--classifier}）}
+
+\texttt{cli.py} に \texttt{--classifier} オプションを追加し、
+SILVA 138 Naive Bayes 分類器のパスを指定できるようにした。
+パスが明示されない場合は \texttt{\_find\_classifier()} 関数が
+以下の候補パスを順に探索する:
+\texttt{~/seq2pipe/silva-138-99-nb-classifier.qza}、
+\texttt{~/classifiers/} 配下、
+\texttt{/usr/local/share/qiime2/} 配下。
+分類器が見つかった場合、QIIME2 パイプラインで分類学的解析が実行され、
+\texttt{analysis.py} が属・門レベルの組成図を自動生成する。
 
 \subsection{Ollama API との通信と堅牢なエラー処理}
 
@@ -468,14 +516,14 @@ Python の \texttt{urllib.request} モジュールのみを使用しており、
   \item \texttt{socket.timeout / TimeoutError}: ソケットレベルのタイムアウト
 \end{itemize}
 
-\subsection{図の自動 JPEG 変換}
+\subsection{図の自動 PNG 変換}
 
 LLM が \texttt{plt.savefig()} に \texttt{.pdf} や \texttt{.svg} 拡張子を使ってしまう場合があった。
 seq2pipe は \texttt{\_convert\_new\_figs()} ヘルパーにより、
 コード実行直後に生成された PDF/SVG ファイルを macOS 内蔵の
-\texttt{sips} コマンドで自動的に JPEG へ変換し、元ファイルを削除する。
+\texttt{sips} コマンドで自動的に PNG へ変換し、元ファイルを削除する。
 これにより macOS プレビュー等で問題なく図を確認できる。
-また、プロンプトに「拡張子は必ず \texttt{.jpg}」という指示を追加し、
+また、プロンプトに「拡張子は必ず \texttt{.png}」という指示を追加し、
 LLM による不適切な拡張子の生成頻度を低減した。
 
 \subsection{メタデータなし多様性解析}
@@ -496,7 +544,8 @@ Shannon・Faith PD・Bray--Curtis・UniFrac 等の各指標について順次実
 LLM が既存コードを修正して再実行する。
 このループは空 Enter または \texttt{quit} で終了する。
 
-修正セッション中に特定のキーワードが入力されるとレポートが生成される:
+\texttt{--auto} モードでは STEP 3 として HTML レポートが自動生成される。
+また、修正セッション中に特定のキーワードが入力されるとレポートが生成される:
 
 \begin{itemize}
   \item 「レポート」・\texttt{html} など → \texttt{generate\_html\_report()}:
@@ -510,10 +559,6 @@ LLM が既存コードを修正して再実行する。
     LaTeX エンジンが見つからない場合は \texttt{report.tex} のみ保存し、
     手動コンパイル手順をユーザーに通知する。
 \end{itemize}
-
-従来 \texttt{tectonic} に依存していたレポート生成を
-macOS/Linux 標準の LaTeX ツールチェーン（MacTeX）で置き換えたことにより、
-追加インストールなしで PDF レポートを生成できる環境が拡大した。
 
 \subsection{マニフェスト自動生成}
 
@@ -579,26 +624,31 @@ SILVA 138 参照データベース~\cite{silva} を用いた Naive Bayes 分類�
 増幅領域（V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R）に応じて
 プライマートリム長・トランケーション長が自動的に調整される。
 
-QIIME2 解析後、自律エージェントモード（\texttt{--auto}）では以下の
-5 フェーズ・\textbf{14 種類の図} を全自動で生成する。
-コードエージェントは各ファイルを \texttt{read\_file} で先に読んで
-列名・形式を確認してからコードを生成するため、フォーマットエラーが起きにくい。
+QIIME2 解析後、\texttt{--auto} モードでは以下の 3 ステップ自動化パイプラインが実行される:
 
 \begin{enumerate}[leftmargin=2em]
-  \item \textbf{Phase 0 (quality)}: デノイジング統計（入力 / フィルタリング / デノイジング / 非キメラ）
-  \item \textbf{Phase 1 (alpha)}: Shannon / Chao1 / Simpson / Faith's PD の計算・可視化・
-    Mann-Whitney U + Kruskal-Wallis 検定
-  \item \textbf{Phase 2 (beta)}: Bray-Curtis PCoA・UniFrac PCoA・
-    CLR 変換 PCA（組成データ向け主成分分析）・
-    NMDS（非計量多次元尺度構成法）・
-    全 β 多様性 TSV ファイルを使ったレアファクション曲線
-  \item \textbf{Phase 3 (taxonomy)}: 門レベル stacked bar・属レベル heatmap・CLR 変換 phylum bar
-  \item \textbf{Phase 4 (correlation)}: サンプル間相関行列 + 階層クラスタリング heatmap
+  \item \textbf{STEP 1}: QIIME2 パイプライン（上記 8 ステップ）+ 結果エクスポート
+  \item \textbf{STEP 2}: 決定論的包括解析（\texttt{analysis.py}）→ \textbf{15 種類の PNG 図}を生成:
+    \begin{itemize}
+      \item fig01: DADA2 デノイジング統計
+      \item fig02: シーケンシング深度
+      \item fig03: α 多様性（Shannon / Faith PD / Observed ASVs）
+      \item fig04: Shannon 多様性（サンプル別）
+      \item fig05--08: PCoA（Bray-Curtis / Jaccard / Unweighted UniFrac / Weighted UniFrac）
+      \item fig09: β 多様性距離ヒートマップ（2$\times$2）
+      \item fig10: Top 30 ASV ヒートマップ
+      \item fig11: α 多様性相関
+      \item fig12: ASV リッチネス vs 深度
+      \item fig13: 属レベル組成（分類器あり時）
+      \item fig14: 門レベル組成（分類器あり時）
+      \item fig15: 属レベルヒートマップ（分類器あり時）
+    \end{itemize}
+  \item \textbf{STEP 3}: HTML レポート自動生成（base64 図埋め込み）
 \end{enumerate}
 
-全フェーズ完了後、振り返り・修正モードが起動し、
+全ステップ完了後、振り返り・修正モードが起動し、
 自然言語指示による図の修正と
-\texttt{report\_generator.py} による HTML / LaTeX+PDF レポート出力が行える。
+\texttt{report\_generator.py} による追加レポート出力が行える。
 
 % -------------------------------------------------------
 \section{対応モデルと性能比較}
@@ -627,6 +677,11 @@ seq2pipe は Ollama で動作する任意の LLM と組み合わせて使用で�
   \end{tabular}
 \end{table}
 
+なお、\texttt{analysis.py} による決定論的解析（STEP 2）は
+LLM を使用しないため、モデルの選択に関わらず同一の 15 図が生成される。
+モデルの性能差は主にモード 1（指定解析）の柔軟性と
+振り返り・修正モードの応答品質に影響する。
+
 % -------------------------------------------------------
 \section{実証結果}
 % -------------------------------------------------------
@@ -634,95 +689,112 @@ seq2pipe は Ollama で動作する任意の LLM と組み合わせて使用で�
 seq2pipe のエンドツーエンド自動化能力を実証するため、
 ヒト便検体 10 サンプル（TEST01〜TEST10、凍結乾燥便、Illumina MiSeq
 ペアエンド V3-V4）を人手なしで解析した。
-\texttt{\_run\_pipeline.py} を用いた単一コマンドで
-QIIME2（DADA2 デノイジング + core-metrics-phylogenetic）を実行し、
-エクスポートデータを \texttt{chat\_agent.InteractiveSession} へ渡して
-ダウンストリーム可視化を行った。
-6 種類の図が自動生成され、PDF レポートにまとめられた。
+以下の単一コマンドで全パイプラインを実行した:
+
+\begin{lstlisting}[language=bash, caption={seq2pipe による完全自律解析}]
+./launch.sh --fastq-dir ~/input --auto --threads 1
+\end{lstlisting}
+
+STEP 1 で QIIME2 パイプライン（DADA2 デノイジング + 系統樹構築 + 多様性解析 +
+SILVA 138 分類学的解析）が実行され、
+STEP 2 で \texttt{analysis.py} が 15 種類の PNG 図を生成し、
+STEP 3 で HTML レポートが自動生成された。
 図はリポジトリの \texttt{Figure/} ディレクトリに格納されている。
-
-\subsection{α 多様性}
-
-4 つの α 多様性指標（Shannon エントロピー、Faith's PD、Pielou's evenness、
-Observed features）をサンプルごとに計算し、
-ストリッププロットを重ねた 2$\times$2 パネルで表示した（図~\ref{fig:alpha}）。
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.92\textwidth]{../Figure/alpha_diversity.png}
-  \caption{ヒト便検体 10 サンプルの α 多様性。
-    各パネルは DADA2 デノイジング済みフィーチャーテーブルから算出した
-    異なる指標を示す。ストリッププロットが各サンプルの実測値を重ねて表示している。}
-  \label{fig:alpha}
-\end{figure}
-
-\subsection{β 多様性}
-
-3 種類の非類似度指標で β 多様性を評価した。
-Bray--Curtis PCoA（図~\ref{fig:bc}）と
-Unweighted UniFrac PCoA（図~\ref{fig:unifrac}）は
-scikit-learn MDS（\texttt{n\_components=2, dissimilarity=`precomputed'}）で計算し、
-Jaccard 距離はクラスタリング付きヒートマップで可視化した（図~\ref{fig:jaccard}）。
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.85\textwidth]{../Figure/bray_curtis_pcoa.png}
-  \caption{Bray--Curtis PCoA。サンプルは tab10 パレットでサンプル ID ごとに
-    色分けし、プロット上に直接ラベルを付した。MDS 座標は
-    QIIME2 エクスポートされた距離行列から計算した。}
-  \label{fig:bc}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.85\textwidth]{../Figure/unifrac_pcoa.png}
-  \caption{Unweighted UniFrac PCoA。QIIME2 の core-metrics-phylogenetic
-    パイプラインが計算した系統的距離を 2 次元 MDS で射影した。}
-  \label{fig:unifrac}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.85\textwidth]{../Figure/jaccard_heatmap.png}
-  \caption{Ward 連結法による階層クラスタリング付き Jaccard 距離ヒートマップ
-    （seaborn \texttt{clustermap}）。両軸が 10 サンプルを示し、
-    色の濃さがペアワイズ非類似度を表す。}
-  \label{fig:jaccard}
-\end{figure}
 
 \subsection{DADA2 デノイジング統計}
 
 DADA2 の各ステージ（input $\rightarrow$ filtered $\rightarrow$ denoised $\rightarrow$
 merged $\rightarrow$ non-chimeric）におけるリード数の変化を
 図~\ref{fig:dada2} に示す。
-グループ棒グラフは \texttt{denoising\_stats/stats.tsv} から
-人手を一切介さずに生成した。
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.92\textwidth]{../Figure/dada2_stats.png}
+  \includegraphics[width=0.92\textwidth]{../Figure/fig01_dada2_stats.png}
   \caption{10 便検体の DADA2 デノイジング統計。
-    各グループが 1 サンプルに対応し、棒の色が 5 つの処理ステージを区別する。
+    各サンプルの 5 つの処理ステージを区別して示す。
     フィルタリング効率がサンプル間で概ね均一であることが示された。}
   \label{fig:dada2}
 \end{figure}
 
-\subsection{Shannon 多様性バイオリンプロット}
+\subsection{α 多様性}
 
-図~\ref{fig:shannon} は Shannon 多様性の水平バイオリンプロットで、
-サンプルを Shannon 値の昇順に並べ、全体平均を縦線で示している。
+3 つの α 多様性指標（Shannon エントロピー、Faith's PD、Observed ASVs）を
+サンプルごとに計算し、ボックスプロットで表示した（図~\ref{fig:alpha}）。
+また、Shannon 多様性のサンプル別ストリッププロットを図~\ref{fig:shannon} に示す。
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.85\textwidth]{../Figure/shannon_violin.png}
-  \caption{サンプルごとの Shannon α 多様性を水平バイオリンプロットで表示。
-    サンプルは Shannon 値の昇順に並べており、縦線は全サンプルの平均値を示す。}
+  \includegraphics[width=0.92\textwidth]{../Figure/fig03_alpha_diversity.png}
+  \caption{ヒト便検体 10 サンプルの α 多様性。
+    各パネルは DADA2 デノイジング済みフィーチャーテーブルから算出した
+    異なる指標を示す。}
+  \label{fig:alpha}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/fig04_shannon_per_sample.png}
+  \caption{サンプルごとの Shannon α 多様性ストリッププロット。}
   \label{fig:shannon}
 \end{figure}
 
-6 つの図と解釈文は \texttt{InteractiveSession.generate\_report()} によって
-日本語 PDF レポート（\texttt{report\_ja.pdf}）に自動統合された。
-LLM が各図のキャプションを生成し、\texttt{tectonic} でコンパイルした。
+\subsection{β 多様性}
+
+4 種類の非類似度指標で β 多様性を評価した。
+Bray--Curtis PCoA（図~\ref{fig:bc}）と
+Unweighted UniFrac PCoA（図~\ref{fig:unifrac}）は
+scikit-learn MDS（\texttt{n\_components=2, dissimilarity=`precomputed'}）で計算した。
+4 つの距離行列をまとめたヒートマップを図~\ref{fig:beta_heatmaps} に示す。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/fig05_pcoa_braycurtis.png}
+  \caption{Bray--Curtis PCoA。サンプルはパレットでサンプル ID ごとに
+    色分けし、プロット上に直接ラベルを付した。}
+  \label{fig:bc}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../Figure/fig07_pcoa_unweighted_unifrac.png}
+  \caption{Unweighted UniFrac PCoA。QIIME2 が計算した系統的距離を
+    2 次元 MDS で射影した。}
+  \label{fig:unifrac}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{../Figure/fig09_beta_distance_heatmaps.png}
+  \caption{β 多様性距離ヒートマップ（2$\times$2）。
+    Bray-Curtis・Jaccard・Unweighted UniFrac・Weighted UniFrac の
+    4 指標を一覧表示。}
+  \label{fig:beta_heatmaps}
+\end{figure}
+
+\subsection{分類組成}
+
+SILVA 138 分類器による分類結果をもとに、
+属レベル積み上げ棒グラフ（図~\ref{fig:genus}）と
+属レベルヒートマップ（図~\ref{fig:genus_heatmap}）を生成した。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{../Figure/fig13_genus_composition.png}
+  \caption{属レベルの分類組成（積み上げ棒グラフ）。
+    上位属が色分けされ、各サンプルの微生物群集構造を示す。}
+  \label{fig:genus}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{../Figure/fig15_genus_heatmap.png}
+  \caption{属レベルヒートマップ。相対存在量を色の濃淡で表示し、
+    サンプル間の微生物組成の類似性を可視化する。}
+  \label{fig:genus_heatmap}
+\end{figure}
+
+全 15 図と HTML レポートは \texttt{analysis.py} と
+\texttt{report\_generator.py} によって自動生成された。
 
 % -------------------------------------------------------
 \section{考察と今後の課題}
@@ -738,32 +810,28 @@ seq2pipe は以下の目標を達成した。
   \item 3 OS（macOS / Linux / Windows）への完全対応
   \item FASTQ データ構造の自動認識と適応的パイプライン生成
   \item QIIME2 コマンドを conda 環境 / Docker 経由で安全に実行するコマンド確認機構
+  \item \textbf{決定論的包括解析モジュール（\texttt{analysis.py}）}:
+    LLM に依存せず 15 種類の出版品質 PNG 図を確実に生成
+  \item \textbf{SILVA 138 分類器の自動探索（\texttt{--classifier}）}:
+    分類学的解析と属・門レベル組成図の自動生成
+  \item \textbf{3 ステップ自動化パイプライン}:
+    STEP 1（QIIME2）→ STEP 2（決定論的解析）→ STEP 3（HTML レポート）
   \item \textbf{vibe-local 方式ツール呼び出し型コード生成エージェント}:
     LLM がファイルを先に読んでから Python コードを生成するため、
     盲目的な 1 ショット生成で頻発したフォーマット不一致エラーを根本解消
   \item \textbf{自動エラー修正（NEVER GIVE UP）}:
     \texttt{run\_python} が失敗するとエージェントがトレースバックを読んで
     コードを修正し、\texttt{EXIT CODE: 0} になるまで再実行
-  \item \textbf{5 フェーズ・14 種類の図を自動生成}:
-    クオリティ確認・α多様性（4 指標）・β多様性（PCoA + CLR-PCA + NMDS + レアファクション）・
-    分類組成（3 図）・サンプル相関
-  \item \textbf{ModuleNotFoundError 自動復旧}:
-    不足パッケージを検出してユーザーに承認を求め、\texttt{pip install} を実行
   \item \textbf{小型 LLM 向けロバストネス機能}: 4 層フォールバック機構
-    （\texttt{\_parse\_text\_tool\_calls}・Auto-inject \texttt{run\_python}・
-    ステップ 6 の 1 ショットフォールバック・繰り返し検出）により、
-    7B モデルでも確実に図を生成
   \item 2 つの操作モード: 指定解析（モード 1）・完全自律（モード 2 / \texttt{--auto}）
-  \item \textbf{解析後の振り返り・修正モード（\texttt{run\_refinement\_loop}）}:
+  \item \textbf{解析後の振り返り・修正モード}:
     自然言語指示で図を対話的に修正・再実行
-  \item \textbf{PDF/SVG → JPEG 自動変換（\texttt{sips}）}:
-    macOS 内蔵コマンドで追加依存なし、プレビューで開けない PDF 図を自動 JPEG 変換
+  \item \textbf{PDF/SVG → PNG 自動変換（\texttt{sips}）}:
+    macOS 内蔵コマンドで追加依存なし
   \item \textbf{メタデータなし多様性解析}:
     \texttt{core-metrics-phylogenetic} 不可時に個別コマンドへフォールバック
-  \item \textbf{HTML / LaTeX+PDF レポート自動生成}（\texttt{report\_generator.py}）:
-    「レポート」→ HTML、「PDF」→ \texttt{lualatex}/\texttt{xelatex} による PDF
+  \item \textbf{HTML / LaTeX+PDF レポート自動生成}（\texttt{report\_generator.py}）
   \item 日本語 / 英語の起動時言語選択 UI
-  \item 接続エラー・タイムアウト・空レスポンス・ファイルシステムエラーへの堅牢な処理
 \end{itemize}
 
 \subsection{現在の制限}
@@ -772,26 +840,21 @@ seq2pipe は以下の目標を達成した。
   \item LLM の生成するコマンドの正確性はモデルに依存し、
     誤ったパラメータが生成される可能性がある。
   \item 大規模データセット（100 サンプル以上）に対するパフォーマンスは未検証である。
-  \item SILVA 138 参照ファイルのダウンロードには約 30 GB のディスク容量と数時間を要する。
   \item PDF レポートのコンパイルには \texttt{lualatex} または \texttt{xelatex}
-    （MacTeX / TeX Live）のインストールが必要である。インストールされていない環境では
-    \texttt{.tex} ファイルのみが保存される。
-  \item \texttt{qiime2\_agent.py}（QIIME2 パイプライン生成）には read-first パターンが未適用であり、
-    \texttt{code\_agent.py} との統合が今後の課題である。
-  \item PDF/SVG の自動 JPEG 変換は macOS の \texttt{sips} に依存しており、
+    （MacTeX / TeX Live）のインストールが必要である。
+  \item PDF/SVG の自動 PNG 変換は macOS の \texttt{sips} に依存しており、
     Linux / Windows では変換は行われない（将来的に \texttt{Pillow} による代替を検討）。
 \end{itemize}
 
 \subsection{今後の課題}
 
 \begin{itemize}
-  \item Streamlit ブラウザ GUI（\texttt{app.py}）は任意利用可として実装済み。今後は主要インターフェースをターミナル CLI に統一しつつ UI の拡充を図る
   \item ITS / 18S rRNA など他のマーカー遺伝子への対応
-  \item \texttt{Pillow} を利用した Linux / Windows 向け PDF/SVG → JPEG 変換の実装
+  \item \texttt{Pillow} を利用した Linux / Windows 向け PDF/SVG → PNG 変換の実装
   \item 差次存在量解析（volcano plot）・機械学習（Random Forest）の
     自律タスクへの追加
   \item 統計的検定結果の図への自動アノテーション
-  \item \texttt{--auto} モード終了後の振り返りループの自動起動
+  \item \texttt{analysis.py} への追加解析（レアファクション曲線、NMDS 等）の統合
 \end{itemize}
 
 % -------------------------------------------------------
@@ -800,15 +863,15 @@ seq2pipe は以下の目標を達成した。
 
 本稿では、ローカル LLM と QIIME2 を統合した自動解析エージェント
 seq2pipe の設計・実装を報告した。
-本システムは 2 つの相補的な LLM エージェントを組み合わせる:
+本システムは 3 つの相補的なモジュールを組み合わせる:
 \texttt{qiime2\_agent.py} が 11 ツールで QIIME2 パイプライン生成を担い、
+\texttt{analysis.py} が LLM に依存せず 15 種類の出版品質 PNG 図を確実に生成し、
 \texttt{code\_agent.py} が vibe-local 方式の 5 ツールで
-実際のファイル内容を読んでから Python 解析コードを生成し、
-エラーが出ても自動修正して最終的に成功させる。
+追加の柔軟な解析を提供する。
 解析完了後は振り返り・修正モードにより自然言語で図を対話的に改善でき、
 \texttt{report\_generator.py} が HTML または LaTeX+PDF レポートを自動生成する。
-これにより研究者は生 FASTQ データから 5 フェーズ・14 種類の出版品質の図と
-PDF レポートまでを、完全オフラインかつクラウド不要の環境で自動化できる。
+これにより研究者は生 FASTQ データから 15 種類の出版品質の図と
+HTML レポートまでを、完全オフラインかつクラウド不要の環境で自動化できる。
 
 seq2pipe はオープンソース（MIT ライセンス）として公開されており、
 \texttt{https://github.com/Rhizobium-gits/seq2pipe} からアクセスできる。
