@@ -551,6 +551,24 @@ def _detect_dada2_params(fastq_dir: str) -> dict:
     return params
 
 
+def _find_classifier() -> str:
+    """
+    SILVA 分類器 QZA をよく使われる場所から自動探索する。
+    見つかればパスを返す。見つからなければ空文字を返す。
+    """
+    candidates = [
+        Path.home() / "seq2pipe" / "silva-138-99-nb-classifier.qza",
+        Path.home() / "seq2pipe" / "silva-138-99-classifier.qza",
+        Path.home() / "classifiers" / "silva-138-99-nb-classifier.qza",
+        Path.home() / "silva-138-99-nb-classifier.qza",
+        Path("/usr/local/share/qiime2/silva-138-99-nb-classifier.qza"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # メイン
 # ─────────────────────────────────────────────────────────────────────────────
@@ -577,6 +595,7 @@ def main():
     parser.add_argument("--trunc-len-r",  type=int, default=None, help="DADA2: リバーストランケーション長（デフォルト: 自動検出）")
     parser.add_argument("--threads",      type=int, default=4,    help="スレッド数（デフォルト: 4）")
     parser.add_argument("--sampling-depth", type=int, default=None, help="多様性解析のサンプリング深度（デフォルト: 自動検出）")
+    parser.add_argument("--classifier",   help="SILVA 分類器 QZA のパス（省略時は自動探索）")
     args = parser.parse_args()
 
     _print_banner()
@@ -761,6 +780,23 @@ def main():
             sys.exit(0)
         print()
 
+    # ── SILVA 分類器パスを決定 ────────────────────────────────────────
+    classifier_path = ""
+    if args.classifier:
+        if Path(args.classifier).exists():
+            classifier_path = args.classifier
+        else:
+            print(f"⚠️  指定された分類器が見つかりません: {args.classifier}")
+    if not classifier_path:
+        classifier_path = _find_classifier()
+    if classifier_path:
+        print(f"🔬 SILVA 分類器    : {classifier_path}")
+    else:
+        print("⚠️  SILVA 分類器が見つかりません。分類学的注釈をスキップします。")
+        print("   taxonomy を有効にするには以下を実行してください：")
+        print("   wget -O ~/seq2pipe/silva-138-99-nb-classifier.qza \\")
+        print("     https://data.qiime2.org/classifiers/sklearn-1.4.2/silva/silva-138-99-nb-classifier.qza")
+
     # ── STEP 1: QIIME2 パイプライン実行（既存の実証済みコードを使用）──
     print("─" * 48)
     print("  🚀 STEP 1/2 : QIIME2 パイプライン実行中")
@@ -773,6 +809,7 @@ def main():
         trunc_len_f=trunc_len_f,
         trunc_len_r=trunc_len_r,
         metadata_path=metadata_path,
+        classifier_path=classifier_path,
         n_threads=n_threads,
         sampling_depth=sampling_dep,
         output_dir=str(output_dir),
@@ -830,7 +867,53 @@ def main():
         log_callback=_log,
         install_callback=_install_callback,
     )
+    _report_ctx = {
+        "fastq_dir": fastq_dir,
+        "n_samples": n_samples,
+        "dada2_params": {
+            "trim_left_f": trim_left_f,
+            "trim_left_r": trim_left_r,
+            "trunc_len_f": trunc_len_f,
+            "trunc_len_r": trunc_len_r,
+            "sampling_depth": sampling_dep,
+            "n_threads": n_threads,
+        },
+        "completed_steps": getattr(pipeline_result, "completed_steps", []),
+        "failed_steps": getattr(pipeline_result, "failed_steps", []),
+        "user_prompt": user_prompt,
+    }
+
     _print_result(result)
+
+    # --auto モード: 解析完了後に HTML レポートを自動生成
+    if args.auto and result.success:
+        print()
+        print("─" * 48)
+        print("  📄 STEP 3/3 : レポート自動生成")
+        print("─" * 48)
+        try:
+            report_path = generate_html_report(
+                fig_dir=str(fig_dir),
+                output_dir=pipeline_result.output_dir,
+                fastq_dir=fastq_dir,
+                n_samples=n_samples,
+                dada2_params=_report_ctx["dada2_params"],
+                completed_steps=_report_ctx["completed_steps"],
+                failed_steps=_report_ctx["failed_steps"],
+                export_files=export_files,
+                user_prompt=user_prompt,
+                model=model,
+                log_callback=_log,
+            )
+            print(f"✅ HTML レポート生成完了: {report_path}")
+            try:
+                import subprocess as _sp
+                _sp.Popen(["open", report_path])
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"⚠️  レポート生成失敗（解析結果は保存済み）: {e}")
+
     # 振り返り・修正モード（--auto でなければ起動）
     if not args.auto and result.success:
         _run_refinement_session(
@@ -840,21 +923,7 @@ def main():
             fig_dir=fig_dir,
             model=model,
             metadata_path=metadata_path,
-            report_context={
-                "fastq_dir": fastq_dir,
-                "n_samples": n_samples,
-                "dada2_params": {
-                    "trim_left_f": trim_left_f,
-                    "trim_left_r": trim_left_r,
-                    "trunc_len_f": trunc_len_f,
-                    "trunc_len_r": trunc_len_r,
-                    "sampling_depth": sampling_dep,
-                    "n_threads": n_threads,
-                },
-                "completed_steps": getattr(pipeline_result, "completed_steps", []),
-                "failed_steps": getattr(pipeline_result, "failed_steps", []),
-                "user_prompt": user_prompt,
-            },
+            report_context=_report_ctx,
         )
 
 

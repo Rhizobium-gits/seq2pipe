@@ -2393,9 +2393,9 @@ if asv_table is not None and taxonomy is not None:
     ax.legend(title='Genus', bbox_to_anchor=(1.01, 1), loc='upper left', fontsize=font_size - 2)
     ax.set_ylim(0, 100)
     plt.tight_layout()
-    plt.savefig(fig_dir / 'genus_composition_stacked.pdf', bbox_inches='tight')
+    plt.savefig(fig_dir / 'genus_composition_stacked.png', dpi=DPI, bbox_inches='tight')
     plt.close()
-    print('✅ 属レベル積み上げ棒グラフ: genus_composition_stacked.pdf')
+    print('✅ 属レベル積み上げ棒グラフ: genus_composition_stacked.png')
 
     # 門レベルも集計・保存
     phylum_counts = merged.groupby('Phylum')[sample_cols].sum()
@@ -2450,9 +2450,9 @@ if stats_files:
             axes[1].axhline(70, ls='--', color='tomato', lw=1, label='70%基準線')
             axes[1].legend()
             plt.tight_layout()
-            plt.savefig(fig_dir / 'dada2_stats.pdf', bbox_inches='tight')
+            plt.savefig(fig_dir / 'dada2_stats.png', dpi=DPI, bbox_inches='tight')
             plt.close()
-            print('✅ DADA2統計グラフ: dada2_stats.pdf')
+            print('✅ DADA2統計グラフ: dada2_stats.png')
     except Exception as e:
         warnings_list.append(f'DADA2統計グラフ生成失敗: {{e}}')
 
@@ -2494,9 +2494,9 @@ if alpha_data:
         ax.set_ylabel(metric_labels.get(col, col), fontsize=font_size)
         ax.set_title(metric_labels.get(col, col), fontsize=font_size + 1, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(fig_dir / 'alpha_diversity.pdf', bbox_inches='tight')
+    plt.savefig(fig_dir / 'alpha_diversity.png', dpi=DPI, bbox_inches='tight')
     plt.close()
-    print('✅ α多様性グラフ: alpha_diversity.pdf')
+    print('✅ α多様性グラフ: alpha_diversity.png')
 
 # ══════════════════════════════════════════════════════════════════════
 # 6. β多様性 PCoA（距離行列から numpy で計算）
@@ -2542,9 +2542,9 @@ if beta_dir.exists():
             title = matrix_dir.name.replace('_distance_matrix', '').replace('_', ' ').title()
             ax.set_title(f'PCoA – {{title}}', fontsize=font_size + 1, fontweight='bold')
             plt.tight_layout()
-            plt.savefig(fig_dir / f'pcoa_{{matrix_dir.name}}.pdf', bbox_inches='tight')
+            plt.savefig(fig_dir / f'pcoa_{{matrix_dir.name}}.png', dpi=DPI, bbox_inches='tight')
             plt.close()
-            print(f'✅ PCoA: pcoa_{{matrix_dir.name}}.pdf')
+            print(f'✅ PCoA: pcoa_{{matrix_dir.name}}.png')
         except Exception as e:
             warnings_list.append(f'PCoA失敗 ({{matrix_dir.name}}): {{e}}')
 
@@ -2554,7 +2554,7 @@ if beta_dir.exists():
 print('\\n' + '='*60)
 print('✅ Python 解析・可視化 完了')
 print(f'📁 出力先: {{fig_dir}}')
-for f in sorted(fig_dir.glob('*.pdf')):
+for f in sorted(fig_dir.glob('*.png')):
     print(f'  📊 {{f.name}}')
 for f in sorted(fig_dir.glob('*.csv')):
     print(f'  📋 {{f.name}}')

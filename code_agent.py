@@ -131,14 +131,13 @@ def _build_prompt(
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
         "      import os; os.makedirs(FIGURE_DIR, exist_ok=True)",
-        "3. Save every figure as JPEG — extension MUST be .jpg (NEVER .pdf, .svg, or .png):",
-        "      plt.savefig(os.path.join(FIGURE_DIR, 'name.jpg'), dpi=DPI, bbox_inches='tight',",
-        "                  pil_kwargs={'quality': 92, 'optimize': True})",
+        "3. Save every figure as PNG — extension MUST be .png (NEVER .pdf, .svg, or .jpg):",
+        "      plt.savefig(os.path.join(FIGURE_DIR, 'name.png'), dpi=DPI, bbox_inches='tight')",
         "      plt.close()",
         "4. All axis labels, titles, legend entries in English.",
         "5. Use try/except around each section so one failure does not stop the whole script.",
         "6. Output ONLY the Python code, wrapped in ```python ... ```.",
-        "7. Do NOT use plt.show(). Do NOT use .pdf or .svg extensions.",
+        "7. Do NOT use plt.show(). Do NOT use .pdf, .svg, or .jpg extensions.",
         "",
         "## FIGURE STYLE — modern, publication-quality",
         "Use this boilerplate at the TOP of every script (after imports):",
@@ -335,41 +334,40 @@ def _ensure_required_imports(code: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF/SVG → JPEG 自動変換
+# PDF/SVG → PNG 自動変換
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _pdf_to_jpg(pdf_path: Path) -> Optional[Path]:
+def _pdf_to_png(pdf_path: Path) -> Optional[Path]:
     """
-    PDF または SVG を JPEG に変換して元ファイルを削除する。
+    PDF または SVG を PNG に変換して元ファイルを削除する。
     macOS 組み込みの sips コマンドを使用（poppler 不要）。
     """
-    jpg_path = pdf_path.with_suffix(".jpg")
+    png_path = pdf_path.with_suffix(".png")
     try:
         result = subprocess.run(
             [
-                "sips", "-s", "format", "jpeg",
-                "-s", "formatOptions", "90",
-                str(pdf_path), "--out", str(jpg_path),
+                "sips", "-s", "format", "png",
+                str(pdf_path), "--out", str(png_path),
             ],
             capture_output=True,
             timeout=30,
         )
-        if result.returncode == 0 and jpg_path.exists():
+        if result.returncode == 0 and png_path.exists():
             pdf_path.unlink(missing_ok=True)
-            return jpg_path
+            return png_path
     except Exception:
         pass
     return None
 
 
 def _convert_new_figs(new_figs: list) -> list:
-    """new_figs 内の PDF/SVG を JPEG に変換して返す。"""
+    """new_figs 内の PDF/SVG を PNG に変換して返す。"""
     converted = []
     for f in new_figs:
         p = Path(f)
         if p.suffix.lower() in (".pdf", ".svg"):
-            jpg = _pdf_to_jpg(p)
-            converted.append(str(jpg) if jpg else f)
+            png = _pdf_to_png(p)
+            converted.append(str(png) if png else f)
         else:
             converted.append(f)
     return converted
@@ -836,10 +834,9 @@ def _build_auto_initial_prompt(
         f"      FIGURE_DIR = r'{figure_dir}'",
         f"      DPI = {dpi}",
         "      import os; os.makedirs(FIGURE_DIR, exist_ok=True)",
-        "3. Include the round number in every filename (JPEG format): e.g. 'round1_summary.jpg'",
-        "4. Save and close every figure as JPEG (NOT png):",
-        "      plt.savefig(os.path.join(FIGURE_DIR, 'roundN_name.jpg'), dpi=DPI, bbox_inches='tight',",
-        "                  pil_kwargs={'quality': 92, 'optimize': True})",
+        "3. Include the round number in every filename (PNG format): e.g. 'round1_summary.png'",
+        "4. Save and close every figure as PNG (NOT jpg):",
+        "      plt.savefig(os.path.join(FIGURE_DIR, 'roundN_name.png'), dpi=DPI, bbox_inches='tight')",
         "      plt.close()",
         "5. All labels, titles, legend entries in English.",
         "6. try/except around each major section — one failure must not stop other sections.",
