@@ -115,7 +115,7 @@ LLM に依存せず \textbf{15 種類の出版品質 PNG 図を確実に生成} 
 コードエージェントは「NEVER GIVE UP」方針に従い、
 エラーが発生するたびにコードを修正して \texttt{EXIT CODE: 0} になるまで実行を繰り返す。
 自律モード（\texttt{--auto}）では 3 ステップで全解析を完了する:
-STEP 1（QIIME2 パイプライン）→ STEP 2（決定論的解析・15 図）→ STEP 3（HTML レポート）。
+STEP 1（QIIME2 パイプライン）$\to$ STEP 2（決定論的解析・15 図）$\to$ STEP 3（HTML レポート）。
 \texttt{--classifier} オプションにより SILVA 138 分類器を指定すると、
 属・門レベルの分類組成図（fig13〜fig15）も自動生成される。
 解析完了後は \textbf{振り返り・修正モード} が起動し、
@@ -380,15 +380,15 @@ fig13〜fig15（属・門レベルの組成図）も自動的に生成される�
     \midrule
     fig01 & DADA2 デノイジング統計 & pandas, matplotlib \\
     fig02 & シーケンシング深度 & pandas, matplotlib \\
-    fig03 & α 多様性ボックスプロット & pandas, seaborn \\
+    fig03 & $\alpha$ 多様性ボックスプロット & pandas, seaborn \\
     fig04 & Shannon 多様性（サンプル別） & pandas, seaborn \\
     fig05 & PCoA (Bray-Curtis) & sklearn MDS \\
     fig06 & PCoA (Jaccard) & sklearn MDS \\
     fig07 & PCoA (Unweighted UniFrac) & sklearn MDS \\
     fig08 & PCoA (Weighted UniFrac) & sklearn MDS \\
-    fig09 & β 多様性距離ヒートマップ (2$\times$2) & seaborn \\
+    fig09 & $\beta$ 多様性距離ヒートマップ (2$\times$2) & seaborn \\
     fig10 & Top 30 ASV ヒートマップ & seaborn \\
-    fig11 & α 多様性相関 & matplotlib \\
+    fig11 & $\alpha$ 多様性相関 & matplotlib \\
     fig12 & ASV リッチネス vs 深度 & matplotlib \\
     fig13 & 属レベル積み上げ棒グラフ$^*$ & matplotlib \\
     fig14 & 門レベル積み上げ棒グラフ$^*$ & matplotlib \\
@@ -548,11 +548,11 @@ LLM が既存コードを修正して再実行する。
 また、修正セッション中に特定のキーワードが入力されるとレポートが生成される:
 
 \begin{itemize}
-  \item 「レポート」・\texttt{html} など → \texttt{generate\_html\_report()}:
+  \item 「レポート」・\texttt{html} など $\to$ \texttt{generate\_html\_report()}:
     図を base64 で埋め込んだ自己完結型 HTML ファイルを生成する。
     LLM が各図の日本語解釈文と総合サマリーを生成し、
     解析パラメータ表・パイプラインステップを合わせて記録する。
-  \item 「PDF」・\texttt{latex} など → \texttt{generate\_latex\_report()}:
+  \item 「PDF」・\texttt{latex} など $\to$ \texttt{generate\_latex\_report()}:
     \texttt{lualatex}（優先）または \texttt{xelatex} を自動検出してコンパイルする。
     日本語対応には \texttt{luatexja-preset}（lualatex）または
     \texttt{xeCJK} + Hiragino フォント（xelatex）を使用する。
@@ -628,16 +628,16 @@ QIIME2 解析後、\texttt{--auto} モードでは以下の 3 ステップ自動
 
 \begin{enumerate}[leftmargin=2em]
   \item \textbf{STEP 1}: QIIME2 パイプライン（上記 8 ステップ）+ 結果エクスポート
-  \item \textbf{STEP 2}: 決定論的包括解析（\texttt{analysis.py}）→ \textbf{15 種類の PNG 図}を生成:
+  \item \textbf{STEP 2}: 決定論的包括解析（\texttt{analysis.py}）$\to$ \textbf{15 種類の PNG 図}を生成:
     \begin{itemize}
       \item fig01: DADA2 デノイジング統計
       \item fig02: シーケンシング深度
-      \item fig03: α 多様性（Shannon / Faith PD / Observed ASVs）
+      \item fig03: $\alpha$ 多様性（Shannon / Faith PD / Observed ASVs）
       \item fig04: Shannon 多様性（サンプル別）
       \item fig05--08: PCoA（Bray-Curtis / Jaccard / Unweighted UniFrac / Weighted UniFrac）
-      \item fig09: β 多様性距離ヒートマップ（2$\times$2）
+      \item fig09: $\beta$ 多様性距離ヒートマップ（2$\times$2）
       \item fig10: Top 30 ASV ヒートマップ
-      \item fig11: α 多様性相関
+      \item fig11: $\alpha$ 多様性相関
       \item fig12: ASV リッチネス vs 深度
       \item fig13: 属レベル組成（分類器あり時）
       \item fig14: 門レベル組成（分類器あり時）
@@ -716,16 +716,16 @@ merged $\rightarrow$ non-chimeric）におけるリード数の変化を
   \label{fig:dada2}
 \end{figure}
 
-\subsection{α 多様性}
+\subsection{$\alpha$ 多様性}
 
-3 つの α 多様性指標（Shannon エントロピー、Faith's PD、Observed ASVs）を
+3 つの $\alpha$ 多様性指標（Shannon エントロピー、Faith's PD、Observed ASVs）を
 サンプルごとに計算し、ボックスプロットで表示した（図~\ref{fig:alpha}）。
 また、Shannon 多様性のサンプル別ストリッププロットを図~\ref{fig:shannon} に示す。
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.92\textwidth]{../Figure/fig03_alpha_diversity.png}
-  \caption{ヒト便検体 10 サンプルの α 多様性。
+  \caption{ヒト便検体 10 サンプルの $\alpha$ 多様性。
     各パネルは DADA2 デノイジング済みフィーチャーテーブルから算出した
     異なる指標を示す。}
   \label{fig:alpha}
@@ -734,13 +734,13 @@ merged $\rightarrow$ non-chimeric）におけるリード数の変化を
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.85\textwidth]{../Figure/fig04_shannon_per_sample.png}
-  \caption{サンプルごとの Shannon α 多様性ストリッププロット。}
+  \caption{サンプルごとの Shannon $\alpha$ 多様性ストリッププロット。}
   \label{fig:shannon}
 \end{figure}
 
-\subsection{β 多様性}
+\subsection{$\beta$ 多様性}
 
-4 種類の非類似度指標で β 多様性を評価した。
+4 種類の非類似度指標で $\beta$ 多様性を評価した。
 Bray--Curtis PCoA（図~\ref{fig:bc}）と
 Unweighted UniFrac PCoA（図~\ref{fig:unifrac}）は
 scikit-learn MDS（\texttt{n\_components=2, dissimilarity=`precomputed'}）で計算した。
@@ -765,7 +765,7 @@ scikit-learn MDS（\texttt{n\_components=2, dissimilarity=`precomputed'}）で�
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.92\textwidth]{../Figure/fig09_beta_distance_heatmaps.png}
-  \caption{β 多様性距離ヒートマップ（2$\times$2）。
+  \caption{$\beta$ 多様性距離ヒートマップ（2$\times$2）。
     Bray-Curtis・Jaccard・Unweighted UniFrac・Weighted UniFrac の
     4 指標を一覧表示。}
   \label{fig:beta_heatmaps}
@@ -815,7 +815,7 @@ seq2pipe は以下の目標を達成した。
   \item \textbf{SILVA 138 分類器の自動探索（\texttt{--classifier}）}:
     分類学的解析と属・門レベル組成図の自動生成
   \item \textbf{3 ステップ自動化パイプライン}:
-    STEP 1（QIIME2）→ STEP 2（決定論的解析）→ STEP 3（HTML レポート）
+    STEP 1（QIIME2）$\to$ STEP 2（決定論的解析）$\to$ STEP 3（HTML レポート）
   \item \textbf{vibe-local 方式ツール呼び出し型コード生成エージェント}:
     LLM がファイルを先に読んでから Python コードを生成するため、
     盲目的な 1 ショット生成で頻発したフォーマット不一致エラーを根本解消
@@ -826,7 +826,7 @@ seq2pipe は以下の目標を達成した。
   \item 2 つの操作モード: 指定解析（モード 1）・完全自律（モード 2 / \texttt{--auto}）
   \item \textbf{解析後の振り返り・修正モード}:
     自然言語指示で図を対話的に修正・再実行
-  \item \textbf{PDF/SVG → PNG 自動変換（\texttt{sips}）}:
+  \item \textbf{PDF/SVG $\to$ PNG 自動変換（\texttt{sips}）}:
     macOS 内蔵コマンドで追加依存なし
   \item \textbf{メタデータなし多様性解析}:
     \texttt{core-metrics-phylogenetic} 不可時に個別コマンドへフォールバック
@@ -850,7 +850,7 @@ seq2pipe は以下の目標を達成した。
 
 \begin{itemize}
   \item ITS / 18S rRNA など他のマーカー遺伝子への対応
-  \item \texttt{Pillow} を利用した Linux / Windows 向け PDF/SVG → PNG 変換の実装
+  \item \texttt{Pillow} を利用した Linux / Windows 向け PDF/SVG $\to$ PNG 変換の実装
   \item 差次存在量解析（volcano plot）・機械学習（Random Forest）の
     自律タスクへの追加
   \item 統計的検定結果の図への自動アノテーション
