@@ -35,6 +35,7 @@ from code_agent import (
 from pipeline_runner import PipelineConfig, run_pipeline, get_exported_files
 from chat_agent import run_terminal_chat
 from report_generator import generate_html_report, generate_latex_report
+from analysis import run_comprehensive_analysis
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -821,6 +822,25 @@ def main():
         sys.exit(1)
 
     print(f"\n✅ パイプライン完了 → {pipeline_result.output_dir}")
+    print()
+
+    # ── STEP 1.5: 包括的解析（LLM 不要・確定的に図を生成）──────────────
+    print("─" * 48)
+    print("  📊 STEP 1.5 : 包括的解析・可視化（確定的処理）")
+    print("─" * 48)
+    try:
+        analysis_figs = run_comprehensive_analysis(
+            export_dir=pipeline_result.export_dir,
+            figure_dir=str(fig_dir),
+            session_dir=pipeline_result.output_dir,
+            log_callback=_log,
+        )
+        if analysis_figs:
+            print(f"\n✅ 包括的解析完了: {len(analysis_figs)} 件の図を生成")
+        else:
+            print("\n⚠️  包括的解析: 図が生成されませんでした")
+    except Exception as e:
+        print(f"\n⚠️  包括的解析でエラー（パイプラインは継続）: {e}")
     print()
 
     # ── モード 3: パイプライン完了後に対話チャットへ移行 ──────────────
