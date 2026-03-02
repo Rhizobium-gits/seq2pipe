@@ -35,7 +35,8 @@
 - **2 つの操作モード**: チャット（自然言語でやりたい解析を指定）・自律エージェント（AI が自律的に全解析を設計・実行）
 - **3 ステップ自動解析パイプライン（`--auto` モード）**:
   - **STEP 1**: QIIME2 パイプライン（DADA2 デノイジング → 系統樹 → 多様性解析 → 分類学的解析）
-  - **STEP 2**: 決定論的包括解析（`analysis.py`）— LLM に依存せず **15 種類の出版品質 PNG 図を確実に生成**
+  - **STEP 1.5**: 決定論的包括解析（`analysis.py`）— LLM に依存せず **29 種類の出版品質 PNG 図を確実に生成**
+  - **STEP 2**: LLM 適応型自律エージェント — STEP 1.5 の解析サマリーをもとにデータ適応型の応用解析を自動実行
   - **STEP 3**: HTML レポート自動生成
 - **ツール呼び出し型コード生成エージェント（vibe-local 方式）**: LLM がまず `read_file` でデータの列名・形式を確認してからコードを生成するため精度が高く、エラーが出ても `NEVER GIVE UP` で自動修正を繰り返す
 - **解析後の振り返り・修正モード**: 生成された図に対して「色を変えて」「凡例を外に出して」など自然言語で修正を指示し、LLM が自動でコードを修正・再実行
@@ -52,7 +53,7 @@
 ## デモ出力 — 実際の解析結果
 
 ヒト便検体 10 サンプル（TEST01〜TEST10、凍結乾燥便、Illumina MiSeq ペアエンド V3-V4）を seq2pipe で解析した実際の出力です。
-すべて `analysis.py`（STEP 2）が決定論的に自動生成した PNG 図です。
+すべて `analysis.py`（STEP 1.5）が決定論的に自動生成した PNG 図です。
 
 ### DADA2 デノイジング統計
 
@@ -86,7 +87,31 @@
 
 ![Genus Heatmap](Figure/fig15_genus_heatmap.png)
 
-> 上記を含む全 15 図は `--auto` モードで自動生成され、HTML レポートにまとめられます。
+### 科レベル積み上げ棒グラフ
+
+![Family Composition](Figure/fig21_family_composition.png)
+
+### ラレファクションカーブ
+
+![Rarefaction](Figure/fig16_rarefaction_curves.png)
+
+### NMDS（Bray-Curtis）
+
+![NMDS](Figure/fig17_nmds_braycurtis.png)
+
+### 属間共起ネットワーク
+
+![Co-occurrence Network](Figure/fig20_cooccurrence_network.png)
+
+### コアマイクロバイオーム
+
+![Core Microbiome](Figure/fig22_core_microbiome.png)
+
+### Simpson 多様性 + Pielou 均等度
+
+![Simpson Pielou](Figure/fig28_simpson_pielou.png)
+
+> 上記を含む全 29 図は `--auto` モードで自動生成され、HTML レポートにまとめられます。
 
 ---
 
@@ -216,29 +241,41 @@ cd ~/seq2pipe
 ```
 
 ```
-  🚀 STEP 1/3: QIIME2 パイプライン実行中
+  🚀 STEP 1: QIIME2 パイプライン実行中
     -> dada2 denoise-paired, phylogeny, diversity, taxonomy...
   ✅ パイプライン完了
 
-  📊 STEP 2/3: 包括的解析（analysis.py）
+  📊 STEP 1.5: 包括的解析（analysis.py — 29 図）
     fig01 DADA2 デノイジング統計        ✅
     fig02 シーケンシング深度            ✅
-    fig03 α多様性（Shannon/Faith PD/Observed ASVs）  ✅
-    fig04 Shannon 多様性（サンプル別）     ✅
-    fig05 PCoA Bray-Curtis              ✅
-    fig06 PCoA Jaccard                  ✅
-    fig07 PCoA Unweighted UniFrac       ✅
-    fig08 PCoA Weighted UniFrac         ✅
+    fig03-04 α多様性                   ✅
+    fig05-08 PCoA（4 指標 + 分散説明率 %）  ✅
     fig09 β多様性距離ヒートマップ        ✅
-    fig10 Top 30 ASV ヒートマップ        ✅
-    fig11 α多様性相関                   ✅
-    fig12 ASV リッチネス vs 深度         ✅
-    fig13 属レベル組成                   ✅
-    fig14 門レベル組成                   ✅
-    fig15 属レベルヒートマップ            ✅
-  ✅ 15 図を生成しました
+    fig10-12 ASV・リッチネス解析         ✅
+    fig13-15 分類組成（属・門）          ✅
+    fig16 ラレファクションカーブ          ✅
+    fig17 NMDS                         ✅
+    fig18 Rank-Abundance               ✅
+    fig19 分類学的 Alluvial             ✅
+    fig20 共起ネットワーク               ✅
+    fig21 科レベル組成                   ✅
+    fig22 コアマイクロバイオーム          ✅
+    fig23 ボルケーノプロット（BH FDR）    ✅
+    fig24 サンプルデンドログラム          ✅
+    fig25 属間相関クラスターマップ        ✅
+    fig26-27 綱・目レベル組成            ✅
+    fig28 Simpson + Pielou 均等度       ✅
+    fig29 ASV 共有パターン              ✅
+  📋 解析サマリー: 5 個のパターンを検出
+  ✅ 29 図を生成しました
 
-  📄 STEP 3/3: HTML レポート生成
+  🤖 STEP 2: 適応型自律エージェント
+    解析サマリーをもとにデータ適応型の応用解析を自動実行
+    adaptive_01_outlier_investigation.png  ✅
+    adaptive_02_high_variance_genera.png   ✅
+    ...
+
+  📄 STEP 3: HTML レポート生成
   ✅ レポート完了
 ```
 
@@ -290,21 +327,10 @@ SILVA 138 Naive Bayes 分類器を指定して分類学的解析を有効化で�
 │   ├── beta/<行列>/distance-matrix.tsv
 │   └── denoising_stats/stats.tsv
 ├── figures/                  ← すべて PNG 形式で保存
-│   ├── fig01_dada2_stats.png
-│   ├── fig02_sequencing_depth.png
-│   ├── fig03_alpha_diversity.png
-│   ├── fig04_shannon_per_sample.png
-│   ├── fig05_pcoa_braycurtis.png
-│   ├── fig06_pcoa_jaccard.png
-│   ├── fig07_pcoa_unweighted_unifrac.png
-│   ├── fig08_pcoa_weighted_unifrac.png
-│   ├── fig09_beta_distance_heatmaps.png
-│   ├── fig10_top30_asv_heatmap.png
-│   ├── fig11_alpha_correlations.png
-│   ├── fig12_richness_vs_depth.png
-│   ├── fig13_genus_composition.png      ← 分類器あり
-│   ├── fig14_phylum_composition.png     ← 分類器あり
-│   └── fig15_genus_heatmap.png          ← 分類器あり
+│   ├── fig01_dada2_stats.png 〜 fig15_genus_heatmap.png  ← 基本解析 15 図
+│   ├── fig16_rarefaction_curves.png 〜 fig25_genus_correlation.png  ← 拡張解析 10 図
+│   ├── fig26_class_composition.png 〜 fig29_asv_overlap.png  ← 網羅的解析 4 図
+│   └── adaptive_01_*.png 〜            ← LLM 適応型エージェントが生成
 ├── report.html               ← HTML レポート（自動生成）
 ├── report.tex                ← LaTeX ソース（「PDF」で生成）
 └── report.pdf                ← PDF レポート（lualatex/xelatex でコンパイル）
@@ -325,17 +351,17 @@ SILVA 138 Naive Bayes 分類器を指定して分類学的解析を有効化で�
 | α・β 多様性（メタデータなし） | `qiime diversity alpha` / `qiime diversity beta` など個別実行 |
 | 差次解析 ANCOM-BC | `qiime composition ancombc` |
 
-### 決定論的包括解析（STEP 2 — `analysis.py`、LLM 不要）
+### 決定論的包括解析（STEP 1.5 — `analysis.py`、LLM 不要・29 図）
 | 図番号 | 解析内容 | パッケージ |
 |---|---|---|
 | fig01 | DADA2 デノイジング統計 | pandas, matplotlib |
 | fig02 | シーケンシング深度（サンプル別） | pandas, matplotlib |
 | fig03 | α 多様性ボックスプロット（Shannon / Faith PD / Observed ASVs） | pandas, seaborn |
 | fig04 | Shannon 多様性（サンプル別ストリッププロット） | pandas, seaborn |
-| fig05 | Bray-Curtis PCoA | pandas, sklearn (MDS) |
-| fig06 | Jaccard PCoA | pandas, sklearn (MDS) |
-| fig07 | Unweighted UniFrac PCoA | pandas, sklearn (MDS) |
-| fig08 | Weighted UniFrac PCoA | pandas, sklearn (MDS) |
+| fig05 | Bray-Curtis PCoA（分散説明率 % 付き） | sklearn MDS, numpy |
+| fig06 | Jaccard PCoA（分散説明率 % 付き） | sklearn MDS, numpy |
+| fig07 | Unweighted UniFrac PCoA（分散説明率 % 付き） | sklearn MDS, numpy |
+| fig08 | Weighted UniFrac PCoA（分散説明率 % 付き） | sklearn MDS, numpy |
 | fig09 | β 多様性距離ヒートマップ（4 指標 2×2） | pandas, seaborn |
 | fig10 | Top 30 ASV ヒートマップ | pandas, seaborn |
 | fig11 | α 多様性相関プロット | pandas, matplotlib |
@@ -343,6 +369,20 @@ SILVA 138 Naive Bayes 分類器を指定して分類学的解析を有効化で�
 | fig13 | 属レベル積み上げ棒グラフ（分類器あり） | pandas, matplotlib |
 | fig14 | 門レベル積み上げ棒グラフ（分類器あり） | pandas, matplotlib |
 | fig15 | 属レベルヒートマップ（分類器あり） | pandas, seaborn |
+| fig16 | ラレファクションカーブ | pandas, numpy |
+| fig17 | NMDS（Bray-Curtis） | sklearn MDS |
+| fig18 | Rank-Abundance カーブ | pandas, matplotlib |
+| fig19 | 分類学的 Alluvial プロット（門→綱→目） | matplotlib (Bézier) |
+| fig20 | 属間共起ネットワーク | networkx, matplotlib |
+| fig21 | 科レベル積み上げ棒グラフ | pandas, matplotlib |
+| fig22 | コアマイクロバイオーム（出現頻度 vs 存在量） | pandas, matplotlib |
+| fig23 | 差次的存在量ボルケーノプロット（BH FDR 補正） | scipy, matplotlib |
+| fig24 | サンプルデンドログラム（UPGMA） | scipy hierarchy |
+| fig25 | 属間 Spearman 相関クラスターマップ | scipy, seaborn |
+| fig26 | 綱レベル積み上げ棒グラフ | pandas, matplotlib |
+| fig27 | 目レベル積み上げ棒グラフ | pandas, matplotlib |
+| fig28 | Simpson 多様性 + Pielou 均等度 | pandas, matplotlib |
+| fig29 | サンプル間 ASV 共有パターン（UpSet 風） | itertools, matplotlib |
 
 ### Python ダウンストリーム解析（LLM コード生成エージェント — モード 1）
 | 解析手法 | パッケージ |
@@ -420,14 +460,18 @@ QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
   stdout → _Tee でログ収集                          (11 ツール、STEP 0〜8)
         |
         v
-[ analysis.py / run_comprehensive_analysis() ]     ← STEP 2（決定論的）
-  LLM 不要・15 種類の PNG 図を確実に生成
+[ analysis.py / run_comprehensive_analysis() ]     ← STEP 1.5（決定論的）
+  LLM 不要・29 種類の PNG 図を確実に生成
   ├── fig01-fig12: 基本解析（DADA2統計・α/β多様性・ASV・相関）
-  └── fig13-fig15: 分類組成（分類器あり時のみ）
+  ├── fig13-fig15: 分類組成（分類器あり時のみ）
+  ├── fig16-fig25: 拡張解析（rarefaction・NMDS・alluvial・network 等）
+  ├── fig26-fig29: 網羅的解析（綱・目組成・Simpson/Pielou・ASV共有）
+  └── generate_analysis_summary() → 解析サマリー dict を STEP 2 へ
         |
         v
-[ code_agent.py / run_coding_agent() ]             ← モード 1 で使用
+[ code_agent.py / run_coding_agent() ]             ← STEP 2（適応型自律）
   LLM コード生成エージェント（vibe-local 方式）
+  解析サマリーをもとにデータ適応型の応用図を自動生成
   ├── list_files / read_file / write_file / run_python / install_package
   ├── _ensure_required_imports()  plt/pd の自動補完
   ├── _convert_new_figs()         PDF/SVG → PNG 自動変換（sips）
@@ -544,18 +588,13 @@ seq2pipe/
 ├── cli.py              # ターミナル エントリーポイント（虹色バナー・モード選択）
 ├── qiime2_agent.py     # QIIME2 パイプライン生成エージェント（11 ツール）
 ├── pipeline_runner.py  # QIIME2 実行ラッパー + 結果エクスポート（_Tee ログ収集）
-├── analysis.py         # 決定論的包括解析モジュール（15 図、LLM 不要）
+├── analysis.py         # 決定論的包括解析モジュール（29 図、LLM 不要）
 ├── code_agent.py       # LLM コード生成エージェント（vibe-local 方式）
 │                       #   └── run_refinement_loop()  振り返り・修正ループ
 ├── report_generator.py # HTML / LaTeX+PDF レポート生成
 ├── chat_agent.py       # 自律解析セッション管理（レガシー）
-├── Figure/             # デモ出力図（実データ解析結果 15 図）
-│   ├── fig01_dada2_stats.png
-│   ├── fig02_sequencing_depth.png
-│   ├── fig03_alpha_diversity.png
-│   ├── ...
-│   ├── fig14_phylum_composition.png
-│   └── fig15_genus_heatmap.png
+├── Figure/             # デモ出力図（実データ解析結果 29 図）
+│   ├── fig01_dada2_stats.png 〜 fig29_asv_overlap.png
 ├── Paper/              # 技術レポート（TeX / PDF）
 │   ├── seq2pipe_ja.tex / seq2pipe_ja.pdf
 │   └── seq2pipe_en.tex / seq2pipe_en.pdf
@@ -635,7 +674,8 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - **Two operation modes**: Chat (specify analysis in natural language) and Autonomous agent (AI designs and runs all analyses)
 - **3-step automated analysis pipeline (`--auto` mode)**:
   - **STEP 1**: QIIME2 pipeline (DADA2 denoising, phylogeny, diversity, taxonomy)
-  - **STEP 2**: Deterministic comprehensive analysis (`analysis.py`) — **15 publication-quality PNG figures generated reliably without LLM dependency**
+  - **STEP 1.5**: Deterministic comprehensive analysis (`analysis.py`) — **29 publication-quality PNG figures generated reliably without LLM dependency**
+  - **STEP 2**: Adaptive autonomous agent — data-driven follow-up analyses based on STEP 1.5 summary
   - **STEP 3**: Automatic HTML report generation
 - **Tool-calling code generation agent (vibe-local style)**: LLM first calls `read_file` to understand column names and data format before writing code — far fewer format errors; if an error occurs, `NEVER GIVE UP` — it rewrites and retries until `EXIT CODE: 0`
 - **Post-analysis refinement mode**: After analysis completes, instruct the LLM in natural language to refine figures ("change colors", "move legend outside") — code is automatically rewritten and re-executed
@@ -652,7 +692,7 @@ Everything runs **on your machine**. No cloud, no paid API, no internet required
 ## Demo Output — Real Analysis Results
 
 Actual output from seq2pipe on 10 human stool samples (TEST01-TEST10, freeze-dried, Illumina MiSeq paired-end V3-V4).
-All figures were deterministically generated by `analysis.py` (STEP 2) as PNG.
+All figures were deterministically generated by `analysis.py` (STEP 1.5) as PNG.
 
 ### DADA2 Denoising Statistics
 
@@ -686,7 +726,31 @@ All figures were deterministically generated by `analysis.py` (STEP 2) as PNG.
 
 ![Genus Heatmap](Figure/fig15_genus_heatmap.png)
 
-> All 15 figures above are auto-generated in `--auto` mode and compiled into an HTML report.
+### Family-Level Stacked Bar
+
+![Family Composition](Figure/fig21_family_composition.png)
+
+### Rarefaction Curves
+
+![Rarefaction](Figure/fig16_rarefaction_curves.png)
+
+### NMDS (Bray-Curtis)
+
+![NMDS](Figure/fig17_nmds_braycurtis.png)
+
+### Co-occurrence Network
+
+![Co-occurrence Network](Figure/fig20_cooccurrence_network.png)
+
+### Core Microbiome
+
+![Core Microbiome](Figure/fig22_core_microbiome.png)
+
+### Simpson Diversity + Pielou Evenness
+
+![Simpson Pielou](Figure/fig28_simpson_pielou.png)
+
+> All 29 figures above are auto-generated in `--auto` mode and compiled into an HTML report.
 
 ---
 
@@ -813,7 +877,7 @@ cd ~/seq2pipe
 ./launch.sh --fastq-dir ~/input --auto
 ```
 
-Runs the full QIIME2 pipeline + deterministic analysis (15 figures) + HTML report automatically.
+Runs the full QIIME2 pipeline + deterministic analysis (29 figures) + adaptive LLM agent + HTML report automatically.
 
 ### Taxonomic analysis (`--classifier`)
 
@@ -841,21 +905,10 @@ When a classifier is detected, QIIME2 performs taxonomic classification, and
 │   ├── beta/<matrix>/distance-matrix.tsv
 │   └── denoising_stats/stats.tsv
 ├── figures/                   ← all saved as PNG
-│   ├── fig01_dada2_stats.png
-│   ├── fig02_sequencing_depth.png
-│   ├── fig03_alpha_diversity.png
-│   ├── fig04_shannon_per_sample.png
-│   ├── fig05_pcoa_braycurtis.png
-│   ├── fig06_pcoa_jaccard.png
-│   ├── fig07_pcoa_unweighted_unifrac.png
-│   ├── fig08_pcoa_weighted_unifrac.png
-│   ├── fig09_beta_distance_heatmaps.png
-│   ├── fig10_top30_asv_heatmap.png
-│   ├── fig11_alpha_correlations.png
-│   ├── fig12_richness_vs_depth.png
-│   ├── fig13_genus_composition.png      ← with classifier
-│   ├── fig14_phylum_composition.png     ← with classifier
-│   └── fig15_genus_heatmap.png          ← with classifier
+│   ├── fig01_dada2_stats.png ... fig15_genus_heatmap.png  ← core 15 figures
+│   ├── fig16_rarefaction_curves.png ... fig25_genus_correlation.png  ← extended 10
+│   ├── fig26_class_composition.png ... fig29_asv_overlap.png  ← exhaustive 4
+│   └── adaptive_01_*.png ...            ← LLM adaptive agent output
 ├── report.html                ← HTML report (auto-generated)
 ├── report.tex                 ← LaTeX source (type "PDF")
 └── report.pdf                 ← PDF report (lualatex/xelatex compiled)
@@ -876,17 +929,17 @@ When a classifier is detected, QIIME2 performs taxonomic classification, and
 | Alpha & beta diversity (without metadata) | `qiime diversity alpha` / `qiime diversity beta` (individual) |
 | Differential abundance ANCOM-BC | `qiime composition ancombc` |
 
-### Deterministic comprehensive analysis (STEP 2 — `analysis.py`, no LLM required)
+### Deterministic comprehensive analysis (STEP 1.5 — `analysis.py`, no LLM required, 29 figures)
 | Figure | Analysis | Packages |
 |---|---|---|
 | fig01 | DADA2 denoising statistics | pandas, matplotlib |
 | fig02 | Sequencing depth per sample | pandas, matplotlib |
 | fig03 | Alpha diversity boxplots (Shannon / Faith PD / Observed ASVs) | pandas, seaborn |
 | fig04 | Shannon diversity per sample (strip plot) | pandas, seaborn |
-| fig05 | Bray-Curtis PCoA | pandas, sklearn (MDS) |
-| fig06 | Jaccard PCoA | pandas, sklearn (MDS) |
-| fig07 | Unweighted UniFrac PCoA | pandas, sklearn (MDS) |
-| fig08 | Weighted UniFrac PCoA | pandas, sklearn (MDS) |
+| fig05 | Bray-Curtis PCoA (with variance explained %) | sklearn MDS, numpy |
+| fig06 | Jaccard PCoA (with variance explained %) | sklearn MDS, numpy |
+| fig07 | Unweighted UniFrac PCoA (with variance explained %) | sklearn MDS, numpy |
+| fig08 | Weighted UniFrac PCoA (with variance explained %) | sklearn MDS, numpy |
 | fig09 | Beta diversity distance heatmaps (4 metrics, 2x2) | pandas, seaborn |
 | fig10 | Top 30 ASV heatmap | pandas, seaborn |
 | fig11 | Alpha diversity correlation plots | pandas, matplotlib |
@@ -894,6 +947,20 @@ When a classifier is detected, QIIME2 performs taxonomic classification, and
 | fig13 | Genus-level stacked bar (with classifier) | pandas, matplotlib |
 | fig14 | Phylum-level stacked bar (with classifier) | pandas, matplotlib |
 | fig15 | Genus-level heatmap (with classifier) | pandas, seaborn |
+| fig16 | Rarefaction curves | pandas, numpy |
+| fig17 | NMDS (Bray-Curtis) | sklearn MDS |
+| fig18 | Rank-Abundance curve | pandas, matplotlib |
+| fig19 | Taxonomic alluvial plot (Phylum→Class→Order) | matplotlib (Bézier) |
+| fig20 | Genus co-occurrence network | networkx, matplotlib |
+| fig21 | Family-level stacked bar | pandas, matplotlib |
+| fig22 | Core microbiome (prevalence vs abundance) | pandas, matplotlib |
+| fig23 | Differential abundance volcano plot (BH FDR) | scipy, matplotlib |
+| fig24 | Sample dendrogram (UPGMA) | scipy hierarchy |
+| fig25 | Genus Spearman correlation clustermap | scipy, seaborn |
+| fig26 | Class-level stacked bar | pandas, matplotlib |
+| fig27 | Order-level stacked bar | pandas, matplotlib |
+| fig28 | Simpson diversity + Pielou evenness | pandas, matplotlib |
+| fig29 | ASV overlap pattern (UpSet-style) | itertools, matplotlib |
 
 ### Python downstream (LLM code agent — Mode 1)
 | Analysis | Packages |
@@ -947,14 +1014,18 @@ You
   stdout captured by _Tee logger                    (11 tools, STEP 0-8)
         |
         v
-[ analysis.py / run_comprehensive_analysis() ]     ← STEP 2 (deterministic)
-  No LLM dependency — 15 PNG figures reliably generated
+[ analysis.py / run_comprehensive_analysis() ]     ← STEP 1.5 (deterministic)
+  No LLM dependency — 29 PNG figures reliably generated
   ├── fig01-fig12: Core analysis (DADA2 stats, alpha/beta, ASV, correlation)
-  └── fig13-fig15: Taxonomy (when classifier is available)
+  ├── fig13-fig15: Taxonomy (when classifier is available)
+  ├── fig16-fig25: Extended (rarefaction, NMDS, alluvial, network, etc.)
+  ├── fig26-fig29: Exhaustive (class/order composition, Simpson/Pielou, ASV overlap)
+  └── generate_analysis_summary() → structured summary dict → STEP 2
         |
         v
-[ code_agent.py / run_coding_agent() ]             ← Used in Mode 1
+[ code_agent.py / run_coding_agent() ]             ← STEP 2 (adaptive autonomous)
   LLM code generation agent (vibe-local style)
+  Generates data-adaptive follow-up figures based on analysis summary
   ├── list_files / read_file / write_file / run_python / install_package
   ├── _convert_new_figs()    PDF/SVG → PNG auto-conversion (sips)
   ├── NEVER GIVE UP: exit ≠ 0 → rewrite → retry
@@ -1063,18 +1134,13 @@ seq2pipe/
 ├── cli.py              # Terminal entry point (rainbow banner / mode selection)
 ├── qiime2_agent.py     # QIIME2 pipeline generation agent (11 tools)
 ├── pipeline_runner.py  # QIIME2 execution wrapper + result export (_Tee logger)
-├── analysis.py         # Deterministic comprehensive analysis module (15 figures, no LLM)
+├── analysis.py         # Deterministic comprehensive analysis module (29 figures, no LLM)
 ├── code_agent.py       # LLM code generation agent (vibe-local style)
 │                       #   └── run_refinement_loop()  post-analysis refinement
 ├── report_generator.py # HTML and LaTeX/PDF report generation
 ├── chat_agent.py       # Autonomous analysis session (legacy)
-├── Figure/             # Demo output figures (real data analysis results, 15 figures)
-│   ├── fig01_dada2_stats.png
-│   ├── fig02_sequencing_depth.png
-│   ├── fig03_alpha_diversity.png
-│   ├── ...
-│   ├── fig14_phylum_composition.png
-│   └── fig15_genus_heatmap.png
+├── Figure/             # Demo output figures (real data analysis results, 29 figures)
+│   ├── fig01_dada2_stats.png ... fig29_asv_overlap.png
 ├── Paper/              # Technical report (TeX / PDF)
 │   ├── seq2pipe_ja.tex / seq2pipe_ja.pdf
 │   └── seq2pipe_en.tex / seq2pipe_en.pdf

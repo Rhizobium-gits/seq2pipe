@@ -68,7 +68,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small seq2pipe Technical Report}
-\fancyhead[R]{\small February 2026}
+\fancyhead[R]{\small March 2026}
 \fancyfoot[C]{\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 
@@ -89,7 +89,7 @@
   {\large A Local LLM-Powered AI Agent for Automated QIIME2 Pipeline Generation}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small February 28, 2026}
+  {\small March 2, 2026}
 \end{center}
 
 \vspace{4mm}
@@ -105,15 +105,19 @@ Given raw FASTQ sequencing data, seq2pipe automatically inspects
 the data structure, designs an appropriate QIIME2 analysis pipeline,
 generates ready-to-execute shell scripts, and then invokes a
 \textbf{deterministic comprehensive analysis module} (\texttt{analysis.py})
-that generates \textbf{15 publication-quality PNG figures without any LLM dependency}.
+that generates \textbf{29 publication-quality PNG figures without any LLM dependency}
+--- including core diversity analyses (fig01--12), taxonomy compositions (fig13--15),
+extended ecological analyses (fig16--25), and exhaustive community-level views (fig26--29).
 Additionally, a \textbf{tool-calling code-generation agent} (\texttt{code\_agent.py})
 reads actual exported file contents before writing Python code ---
 eliminating format-mismatch errors common in blind one-shot generation.
 The code agent follows a ``NEVER GIVE UP'' policy: on any Python error
 it rewrites and retries until \texttt{EXIT CODE: 0}.
-In autonomous mode (\texttt{--auto}), the system completes all analysis in 3 steps:
-STEP~1 (QIIME2 pipeline) $\to$ STEP~2 (deterministic analysis, 15 figures) $\to$
-STEP~3 (HTML report).
+In autonomous mode (\texttt{--auto}), the system completes all analysis in 4 steps:
+STEP~1 (QIIME2 pipeline) $\to$ STEP~1.5 (deterministic analysis, 29 figures) $\to$
+STEP~2 (adaptive autonomous agent) $\to$ STEP~3 (HTML report).
+An \textbf{adaptive autonomous mode} allows the agent to dynamically select
+and execute additional analyses based on the data characteristics.
 The \texttt{--classifier} option enables SILVA~138 taxonomic classification,
 automatically generating genus/phylum composition figures (fig13--fig15).
 After analysis completes, a \textbf{post-analysis refinement mode} is activated
@@ -153,7 +157,7 @@ In this report, we describe the design, architecture, and implementation of
 \textbf{seq2pipe}, an interactive AI agent that integrates local LLM inference
 with QIIME2 to provide a fully automated, offline-capable microbiome analysis
 assistant. seq2pipe goes well beyond pipeline generation: its deterministic
-comprehensive analysis module reliably produces 15 publication-quality figures,
+comprehensive analysis module reliably produces 29 publication-quality figures,
 the LLM agent provides flexible additional analysis,
 and the system automatically generates bilingual research reports --- all within
 a single conversational interface.
@@ -222,7 +226,7 @@ seq2pipe was developed according to eight core design principles:
     are all caught and reported with user-friendly messages.
   \item \textbf{Guaranteed deterministic analysis}:
     An LLM-independent comprehensive analysis module (\texttt{analysis.py})
-    reliably generates 15 figures regardless of model quality.
+    reliably generates 29 figures regardless of model quality.
 \end{enumerate}
 
 \subsection{Overall Architecture}
@@ -231,9 +235,10 @@ Figure~\ref{fig:arch} illustrates the 3-step architecture of seq2pipe.
 The user launches \texttt{cli.py} via platform-specific launch scripts.
 \texttt{cli.py} presents a rainbow ASCII banner and prompts the user to
 select between two operating modes.
-In \texttt{--auto} mode, a 3-step automated pipeline executes:
+In \texttt{--auto} mode, a 4-step automated pipeline executes:
 STEP~1 runs \texttt{pipeline\_runner.py} for the QIIME2 pipeline and exports results,
-STEP~2 runs \texttt{analysis.py} to deterministically generate 15 PNG figures,
+STEP~1.5 runs \texttt{analysis.py} to deterministically generate 29 PNG figures,
+STEP~2 launches an adaptive autonomous agent for data-driven additional analyses,
 and STEP~3 auto-generates an HTML report.
 In Mode~1 (directed analysis), \texttt{code\_agent.py} provides
 vibe-local-style tool-calling code generation.
@@ -252,19 +257,24 @@ vibe-local-style tool-calling code generation.
   Mode 1      [pipeline_runner.py]        Mode 2
   Analysis     QIIME2 pipeline +           --auto flag
   mode         result export
-    |                |   (STEP 1/3)              |
+    |                |   (STEP 1)                |
     |                v                           |
-    |       [analysis.py]  (STEP 2/3)            |
+    |       [analysis.py]  (STEP 1.5)            |
     |         Deterministic analysis (no LLM)    |
-    |         15 PNG figures reliably generated   |
+    |         29 PNG figures reliably generated   |
     |         fig01-12: Core analysis             |
     |         fig13-15: Taxonomy (with classifier)|
+    |         fig16-25: Extended ecological       |
+    |         fig26-29: Exhaustive community      |
+    |                |                           |
+    |       [adaptive agent]  (STEP 2)           |
+    |         Data-driven autonomous analysis     |
     |                |                           |
     v                v                           v
   [code_agent.py] <-+----> [report_generator.py]
     Tool-calling           HTML / LaTeX+PDF
     code generation        report generation
-    agent                    (STEP 3/3)
+    agent                    (STEP 3)
     |
     +---> Ollama (localhost:11434)
   \end{verbatim}
@@ -389,21 +399,35 @@ deterministic comprehensive analysis module \texttt{analysis.py} that
 operates entirely without LLM dependency.
 The \texttt{run\_comprehensive\_analysis()} function reads QIIME2 exported
 data directly and uses pandas, matplotlib, seaborn, and scikit-learn to
-generate 15 publication-quality PNG figures (Table~\ref{tab:analysis_figures}).
+generate 29 publication-quality PNG figures (Table~\ref{tab:analysis_figures}).
 
 Because this module does not depend on LLM response quality,
 identical analysis results are produced regardless of which model is used.
 When SILVA~138 classifier results are available, fig13--fig15
 (genus/phylum composition) are automatically generated.
+Figures fig16--25 provide extended ecological analyses (rarefaction curves,
+NMDS ordination, rank-abundance, alluvial taxonomy, co-occurrence networks,
+family-level composition, core microbiome, differential abundance,
+sample clustering, and correlation analysis).
+Figures fig26--29 offer exhaustive community-level views (class/order composition,
+additional diversity indices, and ASV overlap patterns).
+
+Each PCoA figure (fig05--08) reports the percentage of variance explained
+on each axis, computed via eigendecomposition of the centred distance matrix.
+The \texttt{generate\_analysis\_summary()} function produces a structured
+JSON summary of all analysis results, including diversity statistics,
+taxonomic composition, and figure metadata, which is consumed by the
+report generator.
 
 \begin{table}[h]
   \centering
-  \caption{15 figures generated by \texttt{analysis.py}}
+  \caption{29 figures generated by \texttt{analysis.py}}
   \label{tab:analysis_figures}
   \begin{tabular}{clp{5.5cm}}
     \toprule
     \textbf{Figure} & \textbf{Analysis} & \textbf{Key Packages} \\
     \midrule
+    \multicolumn{3}{l}{\textit{Core analysis (fig01--12)}} \\
     fig01 & DADA2 denoising statistics & pandas, matplotlib \\
     fig02 & Sequencing depth per sample & pandas, matplotlib \\
     fig03 & Alpha diversity boxplots & pandas, seaborn \\
@@ -416,11 +440,32 @@ When SILVA~138 classifier results are available, fig13--fig15
     fig10 & Top 30 ASV heatmap & seaborn \\
     fig11 & Alpha diversity correlations & matplotlib \\
     fig12 & ASV richness vs depth & matplotlib \\
+    \midrule
+    \multicolumn{3}{l}{\textit{Taxonomy (fig13--15; requires classifier)}} \\
     fig13 & Genus-level stacked bar$^*$ & matplotlib \\
     fig14 & Phylum-level stacked bar$^*$ & matplotlib \\
     fig15 & Genus-level heatmap$^*$ & seaborn \\
+    \midrule
+    \multicolumn{3}{l}{\textit{Extended ecological analysis (fig16--25)}} \\
+    fig16 & Rarefaction curves & numpy \\
+    fig17 & NMDS (Bray-Curtis) & sklearn MDS \\
+    fig18 & Rank-Abundance curve & matplotlib \\
+    fig19 & Taxonomic alluvial plot (Phylum$\to$Class$\to$Order) & matplotlib \\
+    fig20 & Genus co-occurrence network & networkx \\
+    fig21 & Family-level stacked bar$^*$ & matplotlib \\
+    fig22 & Core microbiome (prevalence vs abundance)$^*$ & matplotlib \\
+    fig23 & Differential abundance volcano$^*$$^{\dagger}$ & scipy, matplotlib \\
+    fig24 & Sample dendrogram (UPGMA) & scipy hierarchy \\
+    fig25 & Genus Spearman correlation clustermap$^*$ & scipy, seaborn \\
+    \midrule
+    \multicolumn{3}{l}{\textit{Exhaustive community views (fig26--29)}} \\
+    fig26 & Class-level stacked bar$^*$ & matplotlib \\
+    fig27 & Order-level stacked bar$^*$ & matplotlib \\
+    fig28 & Simpson diversity + Pielou evenness & matplotlib \\
+    fig29 & ASV overlap pattern (UpSet-style) & matplotlib \\
     \bottomrule
-    \multicolumn{3}{l}{\small $^*$ Generated only when SILVA 138 classifier results are available}
+    \multicolumn{3}{l}{\small $^*$ Generated only when SILVA 138 classifier results are available} \\
+    \multicolumn{3}{l}{\small $^{\dagger}$ Benjamini--Hochberg FDR correction applied}
   \end{tabular}
 \end{table}
 
@@ -518,7 +563,7 @@ in \texttt{run\_coding\_agent()}:
 Together, these mechanisms guarantee that at least one analysis figure
 is produced regardless of model size or Ollama version.
 Furthermore, since \texttt{analysis.py} runs before the LLM agent,
-15 core figures are always generated regardless of LLM performance.
+29 core figures are always generated regardless of LLM performance.
 
 \subsection{The QIIME2 Pipeline Agent Loop}
 
@@ -688,27 +733,24 @@ Primer trim lengths and truncation positions are automatically
 adjusted based on the detected hypervariable region
 (V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R).
 
-Following QIIME2 analysis, the \texttt{--auto} mode executes a 3-step
+Following QIIME2 analysis, the \texttt{--auto} mode executes a 4-step
 automated pipeline:
 
 \begin{enumerate}[leftmargin=2em]
   \item \textbf{STEP 1}: QIIME2 pipeline (8 steps above) + result export
-  \item \textbf{STEP 2}: Deterministic comprehensive analysis (\texttt{analysis.py})
-    $\to$ \textbf{15 PNG figures}:
+  \item \textbf{STEP 1.5}: Deterministic comprehensive analysis (\texttt{analysis.py})
+    $\to$ \textbf{29 PNG figures}:
     \begin{itemize}
-      \item fig01: DADA2 denoising statistics
-      \item fig02: Sequencing depth per sample
-      \item fig03: Alpha diversity (Shannon / Faith PD / Observed ASVs)
-      \item fig04: Shannon diversity per sample
-      \item fig05--08: PCoA (Bray-Curtis / Jaccard / Unweighted UniFrac / Weighted UniFrac)
-      \item fig09: Beta diversity distance heatmaps (2$\times$2)
-      \item fig10: Top 30 ASV heatmap
-      \item fig11: Alpha diversity correlations
-      \item fig12: ASV richness vs depth
-      \item fig13: Genus-level composition (with classifier)
-      \item fig14: Phylum-level composition (with classifier)
-      \item fig15: Genus-level heatmap (with classifier)
+      \item fig01--12: Core analysis (DADA2 stats, depth, alpha/beta diversity, heatmaps)
+      \item fig13--15: Taxonomy (genus/phylum composition, genus heatmap; with classifier)
+      \item fig16--25: Extended ecological analysis (rarefaction, NMDS, rank-abundance,
+        alluvial taxonomy, co-occurrence network, family composition, core microbiome,
+        differential abundance volcano, sample dendrogram, correlation clustermap)
+      \item fig26--29: Exhaustive community views (class/order composition,
+        Simpson diversity + Pielou evenness, ASV overlap UpSet-style)
     \end{itemize}
+  \item \textbf{STEP 2}: Adaptive autonomous agent --- dynamically selects
+    and executes additional analyses based on data characteristics
   \item \textbf{STEP 3}: Automatic HTML report generation (base64-embedded figures)
 \end{enumerate}
 
@@ -744,7 +786,7 @@ in Ollama. Table~\ref{tab:models} lists recommended models.
 \end{table}
 
 Note that the deterministic analysis (STEP~2) via \texttt{analysis.py}
-does not use the LLM, so all 15 figures are generated identically
+does not use the LLM, so all 29 figures are generated identically
 regardless of model choice. Model quality primarily affects the flexibility
 of Mode~1 (directed analysis) and the quality of the refinement mode.
 
@@ -805,7 +847,8 @@ The full pipeline ran in a single command:
 
 STEP~1 executed the QIIME2 pipeline (DADA2 denoising +
 phylogenetic tree + diversity analysis + SILVA~138 taxonomic classification),
-STEP~2 generated 15 PNG figures via \texttt{analysis.py}, and
+STEP~1.5 generated 29 PNG figures via \texttt{analysis.py},
+STEP~2 launched the adaptive autonomous agent for data-driven additional analyses, and
 STEP~3 produced an HTML report automatically.
 Figures are stored in the \texttt{Figure/} directory of this repository.
 
@@ -900,8 +943,22 @@ Using SILVA~138 classifier results, genus-level stacked bar charts
   \label{fig:genus_heatmap}
 \end{figure}
 
-All 15 figures and the HTML report were generated automatically by
+All 29 figures and the HTML report were generated automatically by
 \texttt{analysis.py} and \texttt{report\_generator.py}.
+
+\subsection{Extended and Exhaustive Analysis}
+
+The extended ecological analyses (fig16--25) and exhaustive community views
+(fig26--29) provide deeper insights beyond the core diversity metrics.
+Figure~16 shows rarefaction curves that confirm adequate sequencing depth
+across all samples. Figure~20 reveals genus co-occurrence patterns through
+a network analysis, highlighting positively and negatively correlated taxa.
+Figure~28 complements Shannon entropy with Simpson diversity and Pielou evenness
+indices, providing a more complete picture of community structure.
+The differential abundance volcano plot (fig23) applies Benjamini--Hochberg
+FDR correction to control for multiple testing, and the UpSet-style ASV
+overlap pattern (fig29) visualises shared and unique ASVs across sample
+intersections.
 
 % -------------------------------------------------------
 \section{Discussion}
@@ -918,11 +975,15 @@ seq2pipe achieves the following:
   \item Automatic recognition of FASTQ data structure and adaptive pipeline generation
   \item Safe QIIME2 command execution with explicit user confirmation
   \item \textbf{Deterministic comprehensive analysis module (\texttt{analysis.py})}:
-    15 publication-quality PNG figures generated reliably without LLM dependency
+    29 publication-quality PNG figures generated reliably without LLM dependency
   \item \textbf{SILVA 138 classifier auto-discovery (\texttt{--classifier})}:
     automatic genus/phylum composition figure generation
-  \item \textbf{3-step automated pipeline}:
-    STEP~1 (QIIME2) $\to$ STEP~2 (deterministic analysis) $\to$ STEP~3 (HTML report)
+  \item \textbf{4-step automated pipeline}:
+    STEP~1 (QIIME2) $\to$ STEP~1.5 (deterministic analysis, 29 figures)
+    $\to$ STEP~2 (adaptive autonomous agent) $\to$ STEP~3 (HTML report)
+  \item \textbf{Adaptive autonomous agent}:
+    dynamically selects and executes additional analyses based on
+    data characteristics, extending beyond the deterministic figure set
   \item \textbf{Vibe-local style tool-calling code agent} that reads actual file
     contents before writing code, eliminating format-mismatch errors
   \item \textbf{Automated error correction}: NEVER GIVE UP policy ---
@@ -957,10 +1018,9 @@ seq2pipe achieves the following:
 \begin{itemize}
   \item Support for additional marker genes (ITS, 18S rRNA)
   \item Pillow-based PDF/SVG $\to$ PNG conversion for Linux and Windows
-  \item Extending the autonomous task list with differential abundance
-    (volcano plots) and machine learning (Random Forest) analyses
+  \item Machine learning-based analyses (Random Forest feature importance,
+    supervised classification) in the deterministic module
   \item Integration of statistical result annotation directly into figures
-  \item Adding rarefaction curves, NMDS, and other analyses to \texttt{analysis.py}
 \end{itemize}
 
 % -------------------------------------------------------
@@ -972,7 +1032,7 @@ local LLM inference with the QIIME2 microbiome analysis platform.
 The system combines three complementary modules:
 \texttt{qiime2\_agent.py} orchestrates 11 specialized tools for
 QIIME2 pipeline generation, \texttt{analysis.py} deterministically
-generates 15 publication-quality PNG figures without LLM dependency,
+generates 29 publication-quality PNG figures without LLM dependency,
 and \texttt{code\_agent.py} --- a vibe-local-style tool-calling agent
 with 5 tools --- provides flexible additional analysis by reading
 actual file contents before writing code and automatically correcting errors.
@@ -980,8 +1040,10 @@ A post-analysis refinement mode allows iterative figure improvement via
 natural language, and \texttt{report\_generator.py} produces HTML or
 LaTeX/PDF reports.
 Together they enable researchers to automate an entire 16S rRNA analysis workflow ---
-from raw FASTQ data through 15 publication-quality figures
+from raw FASTQ data through 29 publication-quality figures
 and an HTML report --- entirely offline and without any cloud dependencies.
+The adaptive autonomous mode further extends the analysis by dynamically
+selecting data-driven explorations beyond the deterministic figure set.
 
 seq2pipe is released as open source under the MIT License and is available at:
 \texttt{https://github.com/Rhizobium-gits/seq2pipe}

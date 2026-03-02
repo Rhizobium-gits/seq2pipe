@@ -828,13 +828,20 @@ def main():
     print("─" * 48)
     print("  📊 STEP 1.5 : 包括的解析・可視化（確定的処理）")
     print("─" * 48)
+    analysis_summary = {}
     try:
-        analysis_figs = run_comprehensive_analysis(
+        result_1_5 = run_comprehensive_analysis(
             export_dir=pipeline_result.export_dir,
             figure_dir=str(fig_dir),
             session_dir=pipeline_result.output_dir,
             log_callback=_log,
         )
+        # 後方互換: 旧版はリストを返す、新版は (list, dict) を返す
+        if isinstance(result_1_5, tuple):
+            analysis_figs, analysis_summary = result_1_5
+        else:
+            analysis_figs = result_1_5
+            analysis_summary = {}
         if analysis_figs:
             print(f"\n✅ 包括的解析完了: {len(analysis_figs)} 件の図を生成")
         else:
@@ -886,6 +893,7 @@ def main():
         max_steps=args.max_rounds * 4,    # ラウンド数×4 ステップ（list+read+write+run）
         log_callback=_log,
         install_callback=_install_callback,
+        analysis_summary=analysis_summary if mode == "2" else None,
     )
     _report_ctx = {
         "fastq_dir": fastq_dir,

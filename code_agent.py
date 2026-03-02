@@ -182,6 +182,62 @@ def _build_prompt(
         "- To aggregate feature-table BY GENUS:",
         "    tax['genus'] = tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
         "    genus_ft = ft.join(tax['genus']).groupby('genus').sum()   # rows=genus, cols=samples",
+        "",
+        "## ADDITIONAL ANALYSIS METHODS (copy-paste ready)",
+        "",
+        "### Rarefaction Curve (subsample simulation)",
+        "  rng = np.random.default_rng(42)",
+        "  for each sample: pool = np.repeat(np.arange(n_asv), counts)",
+        "  subsample at 10 evenly-spaced depths, 10 iterations each",
+        "  plot median observed ASVs vs depth per sample",
+        "",
+        "### NMDS (Non-Metric MDS)",
+        "  from sklearn.manifold import MDS",
+        "  mds = MDS(n_components=2, dissimilarity='precomputed', metric=False,",
+        "            random_state=42, max_iter=1000, normalized_stress='auto')",
+        "  coords = mds.fit_transform(dm.values)",
+        "  stress = mds.stress_  # good if < 0.2",
+        "",
+        "### Alluvial / River Plot (pure matplotlib, NO external lib)",
+        "  from matplotlib.patches import PathPatch",
+        "  from matplotlib.path import Path as MplPath",
+        "  Group taxonomy: Phylum -> Class -> Order, top 8 taxa",
+        "  Draw vertical bars at each level, connect with cubic Bezier PathPatch",
+        "",
+        "### Volcano Plot (Differential Abundance)",
+        "  from scipy.stats import mannwhitneyu",
+        "  Split samples into two groups; Mann-Whitney U test per genus",
+        "  x = log2(mean_group2 / mean_group1 + pseudo), y = -log10(p_value)",
+        "  Color: red if |log2FC|>1 and p<0.05, blue if down, gray otherwise",
+        "",
+        "### Co-occurrence Network (genus correlations)",
+        "  from scipy.stats import spearmanr; import networkx as nx",
+        "  Compute pairwise Spearman for top 30 genera",
+        "  Edge if |r| > 0.6 and p < 0.05; node size = mean abundance",
+        "  Green edges = positive, red = negative",
+        "",
+        "### Core Microbiome (prevalence vs abundance scatter)",
+        "  prevalence = fraction of samples where genus > 0",
+        "  scatter: x = prevalence, y = mean relative abundance",
+        "  highlight core (prevalence >= 0.8) in red, annotate top genera",
+        "",
+        "### Sample Dendrogram (hierarchical clustering)",
+        "  from scipy.cluster.hierarchy import linkage, dendrogram",
+        "  from scipy.spatial.distance import squareform",
+        "  condensed = squareform(dm.values)",
+        "  Z = linkage(condensed, method='average')  # UPGMA",
+        "  dendrogram(Z, labels=dm.index.tolist())",
+        "",
+        "### Genus Spearman Correlation Clustermap",
+        "  Compute pairwise Spearman r for top 20 genera (samples as observations)",
+        "  Use sns.clustermap(corr_df, cmap='RdBu_r', center=0, annot=True)",
+        "",
+        "### Rank-Abundance Curve",
+        "  For each sample: sort ASV abundances descending, convert to relative %",
+        "  Plot rank (x) vs relative abundance (y, log scale) per sample",
+        "",
+        "### Family-level Composition (stacked bar)",
+        "  Same approach as genus but extract f__([^;]+) from Taxon",
     ]
     return "\n".join(lines)
 
@@ -824,6 +880,42 @@ def _build_auto_initial_prompt(
         "  top15 = rel.sum(axis=1).nlargest(15).index",
         "  plot_data = rel.loc[top15].T                  # shape: (n_samples × 15)",
         "",
+        "### Alluvial / River Plot (pure matplotlib)",
+        "  from matplotlib.patches import PathPatch",
+        "  from matplotlib.path import Path as MplPath",
+        "  Group taxonomy: Phylum -> Class -> Order, top 8 taxa",
+        "  Draw vertical bars at each level, connect with cubic Bezier PathPatch",
+        "",
+        "### Volcano Plot (Differential Abundance)",
+        "  from scipy.stats import mannwhitneyu",
+        "  Split samples into two groups; Mann-Whitney U test per genus",
+        "  x = log2(mean_grp2 / mean_grp1 + 0.001), y = -log10(p_value)",
+        "  Color: red if |log2FC|>1 and p<0.05",
+        "",
+        "### Co-occurrence Network",
+        "  from scipy.stats import spearmanr; import networkx as nx",
+        "  Compute pairwise Spearman for top 30 genera",
+        "  Edge if |r| > 0.6 and p < 0.05; node_size = mean_abd; spring_layout",
+        "",
+        "### Core Microbiome",
+        "  prevalence = (genus_rel > 0).sum(axis=1) / n_samples",
+        "  scatter: x = prevalence, y = mean relative abundance",
+        "  highlight core (prevalence >= 0.8)",
+        "",
+        "### Sample Dendrogram",
+        "  from scipy.cluster.hierarchy import linkage, dendrogram",
+        "  from scipy.spatial.distance import squareform",
+        "  Z = linkage(squareform(dm.values), method='average')",
+        "",
+        "### Rank-Abundance Curve",
+        "  Sort ASV abundances descending per sample, plot rank vs log(rel abundance)",
+        "",
+        "### Family-level Composition",
+        "  Same as genus but extract f__([^;]+) from Taxon column",
+        "",
+        "### Genus Spearman Correlation Clustermap",
+        "  Top 20 genera pairwise Spearman r; sns.clustermap(cmap='RdBu_r', center=0)",
+        "",
         "## Code requirements",
         "1. First FOUR lines MUST be (in this exact order, NEVER omit any):",
         "      import matplotlib",
@@ -1423,6 +1515,146 @@ def _parse_text_tool_calls(content: str) -> list:
     return tool_calls
 
 
+def _build_adaptive_task(analysis_summary: dict, figure_dir: str) -> str:
+    """analysis.py の結果サマリーをもとに、適応型の解析タスクを構築する。"""
+    s = analysis_summary
+
+    # --- データ概要 ---
+    lines = [
+        "You have access to QIIME2-exported microbiome data. A basic comprehensive analysis",
+        "(29 figures) has already been completed by a deterministic module.",
+        "Your job is to perform ADAPTIVE follow-up analyses based on the patterns discovered.",
+        "",
+        "## DATA SUMMARY",
+        f"- {s.get('n_samples', '?')} samples, {s.get('n_asvs', '?')} ASVs",
+    ]
+
+    # サンプルID
+    sample_ids = s.get("sample_ids", [])
+    if sample_ids:
+        lines.append(f"- Sample IDs: {', '.join(sample_ids)}")
+
+    # シーケンス深度
+    depth = s.get("sequencing_depth", {})
+    if depth:
+        lines.append(f"- Sequencing depth: min={depth.get('min','?')}, max={depth.get('max','?')}, mean={depth.get('mean','?')}")
+
+    # 優占門
+    top_phyla = s.get("top_phyla", [])
+    if top_phyla:
+        phyla_str = ", ".join(f"{name} ({pct:.1f}%)" for name, pct in top_phyla[:5])
+        lines.append(f"- Dominant phyla: {phyla_str}")
+
+    # 優占属
+    top_genera = s.get("top_genera", [])
+    if top_genera:
+        genera_str = ", ".join(f"{name} ({pct:.1f}%)" for name, pct in top_genera[:10])
+        lines.append(f"- Top genera: {genera_str}")
+
+    # コア属
+    core = s.get("core_genera", [])
+    if core:
+        lines.append(f"- Core genera (>80% prevalence): {', '.join(core)}")
+
+    # 高変動属 — list of (name, cv) tuples or strings
+    hv = s.get("high_variance_genera", [])
+    if hv:
+        hv_strs = [f"{g} (CV={cv})" if isinstance(g, str) else f"{g[0]} (CV={g[1]})"
+                   for g in hv]
+        lines.append(f"- High-variance genera (CV>1.0): {', '.join(hv_strs)}")
+
+    # 外れ値サンプル
+    outliers = s.get("outlier_samples", [])
+    if outliers:
+        lines.append(f"- Outlier samples: {', '.join(outliers)}")
+
+    # Alpha diversity サマリー
+    alpha_sum = s.get("alpha_summary", {})
+    if alpha_sum:
+        lines.append("- Alpha diversity:")
+        for metric, vals in alpha_sum.items():
+            lines.append(f"    {metric}: mean={vals.get('mean','?'):.2f}, std={vals.get('std','?'):.2f}, "
+                         f"min_sample={vals.get('min_sample','?')}, max_sample={vals.get('max_sample','?')}")
+
+    # --- 検出パターン ---
+    patterns = s.get("interesting_patterns", [])
+    if patterns:
+        lines.append("")
+        lines.append("## INTERESTING PATTERNS DETECTED")
+        for i, p in enumerate(patterns, 1):
+            lines.append(f"{i}. {p}")
+
+    # --- タスク指示 ---
+    lines.extend([
+        "",
+        "## YOUR TASK: Adaptive Follow-up Analysis",
+        "Based on the patterns above, create figures that DRILL DEEPER into the data.",
+        "Choose the most informative analyses. Here are suggestions (adapt based on the data):",
+        "",
+    ])
+
+    task_num = 1
+
+    # 外れ値サンプルがあれば調査
+    if outliers:
+        for sample in outliers[:2]:
+            lines.append(f"{task_num}. **Outlier investigation ({sample})**: Compare its genus-level profile "
+                         f"vs the mean of other samples (divergence bar chart)")
+            task_num += 1
+
+    # 高変動属があれば深掘り
+    if hv:
+        hv_names = [g[0] if isinstance(g, tuple) else g for g in hv[:3]]
+        hv_str = ", ".join(hv_names)
+        lines.append(f"{task_num}. **High-variance genus dynamics**: Plot {hv_str} relative abundance "
+                     f"across all samples with annotations for outlier values")
+        task_num += 1
+
+    # 優占属の深掘り
+    if top_genera:
+        top5_str = ", ".join(name for name, _ in top_genera[:5])
+        lines.append(f"{task_num}. **Dominant genus deep-dive**: For {top5_str}, create per-sample "
+                     f"abundance bar chart showing each genus's distribution")
+        task_num += 1
+
+    # 門-属関係
+    if top_phyla:
+        dominant_phylum = top_phyla[0][0]
+        lines.append(f"{task_num}. **Phylum-genus breakdown**: For {dominant_phylum} (the dominant phylum), "
+                     f"show which genera within it are most abundant (nested/grouped bar)")
+        task_num += 1
+
+    # サンプル類似性
+    lines.append(f"{task_num}. **Sample clustering analysis**: Create an annotated dendrogram or "
+                 f"heatmap showing sample similarity with dominant genus labels")
+    task_num += 1
+
+    # サンプルごとの優占属
+    dom_per_sample = s.get("dominant_genus_per_sample", {})
+    if dom_per_sample:
+        lines.append(f"{task_num}. **Sample composition fingerprint**: Visualize which genus dominates "
+                     f"each sample (waffle chart or annotated bar)")
+        task_num += 1
+
+    # 自由度
+    lines.append(f"{task_num}. **Any other interesting visualization** that highlights notable patterns in this data")
+    task_num += 1
+
+    # ルール
+    lines.extend([
+        "",
+        "## Rules:",
+        f"- Save figures as adaptive_01_xxx.png, adaptive_02_xxx.png, etc. in FIGURE_DIR: {figure_dir}",
+        "- Each figure in a try/except block with informative print on success/failure",
+        "- Use actual sample IDs and genus names from the data (listed above)",
+        "- dpi=200, bbox_inches='tight', English axis labels, plt.close() after each",
+        "- Use seaborn/matplotlib; import at top of script",
+        "- Read the actual data files to get the real values — do NOT hardcode the summary numbers above",
+    ])
+
+    return "\n".join(lines)
+
+
 def run_coding_agent(
     export_files: dict,
     user_prompt: str,
@@ -1433,6 +1665,7 @@ def run_coding_agent(
     max_steps: int = 50,
     log_callback: Optional[Callable[[str], None]] = None,
     install_callback: Optional[Callable[[str], bool]] = None,
+    analysis_summary: Optional[dict] = None,
 ) -> CodeExecutionResult:
     """
     vibe-local スタイルのツール呼び出し型コーディングエージェント。
@@ -1600,6 +1833,43 @@ def run_coding_agent(
         "- To aggregate feature-table BY GENUS (correct way):",
         "    tax['genus'] = tax['Taxon'].str.extract(r'g__([^;]+)')[0].fillna('Unknown').str.strip()",
         "    genus_ft = ft.join(tax['genus']).groupby('genus').sum()  # rows=genus, cols=samples",
+        "",
+        "## ADDITIONAL ANALYSIS METHODS",
+        "",
+        "Alluvial / River Plot (pure matplotlib):",
+        "  from matplotlib.patches import PathPatch",
+        "  from matplotlib.path import Path as MplPath",
+        "  Group taxonomy: Phylum -> Class -> Order, top 8 taxa",
+        "  Draw vertical bars at each level, connect with cubic Bezier PathPatch",
+        "",
+        "Volcano Plot (Differential Abundance):",
+        "  from scipy.stats import mannwhitneyu",
+        "  Split samples into two groups; Mann-Whitney U test per genus",
+        "  x = log2(mean_grp2/mean_grp1 + 0.001), y = -log10(p_value)",
+        "  Color: red if |log2FC|>1 and p<0.05",
+        "",
+        "Co-occurrence Network:",
+        "  from scipy.stats import spearmanr; import networkx as nx",
+        "  Pairwise Spearman for top 30 genera; edge if |r|>0.6 and p<0.05",
+        "  node_size = mean_abd; green=positive, red=negative",
+        "",
+        "Core Microbiome:",
+        "  prevalence = (genus_rel > 0).sum(axis=1) / n_samples",
+        "  scatter: x=prevalence, y=mean_abundance; highlight core (prevalence>=0.8)",
+        "",
+        "Sample Dendrogram:",
+        "  from scipy.cluster.hierarchy import linkage, dendrogram",
+        "  from scipy.spatial.distance import squareform",
+        "  Z = linkage(squareform(dm.values), method='average')",
+        "",
+        "Rank-Abundance Curve:",
+        "  Sort ASV abundances descending per sample, plot rank vs log(rel%)",
+        "",
+        "Genus Spearman Correlation Clustermap:",
+        "  Top 20 genera pairwise Spearman r; sns.clustermap(cmap='RdBu_r', center=0)",
+        "",
+        "Family-level Composition:",
+        "  Same as genus aggregation but extract f__([^;]+) from Taxon",
     ])
 
     # ── 初回ユーザーメッセージ ─────────────────────────────────────────────
@@ -1649,7 +1919,12 @@ def run_coding_agent(
         "- For ordination figures with multiple matrices, use matplotlib subplots",
         "- Use seaborn color palettes for aesthetics when appropriate",
     ])
-    task = user_prompt.strip() if user_prompt.strip() else auto_task
+    if user_prompt.strip():
+        task = user_prompt.strip()                                    # 対話モード
+    elif analysis_summary:
+        task = _build_adaptive_task(analysis_summary, figure_dir)     # 適応型自律モード
+    else:
+        task = auto_task                                              # フォールバック（静的）
 
     # 存在しないカテゴリの明示リスト
     _missing_cats = [cat for cat, paths in export_files.items() if not paths]

@@ -73,7 +73,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small seq2pipe 技術レポート}
-\fancyhead[R]{\small 2026年2月}
+\fancyhead[R]{\small 2026年3月}
 \fancyfoot[C]{\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 
@@ -94,7 +94,7 @@
   {\large ローカル LLM による QIIME2 パイプライン自動生成 AI エージェント}\\[12pt]
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small \texttt{https://github.com/Rhizobium-gits/seq2pipe}}\\[4pt]
-  {\small 2026 年 2 月 28 日}
+  {\small 2026 年 3 月 2 日}
 \end{center}
 
 \vspace{4mm}
@@ -108,14 +108,15 @@
 seq2pipe はユーザーが保有する生 FASTQ データを入力として受け取り、
 データ構造の自動認識・QIIME2 解析パイプラインの設計・実行可能シェルスクリプトの生成を行い、
 続いて \textbf{決定論的包括解析モジュール}（\texttt{analysis.py}）が
-LLM に依存せず \textbf{15 種類の出版品質 PNG 図を確実に生成} する。
+LLM に依存せず \textbf{29 種類の出版品質 PNG 図を確実に生成} する。
 さらに \textbf{ツール呼び出し型コード生成エージェント}（\texttt{code\_agent.py}）が
 実際のエクスポートファイルの内容を先に読んでからコードを生成するため、
 フォーマットの不一致によるエラーを根本的に排除する。
 コードエージェントは「NEVER GIVE UP」方針に従い、
 エラーが発生するたびにコードを修正して \texttt{EXIT CODE: 0} になるまで実行を繰り返す。
-自律モード（\texttt{--auto}）では 3 ステップで全解析を完了する:
-STEP 1（QIIME2 パイプライン）$\to$ STEP 2（決定論的解析・15 図）$\to$ STEP 3（HTML レポート）。
+自律モード（\texttt{--auto}）では 4 ステップで全解析を完了する:
+STEP 1（QIIME2 パイプライン）$\to$ STEP 1.5（決定論的解析・29 図）$\to$ STEP 2（適応型自律エージェント）$\to$ STEP 3（HTML レポート）。
+STEP 2 の適応型自律エージェントは STEP 1.5 の解析サマリーをもとに LLM がデータ適応型の応用解析を自動実行する。
 \texttt{--classifier} オプションにより SILVA 138 分類器を指定すると、
 属・門レベルの分類組成図（fig13〜fig15）も自動生成される。
 解析完了後は \textbf{振り返り・修正モード} が起動し、
@@ -149,7 +150,7 @@ Ollama~\cite{ollama} をはじめとするローカル LLM 実行フレームワ
 本研究では、これらの技術を統合した対話型 AI エージェント \textbf{seq2pipe} を開発し、
 その設計原則・アーキテクチャ・実装詳細を報告する。
 seq2pipe は QIIME2 解析の自動化に留まらず、
-決定論的な包括解析モジュールによる 15 種類の図の確実な生成、
+決定論的な包括解析モジュールによる 29 種類の図の確実な生成、
 LLM による柔軟な追加解析、
 そして日本語・英語両対応の自動レポート生成まで
 一貫したパイプラインを提供する点で、従来ツールを大きく超える。
@@ -206,18 +207,19 @@ seq2pipe は以下の設計原則に従って開発した。
   \item \textbf{堅牢なエラー処理}: 接続エラー・タイムアウト・空レスポンス・
     ファイルシステムエラーをすべて適切にキャッチし、ユーザーに分かりやすいメッセージを返す。
   \item \textbf{決定論的解析の保証}: LLM に依存しない包括解析モジュール（\texttt{analysis.py}）
-    により、15 種類の図を確実に生成する。
+    により、29 種類の図を確実に生成する。
 \end{enumerate}
 
 \subsection{全体アーキテクチャ}
 
-図~\ref{fig:arch} に seq2pipe の 3 ステップアーキテクチャを示す。
+図~\ref{fig:arch} に seq2pipe の 4 ステップアーキテクチャを示す。
 ユーザーは起動スクリプトを通じてエントリーポイント（\texttt{cli.py}）を起動する。
 \texttt{cli.py} は虹色 ASCII バナーを表示し、
 2 つの操作モード（指定解析モード / 自律エージェントモード）を選択させる。
-\texttt{--auto} モードでは 3 ステップの自動化パイプラインが実行される:
+\texttt{--auto} モードでは 4 ステップの自動化パイプラインが実行される:
 STEP 1 で \texttt{pipeline\_runner.py} が QIIME2 パイプラインを実行し結果をエクスポート、
-STEP 2 で \texttt{analysis.py} が決定論的に 15 種類の PNG 図を生成、
+STEP 1.5 で \texttt{analysis.py} が決定論的に 29 種類の PNG 図を生成、
+STEP 2 で適応型自律エージェントがデータ適応型の応用解析を実行、
 STEP 3 で HTML レポートを自動生成する。
 指定解析モード（モード 1）では \texttt{code\_agent.py} が
 vibe-local 方式のツール呼び出し型コード生成を行う。
@@ -235,22 +237,29 @@ vibe-local 方式のツール呼び出し型コード生成を行う。
     v                v                           v
   モード 1      [pipeline_runner.py]        モード 2
   指定解析       QIIME2 実行 + エクスポート   --auto フラグ
-    |                |   (STEP 1/3)              |
+    |                |   (STEP 1)                |
     |                v                           |
-    |       [analysis.py]  (STEP 2/3)            |
+    |       [analysis.py]  (STEP 1.5)            |
     |         決定論的包括解析（LLM 不要）          |
-    |         15 種類の PNG 図を確実に生成          |
+    |         29 種類の PNG 図を確実に生成          |
     |         fig01-12: 基本解析                  |
     |         fig13-15: 分類組成（分類器あり時）    |
+    |         fig16-25: 拡張解析                  |
+    |         fig26-29: 網羅的解析                |
+    |                |                           |
+    |                v                           |
+    |       STEP 2: 適応型自律エージェント          |
+    |         generate_analysis_summary() ->      |
+    |         LLM データ適応型応用解析              |
     |                |                           |
     v                v                           v
   [code_agent.py] <-+----> [report_generator.py]
     ツール呼び出し型          HTML / LaTeX+PDF
     コード生成エージェント     レポート生成
-    |                          (STEP 3/3)
+    |                          (STEP 3)
     +---> Ollama (localhost:11434)
   \end{verbatim}
-  \caption{seq2pipe の 3 ステップアーキテクチャ}
+  \caption{seq2pipe の 4 ステップアーキテクチャ}
   \label{fig:arch}
 \end{figure}
 
@@ -363,18 +372,19 @@ seq2pipe は 2 種類のツールセットを持つ。
 LLM に依存しない決定論的包括解析モジュール \texttt{analysis.py} を導入した。
 \texttt{run\_comprehensive\_analysis()} 関数は QIIME2 エクスポートデータを
 直接読み込み、pandas / matplotlib / seaborn / scikit-learn を使用して
-15 種類の出版品質 PNG 図を生成する（表~\ref{tab:analysis_figures}）。
+29 種類の出版品質 PNG 図を生成する（表~\ref{tab:analysis_figures}）。
 
 このモジュールは LLM の応答品質に左右されないため、
 どのモデルを使用しても同一の解析結果が得られる。
-SILVA 138 分類器による分類学的解析結果が利用可能な場合は
-fig13〜fig15（属・門レベルの組成図）も自動的に生成される。
+fig01〜fig12 は基本解析、fig13〜fig15 は SILVA 138 分類器利用時の分類組成、
+fig16〜fig25 は拡張解析（ラレファクション・NMDS・ネットワーク等）、
+fig26〜fig29 は網羅的解析（綱・目レベル組成・Simpson 多様性・ASV 共有パターン）を提供する。
 
 \begin{table}[h]
   \centering
-  \caption{\texttt{analysis.py} が生成する 15 種類の図}
+  \caption{\texttt{analysis.py} が生成する 29 種類の図}
   \label{tab:analysis_figures}
-  \begin{tabular}{clp{6cm}}
+  \begin{tabular}{clp{5.5cm}}
     \toprule
     \textbf{図番号} & \textbf{解析内容} & \textbf{主要パッケージ} \\
     \midrule
@@ -393,10 +403,33 @@ fig13〜fig15（属・門レベルの組成図）も自動的に生成される�
     fig13 & 属レベル積み上げ棒グラフ$^*$ & matplotlib \\
     fig14 & 門レベル積み上げ棒グラフ$^*$ & matplotlib \\
     fig15 & 属レベルヒートマップ$^*$ & seaborn \\
+    \midrule
+    fig16 & ラレファクションカーブ & numpy \\
+    fig17 & NMDS (Bray-Curtis) & sklearn MDS \\
+    fig18 & Rank-Abundance カーブ & matplotlib \\
+    fig19 & 分類学的 Alluvial プロット & matplotlib (B\'{e}zier) \\
+    fig20 & 属間共起ネットワーク & networkx \\
+    fig21 & 科レベル積み上げ棒グラフ$^*$ & matplotlib \\
+    fig22 & コアマイクロバイオーム$^*$ & matplotlib \\
+    fig23 & 差次的存在量ボルケーノプロット$^{*\dagger}$ & scipy, matplotlib \\
+    fig24 & サンプルデンドログラム (UPGMA) & scipy hierarchy \\
+    fig25 & 属間 Spearman 相関$^*$ & scipy, seaborn \\
+    \midrule
+    fig26 & 綱レベル積み上げ棒グラフ$^*$ & matplotlib \\
+    fig27 & 目レベル積み上げ棒グラフ$^*$ & matplotlib \\
+    fig28 & Simpson 多様性 + Pielou 均等度 & matplotlib \\
+    fig29 & サンプル間 ASV 共有パターン & matplotlib \\
     \bottomrule
-    \multicolumn{3}{l}{\small $^*$ SILVA 138 分類器が利用可能な場合のみ生成}
+    \multicolumn{3}{l}{\small $^*$ SILVA 138 分類器が利用可能な場合のみ生成} \\
+    \multicolumn{3}{l}{\small $^{\dagger}$ Benjamini--Hochberg FDR 補正}
   \end{tabular}
 \end{table}
+
+PCoA（fig05〜fig08）では固有値分解に基づく分散説明率（\%）を軸ラベルに表示し、
+各主座標が群集構造のどの程度の変動を説明するかを定量的に示す。
+また、\texttt{generate\_analysis\_summary()} 関数が全 29 図の解析結果を構造化データとして
+要約し、STEP 2 の適応型自律エージェントに渡すことで、
+LLM がデータの特性に応じた応用解析を自動的に計画・実行する。
 
 \subsection{コードエージェントループの実装（vibe-local 方式）}
 
@@ -478,7 +511,7 @@ seq2pipe はこれを \texttt{run\_coding\_agent()} 内の 4 層フォールバ�
 
 これらの機構により、7B モデルでも少なくとも 1 種類以上の図を確実に生成できる。
 さらに \texttt{analysis.py} による決定論的解析が LLM の前に実行されるため、
-LLM の性能に関わらず 15 種類の基本図は常に生成される。
+LLM の性能に関わらず 29 種類の基本図は常に生成される。
 
 \subsection{QIIME2 パイプラインエージェントループ}
 
@@ -624,11 +657,11 @@ SILVA 138 参照データベース~\cite{silva} を用いた Naive Bayes 分類�
 増幅領域（V1--V3: 27F/338R, V3--V4: 341F/806R, V4: 515F/806R）に応じて
 プライマートリム長・トランケーション長が自動的に調整される。
 
-QIIME2 解析後、\texttt{--auto} モードでは以下の 3 ステップ自動化パイプラインが実行される:
+QIIME2 解析後、\texttt{--auto} モードでは以下の 4 ステップ自動化パイプラインが実行される:
 
 \begin{enumerate}[leftmargin=2em]
   \item \textbf{STEP 1}: QIIME2 パイプライン（上記 8 ステップ）+ 結果エクスポート
-  \item \textbf{STEP 2}: 決定論的包括解析（\texttt{analysis.py}）$\to$ \textbf{15 種類の PNG 図}を生成:
+  \item \textbf{STEP 1.5}: 決定論的包括解析（\texttt{analysis.py}）$\to$ \textbf{29 種類の PNG 図}を生成:
     \begin{itemize}
       \item fig01: DADA2 デノイジング統計
       \item fig02: シーケンシング深度
@@ -642,7 +675,23 @@ QIIME2 解析後、\texttt{--auto} モードでは以下の 3 ステップ自動
       \item fig13: 属レベル組成（分類器あり時）
       \item fig14: 門レベル組成（分類器あり時）
       \item fig15: 属レベルヒートマップ（分類器あり時）
+      \item fig16: ラレファクションカーブ
+      \item fig17: NMDS (Bray-Curtis)
+      \item fig18: Rank-Abundance カーブ
+      \item fig19: 分類学的 Alluvial プロット
+      \item fig20: 属間共起ネットワーク
+      \item fig21: 科レベル積み上げ棒グラフ（分類器あり時）
+      \item fig22: コアマイクロバイオーム（分類器あり時）
+      \item fig23: 差次的存在量ボルケーノプロット（分類器あり時）
+      \item fig24: サンプルデンドログラム (UPGMA)
+      \item fig25: 属間 Spearman 相関（分類器あり時）
+      \item fig26: 綱レベル積み上げ棒グラフ（分類器あり時）
+      \item fig27: 目レベル積み上げ棒グラフ（分類器あり時）
+      \item fig28: Simpson 多様性 + Pielou 均等度
+      \item fig29: サンプル間 ASV 共有パターン
     \end{itemize}
+  \item \textbf{STEP 2}: 適応型自律エージェント $\to$ \texttt{generate\_analysis\_summary()} の
+    構造化データをもとに LLM がデータ適応型の応用解析を自動実行
   \item \textbf{STEP 3}: HTML レポート自動生成（base64 図埋め込み）
 \end{enumerate}
 
@@ -677,8 +726,8 @@ seq2pipe は Ollama で動作する任意の LLM と組み合わせて使用で�
   \end{tabular}
 \end{table}
 
-なお、\texttt{analysis.py} による決定論的解析（STEP 2）は
-LLM を使用しないため、モデルの選択に関わらず同一の 15 図が生成される。
+なお、\texttt{analysis.py} による決定論的解析（STEP 1.5）は
+LLM を使用しないため、モデルの選択に関わらず同一の 29 図が生成される。
 モデルの性能差は主にモード 1（指定解析）の柔軟性と
 振り返り・修正モードの応答品質に影響する。
 
@@ -697,7 +746,7 @@ seq2pipe のエンドツーエンド自動化能力を実証するため、
 
 STEP 1 で QIIME2 パイプライン（DADA2 デノイジング + 系統樹構築 + 多様性解析 +
 SILVA 138 分類学的解析）が実行され、
-STEP 2 で \texttt{analysis.py} が 15 種類の PNG 図を生成し、
+STEP 1.5 で \texttt{analysis.py} が 29 種類の PNG 図を生成し、
 STEP 3 で HTML レポートが自動生成された。
 図はリポジトリの \texttt{Figure/} ディレクトリに格納されている。
 
@@ -793,8 +842,19 @@ SILVA 138 分類器による分類結果をもとに、
   \label{fig:genus_heatmap}
 \end{figure}
 
-全 15 図と HTML レポートは \texttt{analysis.py} と
+全 29 図と HTML レポートは \texttt{analysis.py} と
 \texttt{report\_generator.py} によって自動生成された。
+
+\subsection{拡張解析}
+
+\texttt{analysis.py} の拡張解析モジュールにより、
+従来の 15 図に加えて 14 種類の追加図が自動生成された。
+ラレファクションカーブ（fig16）はサンプリング深度に対する ASV 検出数の飽和を示し、
+十分なシーケンシング深度が確保されていることを確認できる。
+属間共起ネットワーク（fig20）は Spearman 相関に基づく微生物間の正・負の相互作用を可視化し、
+群集構造の理解を深める。
+Simpson 多様性と Pielou 均等度（fig28）はサンプル間の均等性を評価し、
+Shannon 多様性とは異なる観点から群集の多様性構造を明らかにする。
 
 % -------------------------------------------------------
 \section{考察と今後の課題}
@@ -811,11 +871,12 @@ seq2pipe は以下の目標を達成した。
   \item FASTQ データ構造の自動認識と適応的パイプライン生成
   \item QIIME2 コマンドを conda 環境 / Docker 経由で安全に実行するコマンド確認機構
   \item \textbf{決定論的包括解析モジュール（\texttt{analysis.py}）}:
-    LLM に依存せず 15 種類の出版品質 PNG 図を確実に生成
+    LLM に依存せず 29 種類の出版品質 PNG 図を確実に生成
   \item \textbf{SILVA 138 分類器の自動探索（\texttt{--classifier}）}:
     分類学的解析と属・門レベル組成図の自動生成
-  \item \textbf{3 ステップ自動化パイプライン}:
-    STEP 1（QIIME2）$\to$ STEP 2（決定論的解析）$\to$ STEP 3（HTML レポート）
+  \item \textbf{4 ステップ自動化パイプライン}:
+    STEP 1（QIIME2）$\to$ STEP 1.5（決定論的解析）$\to$ STEP 2（適応型自律エージェント）$\to$ STEP 3（HTML レポート）
+  \item \textbf{適応型自律エージェント}: STEP 1.5 の解析サマリーをもとに LLM がデータ適応型の応用解析を自動実行
   \item \textbf{vibe-local 方式ツール呼び出し型コード生成エージェント}:
     LLM がファイルを先に読んでから Python コードを生成するため、
     盲目的な 1 ショット生成で頻発したフォーマット不一致エラーを根本解消
@@ -854,7 +915,6 @@ seq2pipe は以下の目標を達成した。
   \item 差次存在量解析（volcano plot）・機械学習（Random Forest）の
     自律タスクへの追加
   \item 統計的検定結果の図への自動アノテーション
-  \item \texttt{analysis.py} への追加解析（レアファクション曲線、NMDS 等）の統合
 \end{itemize}
 
 % -------------------------------------------------------
@@ -865,13 +925,15 @@ seq2pipe は以下の目標を達成した。
 seq2pipe の設計・実装を報告した。
 本システムは 3 つの相補的なモジュールを組み合わせる:
 \texttt{qiime2\_agent.py} が 11 ツールで QIIME2 パイプライン生成を担い、
-\texttt{analysis.py} が LLM に依存せず 15 種類の出版品質 PNG 図を確実に生成し、
+\texttt{analysis.py} が LLM に依存せず 29 種類の出版品質 PNG 図を確実に生成し、
 \texttt{code\_agent.py} が vibe-local 方式の 5 ツールで
 追加の柔軟な解析を提供する。
 解析完了後は振り返り・修正モードにより自然言語で図を対話的に改善でき、
 \texttt{report\_generator.py} が HTML または LaTeX+PDF レポートを自動生成する。
-これにより研究者は生 FASTQ データから 15 種類の出版品質の図と
+これにより研究者は生 FASTQ データから 29 種類の出版品質の図と
 HTML レポートまでを、完全オフラインかつクラウド不要の環境で自動化できる。
+さらに適応型自律エージェント（STEP 2）により、
+決定論的解析の結果をもとにデータ特性に応じた応用解析が自動的に実行される。
 
 seq2pipe はオープンソース（MIT ライセンス）として公開されており、
 \texttt{https://github.com/Rhizobium-gits/seq2pipe} からアクセスできる。
