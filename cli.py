@@ -17,6 +17,7 @@ seq2pipe ターミナル版エントリポイント。
         --export-dir ~/seq2pipe_results/20240101_120000/exported/
 """
 
+import re
 import sys
 import csv
 import gzip
@@ -460,6 +461,172 @@ def _print_banner():
 # FASTQ 自動解析ユーティリティ
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 代表的な 16S rRNA プライマー配列（フォワード側）
+_16S_PRIMERS_FWD = {
+    "27F":   "AGAGTTTGATCMTGGCTCAG",    # V1-V2
+    "341F":  "CCTACGGGNGGCWGCAG",        # V3-V4
+    "515F":  "GTGYCAGCMGCCGCGGTAA",      # V4
+    "515Fn": "GTGCCAGCMGCCGCGGTAA",      # V4 (Caporaso)
+    "799F":  "AACMGGATTAGATACCCKG",       # V5-V6
+}
+
+# IUPAC 曖昧塩基 → 正規表現変換テーブル
+_IUPAC_RE = {
+    "M": "[AC]", "R": "[AG]", "W": "[AT]", "S": "[CG]",
+    "Y": "[CT]", "K": "[GT]", "V": "[ACG]", "H": "[ACT]",
+    "D": "[AGT]", "B": "[CGT]", "N": "[ACGT]",
+}
+
+
+def _iupac_to_regex(seq: str) -> str:
+    """IUPAC 曖昧塩基を含む配列を正規表現パターンに変換する。"""
+    return "".join(_IUPAC_RE.get(c, c) for c in seq.upper())
+
+
+def _detect_seq_type(r1_files: list, r2_files: list,
+                     sample_size: int = 500) -> dict:
+    """
+    FASTQ 先頭リードから 16S アンプリコン vs ショットガンメタゲノムを判定する。
+
+    4 指標のスコアリング方式:
+      - リード長の変動係数 (CV)
+      - リード数
+      - ユニーク配列の割合
+      - 16S プライマー配列の一致率
+    """
+    result = {
+        "seq_type": "unknown",
+        "confidence": 0.0,
+        "evidence": {
+            "read_length_cv": 0.0,
+            "read_count_est": 0,
+            "unique_ratio": 0.0,
+            "primer_match": "",
+            "primer_match_rate": 0.0,
+        },
+        "reasons": [],
+    }
+
+    if not r1_files:
+        return result
+
+    # --- FASTQ リーダー（先頭 n リードの配列を返す）---
+    def _read_seqs(fq_path, n=500):
+        opener = gzip.open if str(fq_path).endswith(".gz") else open
+        seqs = []
+        try:
+            with opener(fq_path, "rt") as f:
+                for i, line in enumerate(f):
+                    if i % 4 == 1:
+                        seqs.append(line.strip())
+                    if len(seqs) >= n:
+                        break
+        except Exception:
+            pass
+        return seqs
+
+    seqs = _read_seqs(r1_files[0], sample_size)
+    if not seqs:
+        return result
+
+    amplicon_score = 0.0
+    shotgun_score = 0.0
+    reasons = []
+
+    # ── 指標 1: リード長の変動係数 (CV) ─────────────────────────────────
+    lengths = [len(s) for s in seqs]
+    mean_len = statistics.mean(lengths)
+    stdev_len = statistics.stdev(lengths) if len(lengths) > 1 else 0.0
+    cv = stdev_len / mean_len if mean_len > 0 else 0.0
+    result["evidence"]["read_length_cv"] = round(cv, 4)
+
+    if cv < 0.02:
+        amplicon_score += 2.0
+        reasons.append(f"リード長が均一 (CV={cv:.4f})")
+    elif cv > 0.05:
+        shotgun_score += 2.0
+        reasons.append(f"リード長にばらつき (CV={cv:.4f})")
+    else:
+        amplicon_score += 0.5
+        reasons.append(f"リード長のばらつきは中間的 (CV={cv:.4f})")
+
+    # ── 指標 2: リード数の推定 ──────────────────────────────────────────
+    opener = gzip.open if str(r1_files[0]).endswith(".gz") else open
+    try:
+        line_count = 0
+        with opener(r1_files[0], "rt") as f:
+            for _ in f:
+                line_count += 1
+        read_count = line_count // 4
+    except Exception:
+        read_count = 0
+    result["evidence"]["read_count_est"] = read_count
+
+    if read_count > 500_000:
+        shotgun_score += 1.5
+        reasons.append(f"リード数が多い ({read_count:,})")
+    elif read_count < 200_000:
+        amplicon_score += 1.0
+        reasons.append(f"リード数がアンプリコン範囲 ({read_count:,})")
+    else:
+        reasons.append(f"リード数は中間的 ({read_count:,})")
+
+    # ── 指標 3: ユニーク配列の割合 ──────────────────────────────────────
+    unique_seqs = set(seqs)
+    unique_ratio = len(unique_seqs) / len(seqs) if seqs else 0.0
+    result["evidence"]["unique_ratio"] = round(unique_ratio, 4)
+
+    if unique_ratio > 0.95:
+        shotgun_score += 2.0
+        reasons.append(f"ユニーク配列率が非常に高い ({unique_ratio:.1%})")
+    elif unique_ratio < 0.70:
+        amplicon_score += 1.5
+        reasons.append(f"ユニーク配列率が低い ({unique_ratio:.1%})")
+    else:
+        reasons.append(f"ユニーク配列率は中間的 ({unique_ratio:.1%})")
+
+    # ── 指標 4: 16S プライマー配列の検出 ────────────────────────────────
+    best_primer = ""
+    best_rate = 0.0
+    check_seqs = seqs[:200]
+
+    for name, primer_seq in _16S_PRIMERS_FWD.items():
+        pattern = re.compile(_iupac_to_regex(primer_seq[:15]))
+        match_count = sum(1 for s in check_seqs if pattern.match(s))
+        rate = match_count / len(check_seqs) if check_seqs else 0.0
+        if rate > best_rate:
+            best_rate = rate
+            best_primer = name
+
+    result["evidence"]["primer_match"] = best_primer if best_rate > 0.3 else ""
+    result["evidence"]["primer_match_rate"] = round(best_rate, 4)
+
+    if best_rate > 0.7:
+        amplicon_score += 3.0
+        reasons.append(f"16S プライマー {best_primer} が高率で一致 ({best_rate:.0%})")
+    elif best_rate > 0.3:
+        amplicon_score += 1.5
+        reasons.append(f"16S プライマー {best_primer} が部分的に一致 ({best_rate:.0%})")
+    else:
+        shotgun_score += 0.5
+        reasons.append("既知の 16S プライマー配列は検出されず")
+
+    # ── 総合判定 ────────────────────────────────────────────────────────
+    total = amplicon_score + shotgun_score
+    if total == 0:
+        result["seq_type"] = "unknown"
+        result["confidence"] = 0.0
+    elif amplicon_score > shotgun_score:
+        result["seq_type"] = "amplicon"
+        result["confidence"] = round(amplicon_score / total, 2)
+    else:
+        result["seq_type"] = "shotgun"
+        result["confidence"] = round(shotgun_score / total, 2)
+
+    result["reasons"] = reasons
+    return result
+
+
 def _detect_dada2_params(fastq_dir: str) -> dict:
     """
     FASTQ ディレクトリを解析して DADA2 パラメータを自動推定する。
@@ -549,6 +716,13 @@ def _detect_dada2_params(fastq_dir: str) -> dict:
         # 最少リード数の 80% を sampling_depth に（最低 1000）
         params["sampling_depth"] = max(1000, int(min_reads * 0.8))
 
+    # ── シーケンスタイプ判定 (16S amplicon vs shotgun) ─────────────────
+    seq_type_result = _detect_seq_type(r1_files, r2_files)
+    params["seq_type"] = seq_type_result["seq_type"]
+    params["seq_type_confidence"] = seq_type_result["confidence"]
+    params["seq_type_evidence"] = seq_type_result["evidence"]
+    params["seq_type_reasons"] = seq_type_result["reasons"]
+
     return params
 
 
@@ -597,6 +771,8 @@ def main():
     parser.add_argument("--threads",      type=int, default=4,    help="スレッド数（デフォルト: 4）")
     parser.add_argument("--sampling-depth", type=int, default=None, help="多様性解析のサンプリング深度（デフォルト: 自動検出）")
     parser.add_argument("--classifier",   help="SILVA 分類器 QZA のパス（省略時は自動探索）")
+    parser.add_argument("--force-amplicon", action="store_true",
+                        help="シーケンスタイプ判定をスキップし 16S アンプリコンとして処理する")
     args = parser.parse_args()
 
     _print_banner()
@@ -746,6 +922,47 @@ def main():
     print()
     print("🔍 FASTQ を解析中...")
     auto_params = _detect_dada2_params(fastq_dir)
+
+    # ── シーケンスタイプ判定結果のチェック ─────────────────────────────
+    _seq_type = auto_params.get("seq_type", "unknown")
+    _seq_conf = auto_params.get("seq_type_confidence", 0.0)
+    _seq_reasons = auto_params.get("seq_type_reasons", [])
+    _seq_evidence = auto_params.get("seq_type_evidence", {})
+
+    if _seq_type == "shotgun" and not args.force_amplicon:
+        print()
+        print("=" * 60)
+        print("  ショットガンメタゲノムデータの可能性があります")
+        print("=" * 60)
+        print(f"  判定: {_seq_type} (確信度: {_seq_conf:.0%})")
+        print()
+        print("  判定根拠:")
+        for reason in _seq_reasons:
+            print(f"    - {reason}")
+        print()
+        print("  seq2pipe は 16S rRNA アンプリコン解析専用です。")
+        print("  ショットガンデータでは正しい結果が得られません。")
+        print("=" * 60)
+        print()
+
+        if args.auto:
+            print("--auto モードではショットガンデータの処理を中断します。")
+            print("16S アンプリコンデータであることが確実な場合は")
+            print("--force-amplicon フラグを使用してください。")
+            sys.exit(1)
+        else:
+            if not _ask_bool("それでも 16S アンプリコンとして処理を続行しますか?", False):
+                print("中断しました。")
+                sys.exit(0)
+            print()
+
+    elif _seq_type == "amplicon":
+        _primer = _seq_evidence.get("primer_match", "")
+        if _primer:
+            print(f"  ✅ 16S アンプリコンデータを検出 (プライマー: {_primer}, 確信度: {_seq_conf:.0%})")
+        else:
+            print(f"  ✅ 16S アンプリコンデータを検出 (確信度: {_seq_conf:.0%})")
+
     n_samples   = auto_params["n_samples"]
     read_len_f  = auto_params["read_len_f"]
     read_len_r  = auto_params["read_len_r"]
@@ -762,6 +979,7 @@ def main():
     print(f"   サンプル数         : {n_samples} サンプル（ペアエンド）")
     if read_len_f:
         print(f"   リード長 (F/R)     : {read_len_f}bp / {read_len_r or '?'}bp")
+    print(f"   シーケンスタイプ   : {_seq_type} (確信度: {_seq_conf:.0%})")
     if metadata_path:
         print(f"📋 メタデータ         : {metadata_path}")
     print(f"💾 出力先             : {output_dir}")
