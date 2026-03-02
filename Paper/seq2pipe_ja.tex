@@ -226,39 +226,7 @@ vibe-local 方式のツール呼び出し型コード生成を行う。
 
 \begin{figure}[h]
   \centering
-  \begin{verbatim}
-  ユーザー
-    |
-    v
-  [launch.sh] -> [cli.py]  (バナー・モード選択)
-                     |
-    +----------------+---------------------------+
-    |                |                           |
-    v                v                           v
-  モード 1      [pipeline_runner.py]        モード 2
-  指定解析       QIIME2 実行 + エクスポート   --auto フラグ
-    |                |   (STEP 1)                |
-    |                v                           |
-    |       [analysis.py]  (STEP 1.5)            |
-    |         決定論的包括解析（LLM 不要）          |
-    |         29 種類の PNG 図を確実に生成          |
-    |         fig01-12: 基本解析                  |
-    |         fig13-15: 分類組成（分類器あり時）    |
-    |         fig16-25: 拡張解析                  |
-    |         fig26-29: 網羅的解析                |
-    |                |                           |
-    |                v                           |
-    |       STEP 2: 適応型自律エージェント          |
-    |         generate_analysis_summary() ->      |
-    |         LLM データ適応型応用解析              |
-    |                |                           |
-    v                v                           v
-  [code_agent.py] <-+----> [report_generator.py]
-    ツール呼び出し型          HTML / LaTeX+PDF
-    コード生成エージェント     レポート生成
-    |                          (STEP 3)
-    +---> Ollama (localhost:11434)
-  \end{verbatim}
+  \includegraphics[width=0.95\linewidth]{../Figure/architecture.png}
   \caption{seq2pipe の 4 ステップアーキテクチャ}
   \label{fig:arch}
 \end{figure}

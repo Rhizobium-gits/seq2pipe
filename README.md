@@ -421,12 +421,16 @@ QIIME2_CONDA_BIN=/opt/conda/envs/qiime2/bin ./launch.sh
 
 ## 使用モデル
 
-| モデル | RAM | 特徴 |
-|---|---|---|
-| `qwen2.5-coder:7b` | 8 GB 以上 | コード生成に最適（推奨） |
-| `qwen2.5-coder:3b` | 4 GB 以上 | 軽量・高速 |
-| `llama3.2:3b` | 4 GB 以上 | 汎用・会話能力高め |
-| `qwen3:8b` | 16 GB 以上 | 最高品質・推論能力も高い |
+| モデル | パラメータ数 | ディスク容量 | 推奨 RAM | 特徴 |
+|---|---|---|---|---|
+| `qwen2.5-coder:7b` | 7.6B | 4.7 GB | 8 GB+ | コード生成に最適（推奨） |
+| `qwen2.5-coder:3b` | 3.1B | 1.9 GB | 4 GB+ | 軽量・高速、メモリ制約時に最適 |
+| `llama3.2:3b` | 3.2B | 2.0 GB | 4 GB+ | 汎用・会話能力高め |
+| `qwen3:8b` | 8.2B | 5.2 GB | 16 GB+ | 最高品質・推論能力も高い |
+| `codellama:7b` | 6.7B | 3.8 GB | 8 GB+ | Meta のコード特化モデル |
+| `deepseek-coder-v2:lite` | 2.4B | 1.5 GB | 4 GB+ | 超軽量コーディングモデル |
+
+> **ストレージ目安**: Ollama 本体 (~500 MB) + 選択モデル (1.5〜5.2 GB) + QIIME2 conda 環境 (~3 GB) + SILVA 分類器 (~400 MB, optional) = **合計 約 6〜10 GB**
 
 ### 小型モデルへの対応（ロバストネス機能）
 
@@ -448,45 +452,9 @@ QIIME2_AI_MODEL=qwen2.5-coder:3b ./launch.sh
 
 ## アーキテクチャ
 
-```
-あなた
-  |
-  v
-[ launch.sh / cli.py ]
-        |
-        v
-[ pipeline_runner.py ]  ←──────────────────────→  [ qiime2_agent.py ]
-  QIIME2 パイプライン実行                            QIIME2 コマンド生成
-  stdout → _Tee でログ収集                          (11 ツール、STEP 0〜8)
-        |
-        v
-[ analysis.py / run_comprehensive_analysis() ]     ← STEP 1.5（決定論的）
-  LLM 不要・29 種類の PNG 図を確実に生成
-  ├── fig01-fig12: 基本解析（DADA2統計・α/β多様性・ASV・相関）
-  ├── fig13-fig15: 分類組成（分類器あり時のみ）
-  ├── fig16-fig25: 拡張解析（rarefaction・NMDS・alluvial・network 等）
-  ├── fig26-fig29: 網羅的解析（綱・目組成・Simpson/Pielou・ASV共有）
-  └── generate_analysis_summary() → 解析サマリー dict を STEP 2 へ
-        |
-        v
-[ code_agent.py / run_coding_agent() ]             ← STEP 2（適応型自律）
-  LLM コード生成エージェント（vibe-local 方式）
-  解析サマリーをもとにデータ適応型の応用図を自動生成
-  ├── list_files / read_file / write_file / run_python / install_package
-  ├── _ensure_required_imports()  plt/pd の自動補完
-  ├── _convert_new_figs()         PDF/SVG → PNG 自動変換（sips）
-  ├── NEVER GIVE UP: exit code ≠ 0 → write_file 修正 → run_python 再実行
-  ├── run_refinement_loop()       解析後の振り返り・修正モード
-  └── 実行成功 + 図生成確認 → CodeExecutionResult 返却
-        |
-        v
-[ report_generator.py ]
-  ├── generate_html_report()  HTML レポート（base64 図埋め込み）
-  └── generate_latex_report() LaTeX → PDF レポート（lualatex / xelatex）
-        |
-        v
-  Ollama (localhost:11434)  ← ローカル LLM
-```
+<p align="center">
+  <img src="Figure/architecture.png" alt="seq2pipe Architecture" width="800">
+</p>
 
 ---
 
@@ -991,54 +959,24 @@ When a classifier is detected, QIIME2 performs taxonomic classification, and
 
 ## Models
 
-| Model | RAM | Description |
-|---|---|---|
-| `qwen2.5-coder:7b` | 8 GB+ | Best for code generation (recommended) |
-| `qwen2.5-coder:3b` | 4 GB+ | Lightweight and fast |
-| `llama3.2:3b` | 4 GB+ | General purpose, good conversation |
-| `qwen3:8b` | 16 GB+ | Highest quality, strong reasoning |
+| Model | Parameters | Disk Size | RAM Required | Description |
+|---|---|---|---|---|
+| `qwen2.5-coder:7b` | 7.6B | 4.7 GB | 8 GB+ | Best for code generation (recommended) |
+| `qwen2.5-coder:3b` | 3.1B | 1.9 GB | 4 GB+ | Lightweight and fast, for constrained memory |
+| `llama3.2:3b` | 3.2B | 2.0 GB | 4 GB+ | General purpose, good conversation |
+| `qwen3:8b` | 8.2B | 5.2 GB | 16 GB+ | Highest quality, strong reasoning |
+| `codellama:7b` | 6.7B | 3.8 GB | 8 GB+ | Meta's code-specialized model |
+| `deepseek-coder-v2:lite` | 2.4B | 1.5 GB | 4 GB+ | Ultra-lightweight coding model |
+
+> **Storage estimate**: Ollama (~500 MB) + selected model (1.5-5.2 GB) + QIIME2 conda env (~3 GB) + SILVA classifier (~400 MB, optional) = **total ~6-10 GB**
 
 ---
 
 ## Architecture
 
-```
-You
-  |
-  v
-[ launch.sh / cli.py ]
-        |
-        v
-[ pipeline_runner.py ]  ←──────────────────────→  [ qiime2_agent.py ]
-  QIIME2 pipeline execution                         QIIME2 command generation
-  stdout captured by _Tee logger                    (11 tools, STEP 0-8)
-        |
-        v
-[ analysis.py / run_comprehensive_analysis() ]     ← STEP 1.5 (deterministic)
-  No LLM dependency — 29 PNG figures reliably generated
-  ├── fig01-fig12: Core analysis (DADA2 stats, alpha/beta, ASV, correlation)
-  ├── fig13-fig15: Taxonomy (when classifier is available)
-  ├── fig16-fig25: Extended (rarefaction, NMDS, alluvial, network, etc.)
-  ├── fig26-fig29: Exhaustive (class/order composition, Simpson/Pielou, ASV overlap)
-  └── generate_analysis_summary() → structured summary dict → STEP 2
-        |
-        v
-[ code_agent.py / run_coding_agent() ]             ← STEP 2 (adaptive autonomous)
-  LLM code generation agent (vibe-local style)
-  Generates data-adaptive follow-up figures based on analysis summary
-  ├── list_files / read_file / write_file / run_python / install_package
-  ├── _convert_new_figs()    PDF/SVG → PNG auto-conversion (sips)
-  ├── NEVER GIVE UP: exit ≠ 0 → rewrite → retry
-  └── run_refinement_loop()  post-analysis natural-language refinement
-        |
-        v
-[ report_generator.py ]
-  ├── generate_html_report()  base64-embedded HTML report
-  └── generate_latex_report() LaTeX → PDF (lualatex / xelatex)
-        |
-        v
-  Ollama (localhost:11434)  ← Local LLM
-```
+<p align="center">
+  <img src="Figure/architecture.png" alt="seq2pipe Architecture" width="800">
+</p>
 
 ---
 

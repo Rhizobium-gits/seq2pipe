@@ -245,40 +245,8 @@ vibe-local-style tool-calling code generation.
 
 \begin{figure}[h]
   \centering
-  \begin{verbatim}
-  User
-    |
-    v
-  [launch.sh] -> [cli.py]  (rainbow banner / mode selection)
-                     |
-    +----------------+---------------------------+
-    |                |                           |
-    v                v                           v
-  Mode 1      [pipeline_runner.py]        Mode 2
-  Analysis     QIIME2 pipeline +           --auto flag
-  mode         result export
-    |                |   (STEP 1)                |
-    |                v                           |
-    |       [analysis.py]  (STEP 1.5)            |
-    |         Deterministic analysis (no LLM)    |
-    |         29 PNG figures reliably generated   |
-    |         fig01-12: Core analysis             |
-    |         fig13-15: Taxonomy (with classifier)|
-    |         fig16-25: Extended ecological       |
-    |         fig26-29: Exhaustive community      |
-    |                |                           |
-    |       [adaptive agent]  (STEP 2)           |
-    |         Data-driven autonomous analysis     |
-    |                |                           |
-    v                v                           v
-  [code_agent.py] <-+----> [report_generator.py]
-    Tool-calling           HTML / LaTeX+PDF
-    code generation        report generation
-    agent                    (STEP 3)
-    |
-    +---> Ollama (localhost:11434)
-  \end{verbatim}
-  \caption{Three-step architecture of seq2pipe}
+  \includegraphics[width=0.95\linewidth]{../Figure/architecture.png}
+  \caption{Four-step architecture of seq2pipe}
   \label{fig:arch}
 \end{figure}
 
