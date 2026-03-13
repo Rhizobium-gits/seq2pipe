@@ -470,6 +470,29 @@ _16S_PRIMERS_FWD = {
     "799F":  "AACMGGATTAGATACCCKG",       # V5-V6
 }
 
+# 代表的な 16S rRNA プライマー配列（リバース側）
+_16S_PRIMERS_REV = {
+    "338R":  "TGCTGCCTCCCGTAGGAGT",      # V1-V2  (27F pair)
+    "534R":  "ATTACCGCGGCTGCTGG",         # V1-V3  (27F pair)
+    "785R":  "GACTACHVGGGTATCTAATCC",     # V3-V4  (341F pair)
+    "806R":  "GGACTACNVGGGTWTCTAAT",      # V4     (515F pair)
+    "806Rb": "GGACTACHVGGGTWTCTAAT",      # V4     (515F pair variant)
+    "907R":  "CCGTCAATTCMTTTRAGTTT",      # V5     (515F pair)
+    "926R":  "CCGTCAATTCMTTTRAGT",        # V5-V6  (515F pair variant)
+    "1100R": "GGGTTGCGCTCGTTG",           # V6     (799F pair)
+    "1391R": "GACGGGCGGTGTGTRCA",         # V7-V9
+    "1492R": "TACGGYTACCTTGTTACGACTT",    # near-full (27F pair)
+}
+
+# よく使われるプライマーペアの対応関係
+_PRIMER_PAIRS = {
+    "27F":   ["338R", "534R", "1492R"],
+    "341F":  ["785R", "806R"],
+    "515F":  ["806R", "806Rb", "907R", "926R"],
+    "515Fn": ["806R", "806Rb", "907R", "926R"],
+    "799F":  ["1100R", "1391R"],
+}
+
 # IUPAC 曖昧塩基 → 正規表現変換テーブル
 _IUPAC_RE = {
     "M": "[AC]", "R": "[AG]", "W": "[AT]", "S": "[CG]",
@@ -481,6 +504,24 @@ _IUPAC_RE = {
 def _iupac_to_regex(seq: str) -> str:
     """IUPAC 曖昧塩基を含む配列を正規表現パターンに変換する。"""
     return "".join(_IUPAC_RE.get(c, c) for c in seq.upper())
+
+
+def _iupac_bases(code: str) -> set:
+    """IUPAC コードが許容する塩基セットを返す。"""
+    _expand = {
+        "A": {"A"}, "C": {"C"}, "G": {"G"}, "T": {"T"},
+        "M": {"A", "C"}, "R": {"A", "G"}, "W": {"A", "T"},
+        "S": {"C", "G"}, "Y": {"C", "T"}, "K": {"G", "T"},
+        "V": {"A", "C", "G"}, "H": {"A", "C", "T"},
+        "D": {"A", "G", "T"}, "B": {"C", "G", "T"}, "N": {"A", "C", "G", "T"},
+    }
+    return _expand.get(code.upper(), {"A", "C", "G", "T"})
+
+
+def _primer_match_score(read_seq: str, primer_seq: str, check_len: int = 15) -> int:
+    """リード先頭と primer の一致塩基数を返す（IUPAC 曖昧塩基考慮）。"""
+    n = min(check_len, len(primer_seq), len(read_seq))
+    return sum(1 for i in range(n) if read_seq[i].upper() in _iupac_bases(primer_seq[i]))
 
 
 def _detect_seq_type(r1_files: list, r2_files: list,
@@ -585,28 +626,60 @@ def _detect_seq_type(r1_files: list, r2_files: list,
     else:
         reasons.append(f"ユニーク配列率は中間的 ({unique_ratio:.1%})")
 
-    # ── 指標 4: 16S プライマー配列の検出 ────────────────────────────────
-    best_primer = ""
-    best_rate = 0.0
+    # ── 指標 4: 16S プライマー配列の検出（フォワード）─────────────────
+    #   ミスマッチ許容マッチング: 15bp 中 12bp 以上一致で match とみなす
+    _CHECK_LEN = 15
+    _MIN_MATCH = 12  # 15bp 中 12bp 一致 → 最大 3 ミスマッチ許容
+
+    best_fwd_primer = ""
+    best_fwd_rate = 0.0
     check_seqs = seqs[:200]
 
     for name, primer_seq in _16S_PRIMERS_FWD.items():
-        pattern = re.compile(_iupac_to_regex(primer_seq[:15]))
-        match_count = sum(1 for s in check_seqs if pattern.match(s))
+        match_count = sum(
+            1 for s in check_seqs
+            if _primer_match_score(s, primer_seq, _CHECK_LEN) >= _MIN_MATCH
+        )
         rate = match_count / len(check_seqs) if check_seqs else 0.0
-        if rate > best_rate:
-            best_rate = rate
-            best_primer = name
+        if rate > best_fwd_rate:
+            best_fwd_rate = rate
+            best_fwd_primer = name
 
-    result["evidence"]["primer_match"] = best_primer if best_rate > 0.3 else ""
-    result["evidence"]["primer_match_rate"] = round(best_rate, 4)
+    # ── 指標 4b: 16S プライマー配列の検出（リバース・R2から）──────────
+    best_rev_primer = ""
+    best_rev_rate = 0.0
+    if r2_files:
+        r2_seqs = _read_seqs(r2_files[0], 200)
+        if r2_seqs:
+            for name, primer_seq in _16S_PRIMERS_REV.items():
+                match_count = sum(
+                    1 for s in r2_seqs
+                    if _primer_match_score(s, primer_seq, _CHECK_LEN) >= _MIN_MATCH
+                )
+                rate = match_count / len(r2_seqs) if r2_seqs else 0.0
+                if rate > best_rev_rate:
+                    best_rev_rate = rate
+                    best_rev_primer = name
+
+    best_rate = max(best_fwd_rate, best_rev_rate)
+    result["evidence"]["primer_match"] = best_fwd_primer if best_fwd_rate > 0.3 else ""
+    result["evidence"]["primer_match_rate"] = round(best_fwd_rate, 4)
+    result["evidence"]["primer_rev_match"] = best_rev_primer if best_rev_rate > 0.3 else ""
+    result["evidence"]["primer_rev_match_rate"] = round(best_rev_rate, 4)
+    result["evidence"]["fwd_primer_len"] = len(_16S_PRIMERS_FWD.get(best_fwd_primer, "")) if best_fwd_rate > 0.3 else 0
+    result["evidence"]["rev_primer_len"] = len(_16S_PRIMERS_REV.get(best_rev_primer, "")) if best_rev_rate > 0.3 else 0
 
     if best_rate > 0.7:
         amplicon_score += 3.0
-        reasons.append(f"16S プライマー {best_primer} が高率で一致 ({best_rate:.0%})")
+        parts = []
+        if best_fwd_rate > 0.3:
+            parts.append(f"Fwd={best_fwd_primer} ({best_fwd_rate:.0%})")
+        if best_rev_rate > 0.3:
+            parts.append(f"Rev={best_rev_primer} ({best_rev_rate:.0%})")
+        reasons.append(f"16S プライマーが高率で一致: {', '.join(parts)}")
     elif best_rate > 0.3:
         amplicon_score += 1.5
-        reasons.append(f"16S プライマー {best_primer} が部分的に一致 ({best_rate:.0%})")
+        reasons.append(f"16S プライマーが部分的に一致 ({best_fwd_primer} {best_fwd_rate:.0%})")
     else:
         shotgun_score += 0.5
         reasons.append("既知の 16S プライマー配列は検出されず")
@@ -722,6 +795,28 @@ def _detect_dada2_params(fastq_dir: str) -> dict:
     params["seq_type_confidence"] = seq_type_result["confidence"]
     params["seq_type_evidence"] = seq_type_result["evidence"]
     params["seq_type_reasons"] = seq_type_result["reasons"]
+
+    # ── プライマー自動検出 → trim_left / trunc_len を補正 ─────────────
+    evidence = seq_type_result["evidence"]
+    fwd_primer_len = evidence.get("fwd_primer_len", 0)
+    rev_primer_len = evidence.get("rev_primer_len", 0)
+
+    if fwd_primer_len > 0:
+        params["trim_left_f"] = fwd_primer_len
+        params["detected_fwd_primer"] = evidence.get("primer_match", "")
+    if rev_primer_len > 0:
+        params["trim_left_r"] = rev_primer_len
+        params["detected_rev_primer"] = evidence.get("primer_rev_match", "")
+
+    # プライマー除去後のリード長に基づいて trunc_len を再計算
+    if fwd_primer_len > 0 and params["read_len_f"] > 0:
+        effective_f = params["read_len_f"] - fwd_primer_len
+        # プライマー除去後のリードの 90% を使用（品質低下分のみカット）
+        params["trunc_len_f"] = max(200, min(int(effective_f * 0.95), effective_f))
+    if rev_primer_len > 0 and params["read_len_r"] > 0:
+        effective_r = params["read_len_r"] - rev_primer_len
+        # リバースは品質低下が早いので 85% を使用
+        params["trunc_len_r"] = max(150, min(int(effective_r * 0.90), effective_r))
 
     return params
 
@@ -957,11 +1052,22 @@ def main():
             print()
 
     elif _seq_type == "amplicon":
-        _primer = _seq_evidence.get("primer_match", "")
-        if _primer:
-            print(f"  ✅ 16S アンプリコンデータを検出 (プライマー: {_primer}, 確信度: {_seq_conf:.0%})")
+        _primer_fwd = _seq_evidence.get("primer_match", "")
+        _primer_rev = _seq_evidence.get("primer_rev_match", "")
+        _fwd_len = _seq_evidence.get("fwd_primer_len", 0)
+        _rev_len = _seq_evidence.get("rev_primer_len", 0)
+        if _primer_fwd or _primer_rev:
+            parts = []
+            if _primer_fwd:
+                parts.append(f"Fwd={_primer_fwd} ({_fwd_len}bp)")
+            if _primer_rev:
+                parts.append(f"Rev={_primer_rev} ({_rev_len}bp)")
+            print(f"  ✅ 16S アンプリコンデータを検出 (確信度: {_seq_conf:.0%})")
+            print(f"  🧬 プライマー自動検出: {', '.join(parts)}")
+            print(f"     → trim_left を自動設定: F={_fwd_len} R={_rev_len}")
         else:
             print(f"  ✅ 16S アンプリコンデータを検出 (確信度: {_seq_conf:.0%})")
+            print(f"  ⚠️  プライマー配列は検出されず — trim_left=0 のまま")
 
     n_samples   = auto_params["n_samples"]
     read_len_f  = auto_params["read_len_f"]
