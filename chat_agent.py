@@ -125,6 +125,7 @@ class InteractiveSession:
         model: str | None = None,
         log_callback=None,
         install_callback=None,
+        metadata_path: str = "",
     ):
         self.export_dir   = Path(export_dir).expanduser()
         self.output_dir   = Path(output_dir).expanduser()
@@ -137,8 +138,14 @@ class InteractiveSession:
         self.model        = model or _agent.DEFAULT_MODEL
         self._log         = log_callback or (lambda m: print(m, flush=True))
         self._install_cb  = install_callback
+        self.metadata_path = metadata_path
         self.ctx          = SessionContext()
         self.export_files = discover_export_files(self.export_dir)
+        # メタデータが外部パスで指定されている場合、export_files に追加
+        if metadata_path and Path(metadata_path).exists():
+            self.export_files.setdefault("metadata", [])
+            if metadata_path not in self.export_files["metadata"]:
+                self.export_files["metadata"].append(metadata_path)
 
     # ── setup ─────────────────────────────────────────────────────────────────
 
@@ -151,13 +158,25 @@ class InteractiveSession:
         n = sum(len(v) for v in self.export_files.values())
         file_block = _file_summary(self.export_files)
 
+        # メタデータの列名情報を含める
+        metadata_info = ""
+        if self.metadata_path and Path(self.metadata_path).exists():
+            try:
+                with open(self.metadata_path) as f:
+                    cols = f.readline().strip().split("\t")
+                metadata_info = f"\nMetadata columns available: {', '.join(cols)}"
+            except Exception:
+                pass
+
         prompt = (
             f"You are a microbiome bioinformatics assistant. Respond in {'Japanese' if lang == 'ja' else 'English'}.\n\n"
             f"Experiment: {description}\n"
-            f"Research goals: {goals}\n\n"
+            f"Research goals: {goals}\n"
+            f"{metadata_info}\n\n"
             f"Available files ({n} found):\n{file_block}\n\n"
             "Briefly confirm what you understood and suggest a concrete analysis plan "
-            "(5-7 steps) for these goals. Keep it under 200 words."
+            "(5-7 steps) for these goals. Focus on analyses that use the metadata columns "
+            "for group comparisons. Keep it under 200 words."
         )
         return self._call_llm(prompt)
 
@@ -171,19 +190,42 @@ class InteractiveSession:
         available = list(self.export_files.keys())
         file_block = _file_summary(self.export_files)
 
+        # メタデータの列名を解析プランに含める
+        metadata_info = ""
+        if self.metadata_path and Path(self.metadata_path).exists():
+            try:
+                with open(self.metadata_path) as f:
+                    header = f.readline().strip()
+                    type_line = f.readline().strip()  # #q2:types line
+                    first_data = f.readline().strip()
+                cols = header.split("\t")
+                metadata_info = (
+                    f"\n\nMetadata columns: {', '.join(cols)}\n"
+                    f"Metadata path: {self.metadata_path}\n"
+                    f"Example row: {first_data}\n"
+                    "IMPORTANT: Use these metadata columns for grouping, coloring, and statistical comparisons. "
+                    "The metadata file is a TSV with sample-id as the first column."
+                )
+            except Exception:
+                pass
+
         prompt = (
             "You are planning a microbiome analysis pipeline.\n\n"
             f"Experiment: {self.ctx.experiment_description}\n"
             f"Research goals: {self.ctx.research_goals}\n\n"
             f"Available data: {', '.join(available)}\n"
-            f"Files:\n{file_block}\n\n"
+            f"Files:\n{file_block}\n"
+            f"{metadata_info}\n\n"
             "List 5-8 specific analyses to run, ordered logically. "
             "Each should be ONE concrete figure/visualization task.\n"
+            "IMPORTANT: The analyses MUST directly address the user's research goals above. "
+            "Use the metadata grouping variables (e.g. gravity, timepoint, donor) for comparisons.\n"
             "Format: one analysis per line, starting with a number and period.\n"
             "Example:\n"
-            "1. Plot denoising statistics (reads filtered/merged/non-chimeric) as a bar chart.\n"
-            "2. Compare Shannon alpha diversity between groups with boxplot and Mann-Whitney U test.\n"
-            "Keep each description under 30 words. Focus on what figures to generate."
+            "1. Plot genus-level stacked bar chart of relative abundance grouped by treatment condition.\n"
+            "2. Compare Shannon alpha diversity between gravity groups with boxplot and Kruskal-Wallis test.\n"
+            "3. PCoA of Bray-Curtis distances colored by gravity condition.\n"
+            "Keep each description under 40 words. Focus on what figures to generate and what grouping to use."
         )
 
         content = self._call_llm(prompt)
@@ -345,6 +387,7 @@ class InteractiveSession:
             user_prompt=prompt,
             output_dir=str(self.output_dir),
             figure_dir=str(self.figure_dir),
+            metadata_path=self.metadata_path,
             model=self.model,
             max_retries=3,
             log_callback=self._log,
@@ -688,6 +731,8 @@ def run_terminal_chat(
     model: str | None = None,
     log_callback=None,
     install_callback=None,
+    initial_prompt: str = "",
+    metadata_path: str = "",
 ):
     """ターミナルで対話型解析セッションを実行する。"""
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -726,6 +771,7 @@ def run_terminal_chat(
         model=model,
         log_callback=_log,
         install_callback=_cb,
+        metadata_path=metadata_path,
     )
 
     if not session.export_files:
@@ -738,23 +784,33 @@ def run_terminal_chat(
         for p in paths:
             print(f"   [{cat}] {Path(p).name}")
 
-    # ── 言語選択 ──────────────────────────────────────────────────────────────
-    print()
-    lang_raw = _input_safe("レポート言語を選択してください [ja/en]", default="ja")
-    lang = "en" if lang_raw.strip().lower().startswith("e") else "ja"
+    # ── initial_prompt が渡されている場合はそれを使う ─────────────────────────
+    if initial_prompt:
+        lang = "ja"
+        description = initial_prompt
+        goals = initial_prompt
+        print(f"\n📝 解析指示を受け取りました:")
+        # 最初の100文字を表示
+        preview = initial_prompt[:150].replace("\n", " ")
+        print(f"   {preview}{'...' if len(initial_prompt) > 150 else ''}")
+    else:
+        # ── 言語選択 ──────────────────────────────────────────────────────────
+        print()
+        lang_raw = _input_safe("レポート言語を選択してください [ja/en]", default="ja")
+        lang = "en" if lang_raw.strip().lower().startswith("e") else "ja"
 
-    # ── 実験説明 ──────────────────────────────────────────────────────────────
-    print()
-    print("【1/2】実験の概要を教えてください。")
-    print("  （例: マウス腸内フローラ 16S。抗生物質投与群 vs 対照群、各 10 匹）")
-    description = _input_safe("あなた", required=True)
-    if not description:
-        description = "QIIME2 で処理したマイクロバイオームデータ"
+        # ── 実験説明 ──────────────────────────────────────────────────────────
+        print()
+        print("【1/2】実験の概要を教えてください。")
+        print("  （例: マウス腸内フローラ 16S。抗生物質投与群 vs 対照群、各 10 匹）")
+        description = _input_safe("あなた", required=True)
+        if not description:
+            description = "QIIME2 で処理したマイクロバイオームデータ"
 
-    print()
-    print("【2/2】知りたいこと・研究の目的を教えてください。")
-    print("  （例: 抗生物質が多様性と菌叢組成に与える影響。Lactobacillus の変化を見たい）")
-    goals = _input_safe("あなた", required=False)
+        print()
+        print("【2/2】知りたいこと・研究の目的を教えてください。")
+        print("  （例: 抗生物質が多様性と菌叢組成に与える影響。Lactobacillus の変化を見たい）")
+        goals = _input_safe("あなた", required=False)
 
     # ── セットアップ ──────────────────────────────────────────────────────────
     print("\n🤖 考え中...\n")

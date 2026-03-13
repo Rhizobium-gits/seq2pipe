@@ -899,6 +899,8 @@ def main():
                 model=model,
                 log_callback=_log,
                 install_callback=_install_callback,
+                initial_prompt=args.prompt or "",
+                metadata_path=args.metadata or "",
             )
             return
 
@@ -945,6 +947,8 @@ def main():
                 model=model,
                 log_callback=_log,
                 install_callback=_install_callback,
+                initial_prompt=user_prompt,
+                metadata_path=metadata_path,
             )
             return
 
@@ -1186,6 +1190,8 @@ def main():
             model=model,
             log_callback=_log,
             install_callback=_install_callback,
+            initial_prompt=user_prompt,
+            metadata_path=metadata_path,
         )
         return
 
