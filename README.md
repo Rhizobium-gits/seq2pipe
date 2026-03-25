@@ -34,7 +34,8 @@
 - データ構造を自動で調査（FASTQ / メタデータ / 既存 QZA）
 - データに合った QIIME2 コマンドをゼロから組み立てる
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
-- **2 つの操作モード**: チャット（自然言語でやりたい解析を指定）・自律エージェント（AI が自律的に全解析を設計・実行）
+- **4 つの操作モード**: 指定解析 / 自律エージェント / 対話チャット / **研究目的駆動 (manual-auto)**
+- **`--manual-auto` モード（v1.2.0 新機能）**: メタデータから実験デザインを自動解析 → 40+ 種の可視化・統計解析を研究目的に合わせて全自動実行
 - **3 ステップ自動解析パイプライン（`--auto` モード）**:
   - **STEP 1**: QIIME2 パイプライン（DADA2 デノイジング → 系統樹 → 多様性解析 → 分類学的解析）
   - **STEP 1.5**: 決定論的包括解析（`analysis.py`）— LLM に依存せず **29 種類の出版品質 PNG 図を確実に生成**
@@ -281,6 +282,140 @@ cd ~/seq2pipe
   ✅ レポート完了
 ```
 
+### モード 4 — 研究目的駆動の自律解析（--manual-auto）
+
+メタデータと研究の問いを指定すると、実験デザインを自動解析し、40+ 種の解析を全自動実行します。
+
+```bash
+./launch.sh --fastq-dir ~/input --manual-auto \
+    --metadata metadata.tsv \
+    --research-question "抗生物質投与群とコントロール群の腸内細菌叢の違い"
+```
+
+```
+📋 メタデータを解析中...
+
+Samples: 10
+Columns: treatment, timepoint, subject, age
+Primary grouping: 'treatment' (2 groups: antibiotic=5, control=5)
+Longitudinal: timepoint column = 'timepoint'
+Paired design: subject column = 'subject'
+
+Research Question: 抗生物質投与群とコントロール群の腸内細菌叢の違い
+Total steps: 41 (skipped: 2)
+
+── Data Quality (3 steps) ──
+   1. DADA2 Denoising Statistics
+   2. Sequencing Depth per Sample
+   3. ASV Frequency Distribution
+── Taxonomic Composition (8 steps) ──
+   4. Phylum-Level Composition (Stacked Bar)
+   5. Genus-Level Composition (Stacked Bar)
+   ...
+── Alpha Diversity (5 steps) ──
+  12. Alpha Diversity Comparison (Multi-Metric)
+  13. Alpha Diversity Raincloud Plots
+  14. Rarefaction Curves
+  15. Alpha Diversity Trajectory (Longitudinal)
+  16. Alpha Diversity Effect Sizes
+── Beta Diversity (9 steps) ──
+  17. PCoA Ordination (All Metrics)
+  18. NMDS Ordination
+  19. t-SNE Visualization
+  20. UMAP Ordination
+  ...
+── Differential Abundance (4 steps) ──
+  26. Volcano Plot (Differential Abundance)
+  27. MA Plot (Mean-Difference)
+  28. Effect Size Forest Plot
+  29. LEfSe-Style Differential Analysis
+── Advanced Analysis (9 steps) ──
+  30. Co-Occurrence Network
+  31. Genus-Genus Correlation Heatmap
+  32. UpSet Diagram (Shared/Unique Taxa)
+  33. Taxonomy Alluvial / Sankey Diagram
+  ...
+── Publication Figures (3 steps) ──
+  39. Main Figure Composite (4-Panel)
+  40. Supplementary Figure Composite
+  41. Statistical Results Summary Table
+
+═══════════════════════════════════════════
+  🔬 Manual-Auto Analysis: 41 steps planned
+  📋 Research: 抗生物質投与群とコントロール群の腸内細菌叢の違い
+═══════════════════════════════════════════
+
+  📊 Step 1/41: DADA2 Denoising Statistics
+  ✅ 成功 — 図: ['step01_dada2_stats_main.png']
+
+  📊 Step 2/41: Sequencing Depth per Sample
+  ✅ 成功 — 図: ['step02_read_depth_main.png']
+  ...
+
+═══════════════════════════════════════════
+  🏁 Manual-Auto Analysis Complete
+  ✅ Completed: 39/41
+  ❌ Failed:    2/41
+  ⏭  Skipped:   2
+  📊 Total figures: 52
+═══════════════════════════════════════════
+```
+
+#### 実験デザイン自動検出
+
+| 検出項目 | 方法 |
+|---------|------|
+| グループ列 | 優先リスト (treatment, group, condition, genotype, diet...) + カーディナリティ判定 |
+| タイムポイント | カラム名パターン (timepoint, day, week, visit, dpi...) |
+| 被験者列 | カラム名パターン (subject, patient, donor, mouse, animal...) |
+| ペアデザイン | 被験者列 × グループ列から自動判定 |
+| 不均衡デザイン | 群間サンプル数比 > 2.0 で警告 |
+| 連続変数 | 数値型かつユニーク値 > 10 のカラム |
+
+#### データ適応型の統計検定
+
+実験デザインに基づいて最適な検定を自動選択:
+
+| デザイン | 選択される検定 |
+|---------|--------------|
+| 2群・対応なし | Mann-Whitney U test |
+| 2群・対応あり | Wilcoxon signed-rank test |
+| 3+群・対応なし | Kruskal-Wallis + Dunn's post-hoc (Bonferroni) |
+| 3+群・対応あり | Friedman test + Nemenyi post-hoc |
+| β多様性群間比較 | PERMANOVA (999 permutations) |
+| 多重検定補正 | Benjamini-Hochberg FDR |
+| 効果量 | Cliff's delta / Hedges' g |
+
+#### 40+ 種の解析レジストリ
+
+| Phase | 解析手法 |
+|-------|---------|
+| **Data Quality** | DADA2 統計、リード深度、ASV 頻度分布 |
+| **Composition** | 門/属/科積み上げ棒、ヒートマップ(clustermap)、バイオリン+ストリップ、グループ別箱ひげ図、コアマイクロバイオーム、Indicator Species |
+| **Alpha Diversity** | マルチメトリクス箱ひげ図、Raincloud plot、レアファクション、効果量 Forest plot、縦断軌跡（spaghetti） |
+| **Beta Diversity** | PCoA (全メトリクス+95%信頼楕円)、NMDS、t-SNE、UMAP、PCA-CLR biplot、PERMANOVA/ANOSIM、Beta Dispersion、階層クラスタリング樹形図 |
+| **Differential** | Volcano plot (FDR補正)、MA plot、Forest plot (効果量)、LEfSe-style (LDA効果量)、多群 KW ヒートマップ |
+| **Advanced** | 共起ネットワーク、相関 clustermap、Ternary plot (3群)、UpSet diagram、Alluvial/Sankey、Venn diagram、サンプル類似度ヒートマップ |
+| **Publication** | 4パネル Main Figure、6パネル Supplementary、統計結果サマリーテーブル |
+
+> 解析は実験デザインとデータ可用性に基づいて自動フィルタリングされます（例: 2群 → Volcano plot 有効 / Ternary plot スキップ、縦断データなし → Trajectory スキップ）
+
+#### 検証結果
+
+| テスト | 結果 |
+|--------|------|
+| インポート・レジストリ読み込み | 43 解析仕様 |
+| メタデータ解析（2群・ペア・縦断） | treatment/timepoint/subject 正しく検出 |
+| メタデータ解析（3群） | Ternary 追加、Volcano スキップ |
+| 存在しないファイル | クラッシュせず空デザイン返却 |
+| #q2:types 行スキップ | QIIME2 形式メタデータ対応 |
+| プラン構築（2群、全データあり） | 41 ステップ選択、2 スキップ |
+| プラン構築（3群、一部データのみ） | 25 ステップ（データ要件で絞り込み） |
+| プロンプトへの実験情報埋め込み | グループ名・統計検定・メタデータパスが展開 |
+| CLI --version | `seq2pipe 1.2.0` |
+
+---
+
 ### DADA2 パラメータの自動検出
 
 `--auto` フラグ使用時、リード長から DADA2 パラメータを自動検出します:
@@ -398,6 +533,51 @@ SILVA 138 Naive Bayes 分類器を指定して分類学的解析を有効化で�
 | 属レベル heatmap（taxonomy あり） | pandas, seaborn |
 | サンプル相関行列 | pandas, scipy, seaborn |
 | HTML / LaTeX+PDF レポート自動生成 | report_generator.py（lualatex / xelatex） |
+
+### 研究目的駆動の自律解析（モード 4 — `--manual-auto`、43 解析レジストリ）
+| 解析手法 | カテゴリ | 条件 |
+|---|---|---|
+| DADA2 Denoising Statistics | Quality | denoising |
+| Sequencing Depth per Sample | Quality | feature_table |
+| ASV Frequency Distribution | Quality | feature_table |
+| Phylum / Genus / Family Stacked Bar | Composition | feature_table + taxonomy |
+| Genus Abundance Heatmap (Clustermap) | Composition | 2+群 |
+| Top Genera Violin + Strip | Composition | 2+群 |
+| Group-wise Genus Boxplot (FDR) | Composition | 2+群 |
+| Core Microbiome Scatter | Composition | feature_table + taxonomy |
+| Indicator Species Analysis | Composition | 2+群 |
+| Alpha Diversity Multi-Metric Boxplot | Alpha | 2+群 |
+| Alpha Diversity Raincloud Plot | Alpha | 2+群 |
+| Rarefaction Curves (by group) | Alpha | feature_table |
+| Alpha Diversity Trajectory | Alpha | 縦断データ |
+| Alpha Effect Size Forest Plot | Alpha | 2群のみ |
+| PCoA (All Metrics + 95% Ellipses) | Beta | 2+群 |
+| NMDS + Convex Hulls | Beta | 2+群 |
+| t-SNE | Beta | 2+群 |
+| UMAP | Beta | 2+群, umap-learn |
+| PCA-CLR Biplot | Beta | feature_table + taxonomy |
+| PERMANOVA / ANOSIM Table | Beta | 2+群 |
+| Beta Dispersion (Homogeneity) | Beta | 2+群 |
+| Hierarchical Clustering Dendrogram | Beta | 2+群 |
+| Beta Diversity Trajectory | Beta | 縦断データ |
+| Volcano Plot (BH-FDR) | Differential | 2群のみ |
+| MA Plot | Differential | 2群のみ |
+| Effect Size Forest Plot (Cliff's delta) | Differential | 2群のみ |
+| Multi-Group Differential Heatmap | Differential | 3+群 |
+| LEfSe-Style (LDA Effect Size) | Differential | 2+群 |
+| Co-Occurrence Network | Advanced | feature_table + taxonomy |
+| Genus-Genus Correlation Clustermap | Advanced | feature_table + taxonomy |
+| Ternary Plot | Advanced | 3群のみ |
+| UpSet Diagram | Advanced | 2+群 |
+| Taxonomy Alluvial / Sankey | Advanced | feature_table + taxonomy |
+| Rank-Abundance Curves | Advanced | feature_table |
+| Venn Diagram | Advanced | 2-3群, matplotlib-venn |
+| Sample-Sample Similarity Heatmap | Advanced | 2+群 |
+| Diversity vs Metadata Correlation | Advanced | alpha + 連続変数 |
+| Taxa Prevalence Heatmap | Advanced | 2+群 |
+| Main Figure Composite (4-Panel) | Publication | 2+群 |
+| Supplementary Figure Composite (6-Panel) | Publication | feature_table + taxonomy |
+| Statistical Results Summary Table | Publication | 2+群 |
 
 ---
 
@@ -561,6 +741,7 @@ seq2pipe/
 ├── analysis.py         # 決定論的包括解析モジュール（29 図、LLM 不要）
 ├── code_agent.py       # LLM コード生成エージェント（vibe-local 方式）
 │                       #   └── run_refinement_loop()  振り返り・修正ループ
+├── manual_auto_agent.py # 研究目的駆動 自律解析（43 解析レジストリ）
 ├── report_generator.py # HTML / LaTeX+PDF レポート生成
 ├── chat_agent.py       # 自律解析セッション管理（レガシー）
 ├── Figure/             # デモ出力図（実データ解析結果 29 図）
@@ -641,7 +822,8 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - Inspects your data structure automatically (FASTQ / metadata / existing QZA)
 - Builds the right QIIME2 commands from scratch for your dataset
 - Writes ready-to-run `.sh` / `.ps1` scripts
-- **Two operation modes**: Chat (specify analysis in natural language) and Autonomous agent (AI designs and runs all analyses)
+- **4 operation modes**: Prompt / Autonomous / Chat / **Research-Driven (manual-auto)**
+- **`--manual-auto` mode (v1.2.0)**: Auto-parses metadata to understand experimental design → runs 40+ visualization & statistical analyses tailored to your research question
 - **3-step automated analysis pipeline (`--auto` mode)**:
   - **STEP 1**: QIIME2 pipeline (DADA2 denoising, phylogeny, diversity, taxonomy)
   - **STEP 1.5**: Deterministic comprehensive analysis (`analysis.py`) — **29 publication-quality PNG figures generated reliably without LLM dependency**
@@ -875,6 +1057,31 @@ Statistical tests adapt automatically:
 - 3+ groups → Kruskal-Wallis + Dunn's post-hoc
 - Beta diversity → PERMANOVA (999 permutations)
 - Multiple testing → Benjamini-Hochberg FDR correction
+
+#### Experimental design auto-detection
+
+| Detected | Method |
+|---------|--------|
+| Group column | Priority list (treatment, group, condition, genotype, diet...) + cardinality check |
+| Timepoint | Column name pattern (timepoint, day, week, visit, dpi...) |
+| Subject column | Column name pattern (subject, patient, donor, mouse, animal...) |
+| Paired design | Subject × group column cross-check |
+| Unbalanced design | Warning if max/min group size ratio > 2.0 |
+| Continuous variables | Numeric columns with >10 unique values |
+
+#### Verification results
+
+| Test | Result |
+|------|--------|
+| Import & registry loading | 43 analysis specs |
+| Metadata parsing (2-group, paired, longitudinal) | treatment/timepoint/subject correctly detected |
+| Metadata parsing (3-group) | Ternary added, Volcano skipped |
+| Non-existent file | Returns empty design without crash |
+| #q2:types row skip | QIIME2 format metadata supported |
+| Plan building (2 groups, all data) | 41 steps selected, 2 skipped |
+| Plan building (3 groups, partial data) | 25 steps (filtered by data requirements) |
+| Prompt experimental context embedding | Group names, stat tests, metadata path expanded |
+| CLI --version | `seq2pipe 1.2.0` |
 
 ### Taxonomic analysis (`--classifier`)
 
