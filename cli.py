@@ -868,6 +868,7 @@ def main():
     parser.add_argument("--manual-auto",  action="store_true", help="研究目的駆動の自律解析モード（--metadata 必須）")
     parser.add_argument("--ai-driven",    action="store_true", help="AI駆動解析モード（AIが解析フローを決定）")
     parser.add_argument("--research-question", type=str, default="", help="研究の問い / 仮説（--manual-auto / --ai-driven で使用）")
+    parser.add_argument("--experiment-description", type=str, default="", help="実験系の説明（例: マウスに抗生物質を7日間投与し糞便を採取）")
     parser.add_argument("--chat",         action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
     parser.add_argument("--max-rounds",   type=int, default=15, help="自律エージェントの最大ラウンド数（デフォルト 15）")
     # DADA2 パラメータ（省略時は FASTQ から自動検出）
@@ -979,6 +980,12 @@ def main():
             rq = args.research_question or _ask("研究の問い")
             if not rq:
                 rq = "Comprehensive exploratory analysis of microbiome data"
+            exp_desc = args.experiment_description
+            if not exp_desc:
+                print("実験系の説明を入力してください（省略可）。")
+                exp_desc = _ask("実験系の説明（省略可）", "")
+            if exp_desc:
+                rq = f"{rq}\n\nExperiment description: {exp_desc}"
             exp_design = parse_metadata(meta)
             print(f"\n{exp_design.summary()}\n")
             ai_result = run_ai_driven(
@@ -1006,6 +1013,12 @@ def main():
             rq = args.research_question or _ask("研究の問い")
             if not rq:
                 rq = "Comprehensive exploratory analysis of microbiome data"
+            exp_desc = args.experiment_description
+            if not exp_desc:
+                print("実験系の説明を入力してください（省略可）。")
+                exp_desc = _ask("実験系の説明（省略可）", "")
+            if exp_desc:
+                rq = f"{rq}\n\nExperiment description: {exp_desc}"
 
             exp_design = parse_metadata(meta)
             print(f"\n{exp_design.summary()}\n")
@@ -1293,6 +1306,15 @@ def main():
         if not rq:
             rq = "Comprehensive exploratory analysis of microbiome data"
 
+        exp_desc = args.experiment_description
+        if not exp_desc:
+            print()
+            print("実験系の説明を入力してください（省略可）。")
+            print("例: C57BL/6 マウスに抗生物質を7日間投与し糞便を採取。16S V3-V4 MiSeq PE。")
+            exp_desc = _ask("実験系の説明（省略可）", "")
+        if exp_desc:
+            rq = f"{rq}\n\nExperiment description: {exp_desc}"
+
         exp_design = _pm(metadata_path)
         export_files = get_exported_files(pipeline_result.export_dir)
 
@@ -1368,6 +1390,16 @@ def main():
             rq = _ask("研究の問い")
         if not rq:
             rq = "Comprehensive exploratory analysis of microbiome data"
+
+        exp_desc = args.experiment_description
+        if not exp_desc:
+            print()
+            print("実験系の説明を入力してください（省略可）。")
+            print("例: C57BL/6 マウスに広域抗生物質（アンピシリン+バンコマイシン）を7日間飲水投与。")
+            print("    投与前後に糞便を採取し、16S rRNA V3-V4 領域を MiSeq 300bp PE でシーケンス。")
+            exp_desc = _ask("実験系の説明（省略可）", "")
+        if exp_desc:
+            rq = f"{rq}\n\nExperiment description: {exp_desc}"
 
         print()
         print("📋 メタデータを解析中...")
