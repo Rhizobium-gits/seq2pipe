@@ -31,6 +31,12 @@ from manual_auto_agent import (
     ExperimentalDesign, parse_metadata, ANALYSIS_REGISTRY, AnalysisSpec,
     _select_stat_test, _expand_prompt, _build_step_prompt, AnalysisStep,
 )
+from microbiome_knowledge import (
+    DataProfile, ALPHA_METRICS, BETA_METRICS,
+    recommend_alpha_test, recommend_beta_test,
+    recommend_compositional_method, recommend_ordinations,
+    estimate_power_context, build_domain_driven_plan,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +128,48 @@ class DataRecon:
         if self.has_denoising:
             lines.append(f"Denoising pass rate: {self.denoising_pass_rate:.1%}")
         return "\n".join(lines)
+
+    def to_profile(self, design: ExperimentalDesign) -> DataProfile:
+        """DataRecon + ExperimentalDesign から DataProfile を構築"""
+        import statistics as _st
+
+        reads = [self.min_reads, self.max_reads] if self.min_reads else []
+        read_cv = 0.0
+        if reads and self.median_reads > 0:
+            all_reads = list(self.group_read_depth.values()) if self.group_read_depth else reads
+            if len(all_reads) >= 2:
+                mean_r = _st.mean(all_reads)
+                std_r = _st.stdev(all_reads) if len(all_reads) > 1 else 0
+                read_cv = std_r / mean_r if mean_r > 0 else 0
+
+        alpha_sig = any(t.get("p", 1) < 0.05 for t in self.alpha_group_tests)
+        alpha_p = min((t.get("p", 1) for t in self.alpha_group_tests), default=1.0)
+        beta_sig = any(t.get("p", 1) < 0.05 for t in self.beta_group_tests)
+        beta_p = min((t.get("p", 1) for t in self.beta_group_tests), default=1.0)
+        beta_f = max((t.get("pseudo_F", 0) for t in self.beta_group_tests), default=0.0)
+
+        group_sizes = list(design.group_sizes.values()) if design.group_sizes else [self.n_samples]
+
+        return DataProfile(
+            n_samples=self.n_samples,
+            n_groups=design.n_groups,
+            min_group_size=min(group_sizes) if group_sizes else 0,
+            max_group_size=max(group_sizes) if group_sizes else 0,
+            is_paired=design.is_paired,
+            is_longitudinal=design.is_longitudinal,
+            n_asvs=self.n_asvs,
+            read_depth_cv=read_cv,
+            min_reads=self.min_reads,
+            max_reads=self.max_reads,
+            has_taxonomy=self.has_taxonomy,
+            n_genera=self.n_genera,
+            alpha_significant=alpha_sig,
+            alpha_p=alpha_p,
+            beta_significant=beta_sig,
+            beta_p=beta_p,
+            beta_pseudo_f=beta_f,
+            high_variance_genera=self.high_variance_genera,
+        )
 
 
 def _safe_read_tsv(path: str, skip_comment: bool = False) -> tuple[list[str], list[list[str]]]:
@@ -542,9 +590,20 @@ def _build_planning_prompt(
     design: ExperimentalDesign,
     recon: DataRecon,
     registry_menu: str,
+    profile: DataProfile,
 ) -> str:
-    """統計結果を含むプランニングプロンプト"""
+    """統計結果 + ドメイン知識を含むプランニングプロンプト"""
     stat_test = _select_stat_test(design)
+    alpha_rec = recommend_alpha_test(profile)
+    beta_rec = recommend_beta_test(profile)
+    comp_rec = recommend_compositional_method(profile)
+    power_ctx = estimate_power_context(profile)
+    ord_recs = recommend_ordinations(profile)
+    ord_text = "\n".join(
+        f"  {i+1}. {r['method']} (score={r['score']}/10): {r['reason'][:80]}"
+        for i, r in enumerate(ord_recs[:4])
+    )
+
     return f"""You are an expert microbiome bioinformatician planning an analysis strategy.
 
 ## RESEARCH QUESTION
@@ -556,14 +615,34 @@ def _build_planning_prompt(
 ## DATA RECONNAISSANCE — ACTUAL STATISTICAL RESULTS
 {recon.summary()}
 
-## RECOMMENDED STATISTICAL TEST
-{stat_test}
+## DOMAIN KNOWLEDGE — METHOD RECOMMENDATIONS FOR THIS DATA
+
+### Statistical Power Assessment
+{power_ctx['guidance']}
+Detectable effect size: {power_ctx['detectable_effect']}
+
+### Recommended Alpha Diversity Test
+{alpha_rec.test_name}: {alpha_rec.reason}
+Interpretation: {alpha_rec.interpretation_guide[:200]}
+
+### Recommended Beta Diversity Test
+{beta_rec.test_name}: {beta_rec.reason}
+CRITICAL: {beta_rec.assumptions[1] if len(beta_rec.assumptions) > 1 else 'Check dispersion'}
+
+### Compositional Data Recommendation
+Transform: {comp_rec['transform']} — {comp_rec['reason'][:150]}
+Differential method: {comp_rec.get('differential_method', 'N/A')}
+{chr(10).join(f"WARNING: {w[:120]}" for w in comp_rec.get('warnings', []))}
+
+### Ordination Method Ranking (for this dataset)
+{ord_text}
 
 ## AVAILABLE ANALYSES (select from this menu)
 {registry_menu}
 
 ## YOUR TASK
-You have ACTUAL STATISTICAL TEST RESULTS above. Use them to make informed decisions:
+You have ACTUAL STATISTICAL TEST RESULTS and DOMAIN-SPECIFIC METHOD RECOMMENDATIONS above.
+Use both to make informed decisions:
 
 1. If alpha diversity shows significant group differences (p<0.05), prioritize:
    - Effect size plots to quantify the magnitude
@@ -622,17 +701,21 @@ def ai_plan_analysis(
     recon: DataRecon,
     export_files: dict[str, list[str]],
     model: str,
+    profile: Optional[DataProfile] = None,
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> list[dict]:
-    """LLM に統計結果ベースのプランを立案させる"""
+    """LLM に統計結果 + ドメイン知識ベースのプランを立案させる"""
     def _log(msg: str):
         if log_callback:
             log_callback(msg)
 
-    registry_menu = _build_registry_menu(design, export_files)
-    prompt = _build_planning_prompt(research_question, design, recon, registry_menu)
+    if profile is None:
+        profile = recon.to_profile(design)
 
-    _log("  🧠 AI が統計結果をもとにプランを立案中...")
+    registry_menu = _build_registry_menu(design, export_files)
+    prompt = _build_planning_prompt(research_question, design, recon, registry_menu, profile)
+
+    _log("  🧠 AI が統計結果 + ドメイン知識をもとにプランを立案中...")
     messages = [
         {
             "role": "system",
@@ -650,77 +733,30 @@ def ai_plan_analysis(
     except Exception as e:
         _log(f"  ⚠️ AI プランニング失敗: {e}")
 
-    _log("  ⚠️ フォールバック → データ統計に基づく自動選択")
-    return _data_driven_fallback(design, export_files, recon)
-
-
-def _data_driven_fallback(
-    design: ExperimentalDesign,
-    export_files: dict[str, list[str]],
-    recon: DataRecon,
-) -> list[dict]:
-    """LLM 失敗時: 統計結果に基づいてプランを自動構築"""
-    available_cats = set(export_files.keys())
-    plan = []
-
-    def _add(key: str, reason: str, priority: int):
-        spec = next((s for s in ANALYSIS_REGISTRY if s.key == key), None)
-        if not spec:
-            return
-        missing = [r for r in spec.requires if r not in available_cats and r != "metadata"]
+    # ドメイン知識ベースのフォールバック
+    _log("  🧬 フォールバック → microbiome_knowledge ドメイン知識に基づくプラン構築")
+    available_keys = {s.key for s in ANALYSIS_REGISTRY}
+    avail_cats = set(export_files.keys())
+    # filter available_keys by data availability
+    filtered_keys = set()
+    for spec in ANALYSIS_REGISTRY:
+        missing = [r for r in spec.requires if r not in avail_cats and r != "metadata"]
         if missing:
-            return
+            continue
         if spec.min_groups > 0 and design.n_groups < spec.min_groups:
-            return
+            continue
         if design.n_groups > spec.max_groups:
-            return
-        plan.append({"key": key, "reason": reason, "priority": priority})
+            continue
+        if spec.needs_timepoint and not design.is_longitudinal:
+            continue
+        filtered_keys.add(spec.key)
 
-    # 常に: 品質チェック
-    _add("read_depth", "Quality check is always first", 10)
-
-    # 組成: 常に含める
-    _add("phylum_barplot", "Overview of community composition", 9)
-    _add("genus_barplot", "Genus-level composition overview", 9)
-
-    # Alpha 有意差に基づく分岐
-    alpha_sig = any(t.get("p", 1) < 0.05 for t in recon.alpha_group_tests)
-    if alpha_sig:
-        _add("alpha_boxplot", "Alpha diversity showed significant group differences", 10)
-        _add("alpha_raincloud", "Visualize distribution of significant alpha differences", 8)
-        if design.n_groups == 2:
-            _add("alpha_effectsize", "Quantify effect size of significant alpha difference", 8)
-    else:
-        _add("alpha_boxplot", "Check alpha diversity (no significance in preliminary test)", 6)
-        _add("rarefaction", "Check if non-significance is due to insufficient sampling", 7)
-
-    # Beta 有意差に基づく分岐
-    beta_sig = any(t.get("p", 1) < 0.05 for t in recon.beta_group_tests)
-    if beta_sig:
-        _add("pcoa_all", "PERMANOVA significant - visualize group separation", 10)
-        _add("nmds", "Additional ordination to confirm beta diversity patterns", 8)
-        _add("permanova", "Detailed PERMANOVA with full permutations", 9)
-        _add("beta_dispersion", "Check if separation is location or dispersion", 8)
-        _add("sample_dendrogram", "Hierarchical clustering to show group structure", 7)
-    else:
-        _add("pcoa_all", "Explore beta diversity patterns", 7)
-        _add("nmds", "Non-metric ordination may reveal patterns missed by PCoA", 6)
-
-    # 差次豊度: 群間差がある属に基づく
-    if recon.high_variance_genera:
-        if design.n_groups == 2:
-            _add("volcano", f"High-variance genera detected: {', '.join(recon.high_variance_genera[:3])}", 9)
-            _add("effect_size_forest", "Quantify effect sizes for differential genera", 8)
-        _add("lefse_style", "Identify biomarker taxa with LDA effect size", 9)
-        _add("genus_violin", "Visualize distribution of top differential genera", 8)
-    else:
-        _add("genus_heatmap", "Explore genus patterns (no strong differential signal)", 6)
-
-    # 高度解析
-    _add("cooccurrence_network", "Explore genus co-occurrence patterns", 6)
-    _add("composite_main", "Publication-ready 4-panel summary figure", 8)
-
-    return plan
+    domain_decisions = build_domain_driven_plan(profile, research_question, filtered_keys)
+    return [
+        {"key": d.analysis_key, "reason": d.reason, "priority": d.priority,
+         "domain_rationale": d.domain_rationale}
+        for d in domain_decisions
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -888,15 +924,27 @@ def run_ai_driven(
     result.recon = recon
     _log(f"\n{recon.summary()}\n")
 
+    # DataProfile 構築
+    profile = recon.to_profile(design)
+    power_ctx = estimate_power_context(profile)
+    _log(f"  📊 Statistical power: {power_ctx['power_level']} (n_min={power_ctx['n_per_group']})")
+    _log(f"     {power_ctx['guidance'][:120]}")
+
+    comp_rec = recommend_compositional_method(profile)
+    if comp_rec["warnings"]:
+        for w in comp_rec["warnings"]:
+            _log(f"  ⚠️ {w[:120]}")
+    _log(f"  🧬 Recommended transform: {comp_rec['transform']}")
+
     # ═══════════════════════════════════════════════════════════════════
-    # Phase 2: AI プランニング（統計結果に基づく）
+    # Phase 2: AI プランニング（統計結果 + ドメイン知識）
     # ═══════════════════════════════════════════════════════════════════
-    _log(f"{'═' * 56}")
-    _log(f"  🧠 Phase 2: AI Planning (informed by statistical results)")
+    _log(f"\n{'═' * 56}")
+    _log(f"  🧠 Phase 2: AI Planning (stats + domain knowledge)")
     _log(f"{'═' * 56}")
 
     plan_items = ai_plan_analysis(
-        research_question, design, recon, export_files, model, log_callback,
+        research_question, design, recon, export_files, model, profile, log_callback,
     )
     result.initial_plan = plan_items
 
