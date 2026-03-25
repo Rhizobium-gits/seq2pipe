@@ -37,6 +37,9 @@ from microbiome_knowledge import (
     recommend_compositional_method, recommend_ordinations,
     estimate_power_context, build_domain_driven_plan,
 )
+from experiment_knowledge import (
+    ExperimentContext, build_experiment_context,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -706,8 +709,9 @@ def _build_planning_prompt(
     recon: DataRecon,
     registry_menu: str,
     profile: DataProfile,
+    experiment_ctx: Optional[ExperimentContext] = None,
 ) -> str:
-    """統計結果 + ドメイン知識を含むプランニングプロンプト"""
+    """統計結果 + ドメイン知識 + 実験系知識を含むプランニングプロンプト"""
     stat_test = _select_stat_test(design)
     alpha_rec = recommend_alpha_test(profile)
     beta_rec = recommend_beta_test(profile)
@@ -752,12 +756,15 @@ Differential method: {comp_rec.get('differential_method', 'N/A')}
 ### Ordination Method Ranking (for this dataset)
 {ord_text}
 
+{"## EXPERIMENT-SPECIFIC KNOWLEDGE (from literature)" + chr(10) + experiment_ctx.summary() if experiment_ctx and experiment_ctx.experiment_types else ""}
+
 ## AVAILABLE ANALYSES (select from this menu)
 {registry_menu}
 
 ## YOUR TASK
-You have ACTUAL STATISTICAL TEST RESULTS and DOMAIN-SPECIFIC METHOD RECOMMENDATIONS above.
-Use both to make informed decisions:
+You have ACTUAL STATISTICAL TEST RESULTS, DOMAIN-SPECIFIC METHOD RECOMMENDATIONS,
+and EXPERIMENT-SPECIFIC LITERATURE KNOWLEDGE above.
+Use ALL of these to make informed decisions:
 
 1. If alpha diversity shows significant group differences (p<0.05), prioritize:
    - Effect size plots to quantify the magnitude
@@ -818,8 +825,9 @@ def ai_plan_analysis(
     model: str,
     profile: Optional[DataProfile] = None,
     log_callback: Optional[Callable[[str], None]] = None,
+    experiment_ctx: Optional[ExperimentContext] = None,
 ) -> list[dict]:
-    """LLM に統計結果 + ドメイン知識ベースのプランを立案させる"""
+    """LLM に統計結果 + ドメイン知識 + 実験系知識ベースのプランを立案させる"""
     def _log(msg: str):
         if log_callback:
             log_callback(msg)
@@ -828,7 +836,9 @@ def ai_plan_analysis(
         profile = recon.to_profile(design)
 
     registry_menu = _build_registry_menu(design, export_files)
-    prompt = _build_planning_prompt(research_question, design, recon, registry_menu, profile)
+    prompt = _build_planning_prompt(
+        research_question, design, recon, registry_menu, profile, experiment_ctx,
+    )
 
     _log("  🧠 AI が統計結果 + ドメイン知識をもとにプランを立案中...")
     messages = [
@@ -1087,15 +1097,28 @@ def run_ai_driven(
             _log(f"  ⚠️ {w[:120]}")
     _log(f"  🧬 Recommended transform: {comp_rec['transform']}")
 
+    # 実験コンテキスト構築
+    exp_ctx = build_experiment_context(research_question, research_question)
+    if exp_ctx.experiment_types:
+        _log(f"\n  🧪 Experiment type detected: {', '.join(et.name for et in exp_ctx.experiment_types)}")
+        _log(f"  📚 Literature-based hypotheses: {len(exp_ctx.all_hypotheses)}")
+        _log(f"  🔍 Key taxa to monitor: {', '.join(list(exp_ctx.taxa_to_watch.keys())[:6])}")
+        for h in exp_ctx.all_hypotheses[:3]:
+            _log(f"    [{h.expected_direction}] {h.hypothesis[:80]}")
+        if exp_ctx.warnings:
+            for w in exp_ctx.warnings[:2]:
+                _log(f"  ⚠️ {w[:100]}")
+
     # ═══════════════════════════════════════════════════════════════════
-    # Phase 2: AI プランニング（統計結果 + ドメイン知識）
+    # Phase 2: AI プランニング（統計結果 + ドメイン知識 + 実験系知識）
     # ═══════════════════════════════════════════════════════════════════
     _log(f"\n{'═' * 56}")
-    _log(f"  🧠 Phase 2: AI Planning (stats + domain knowledge)")
+    _log(f"  🧠 Phase 2: AI Planning (stats + domain + experiment knowledge)")
     _log(f"{'═' * 56}")
 
     plan_items = ai_plan_analysis(
-        research_question, design, recon, export_files, model, profile, log_callback,
+        research_question, design, recon, export_files, model, profile,
+        log_callback, exp_ctx,
     )
     result.initial_plan = plan_items
 
