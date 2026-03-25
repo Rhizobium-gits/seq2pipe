@@ -78,7 +78,7 @@ class ExperimentalDesign:
 
 
 _TIMEPOINT_PATTERNS = re.compile(
-    r"(timepoint|time_point|time|day|week|month|visit|stage|period|age|dpi|hpi)",
+    r"(timepoint|time_point|time|day|week|month|visit|stage|period|dpi|hpi)",
     re.IGNORECASE,
 )
 _SUBJECT_PATTERNS = re.compile(
@@ -137,13 +137,13 @@ def parse_metadata(metadata_path: str) -> ExperimentalDesign:
 
         n_unique = len(set(vals))
 
-        # タイムポイント検出
-        if _TIMEPOINT_PATTERNS.search(col):
+        # タイムポイント検出（最初のマッチのみ）
+        if not timepoint_col and _TIMEPOINT_PATTERNS.search(col):
             timepoint_col = col
             continue
 
-        # 被験者列検出
-        if _SUBJECT_PATTERNS.search(col):
+        # 被験者列検出（最初のマッチのみ）
+        if not subject_col and _SUBJECT_PATTERNS.search(col):
             subject_col = col
             continue
 
@@ -319,7 +319,7 @@ ANALYSIS_REGISTRY: list[AnalysisSpec] = [
         description=(
             "Violin + strip plot for top 10 genera, grouped by {primary_group}. "
             "Each genus as a facet (2×5 subplots). "
-            "Add Mann-Whitney or Kruskal-Wallis p-value annotation."
+            "Add {stat_test} p-value annotation."
         ),
         requires=["feature_table", "taxonomy"],
         min_groups=2,
@@ -553,7 +553,7 @@ ANALYSIS_REGISTRY: list[AnalysisSpec] = [
         phase="differential",
         title="Volcano Plot (Differential Abundance)",
         description=(
-            "For each genus: Mann-Whitney U test between {group_labels}. "
+            "For each genus: {stat_test} between {group_labels}. "
             "x = log2(fold-change + pseudocount), y = -log10(p-value). "
             "Apply Benjamini-Hochberg FDR correction. "
             "Color: red = up (log2FC>1, q<0.05), blue = down (log2FC<-1, q<0.05), gray = NS. "
