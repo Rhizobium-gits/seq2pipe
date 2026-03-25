@@ -62,6 +62,9 @@ class DataRecon:
     beta_metrics: list[str] = field(default_factory=list)
     has_denoising: bool = False
     denoising_pass_rate: float = 0.0
+    sparsity: float = 0.0              # feature table の 0 の割合
+    evenness_mean: float = 0.0         # Pielou's J 平均
+    dominance_mean: float = 0.0        # Simpson's dominance 平均
 
     # 群間統計検定結果
     alpha_group_tests: list[dict] = field(default_factory=list)
@@ -85,6 +88,12 @@ class DataRecon:
         if self.group_read_depth:
             grd = ", ".join(f"{g}={int(v):,}" for g, v in self.group_read_depth.items())
             lines.append(f"Mean reads per group: {grd}")
+        if self.sparsity > 0:
+            lines.append(f"Feature table sparsity: {self.sparsity:.0%} zeros")
+        if self.evenness_mean > 0:
+            lines.append(f"Mean evenness (Pielou's J): {self.evenness_mean:.3f} (0=dominated, 1=even)")
+        if self.dominance_mean > 0:
+            lines.append(f"Mean dominance (Simpson's D): {self.dominance_mean:.3f} (high=few dominant taxa)")
         if self.outlier_samples:
             lines.append(f"Potential outlier samples (read depth): {', '.join(self.outlier_samples)}")
 
@@ -168,6 +177,9 @@ class DataRecon:
             beta_significant=beta_sig,
             beta_p=beta_p,
             beta_pseudo_f=beta_f,
+            sparsity=self.sparsity,
+            evenness_mean=self.evenness_mean,
+            dominance_mean=self.dominance_mean,
             high_variance_genera=self.high_variance_genera,
         )
 
@@ -262,6 +274,47 @@ def run_data_recon(
                 recon.min_reads = min(reads_list)
                 recon.max_reads = max(reads_list)
                 recon.median_reads = int(statistics.median(reads_list))
+
+            # スパース度（feature table 内の 0 の割合）
+            total_cells = len(ft_matrix) * len(sample_ids)
+            zero_cells = 0
+            for asv_counts in ft_matrix.values():
+                for sid in sample_ids:
+                    if asv_counts.get(sid, 0) == 0:
+                        zero_cells += 1
+            recon.sparsity = zero_cells / total_cells if total_cells > 0 else 0.0
+            if recon.sparsity > 0.7:
+                _log(f"    ⚠️ High sparsity: {recon.sparsity:.0%} zeros in feature table")
+
+            # サンプルごとのイーブンネス（Shannon / ln(S)）
+            import math as _math
+            evenness_vals = []
+            for sid in sample_ids:
+                counts = [ft_matrix[asv].get(sid, 0) for asv in ft_matrix]
+                total_c = sum(counts)
+                if total_c == 0:
+                    continue
+                nonzero = [c for c in counts if c > 0]
+                s = len(nonzero)
+                if s <= 1:
+                    evenness_vals.append(0.0)
+                    continue
+                h = -sum((c / total_c) * _math.log(c / total_c) for c in nonzero)
+                j = h / _math.log(s)
+                evenness_vals.append(j)
+            if evenness_vals:
+                recon.evenness_mean = statistics.mean(evenness_vals)
+                # dominance = 1 - Simpson
+                dom_vals = []
+                for sid in sample_ids:
+                    counts = [ft_matrix[asv].get(sid, 0) for asv in ft_matrix]
+                    total_c = sum(counts)
+                    if total_c <= 1:
+                        continue
+                    simpson = sum((c / total_c) ** 2 for c in counts if c > 0)
+                    dom_vals.append(simpson)
+                if dom_vals:
+                    recon.dominance_mean = statistics.mean(dom_vals)
 
             # 群別平均リード数
             if group_map:
