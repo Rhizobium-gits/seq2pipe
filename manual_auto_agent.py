@@ -39,6 +39,29 @@ from code_agent import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
+class Comparison:
+    """1つの比較（どのサンプルとどのサンプルを比べるか）"""
+    name: str                          # e.g. "antibiotic vs control at day7"
+    type: str                          # "between_group" | "within_time" | "interaction" | "pairwise"
+    factor: str                        # 比較する因子 (e.g. "treatment")
+    group_a: str = ""
+    group_b: str = ""
+    filter_conditions: dict = field(default_factory=dict)  # e.g. {"timepoint": "day7"}
+    sample_ids_a: list[str] = field(default_factory=list)
+    sample_ids_b: list[str] = field(default_factory=list)
+    n_a: int = 0
+    n_b: int = 0
+    statistical_test: str = ""
+    rationale: str = ""
+
+    def summary_line(self) -> str:
+        filt = ""
+        if self.filter_conditions:
+            filt = " | " + ", ".join(f"{k}={v}" for k, v in self.filter_conditions.items())
+        return f"[{self.type}] {self.name} (n={self.n_a} vs {self.n_b}){filt}"
+
+
+@dataclass
 class ExperimentalDesign:
     """メタデータから決定論的に抽出した実験デザイン情報"""
     sample_ids: list[str] = field(default_factory=list)
@@ -56,6 +79,14 @@ class ExperimentalDesign:
     n_groups: int = 0
     has_unbalanced_design: bool = False
 
+    # 多因子デザイン
+    factors: list[str] = field(default_factory=list)           # 全因子列 (group_columns + primary)
+    factor_levels: dict[str, list[str]] = field(default_factory=dict)  # 因子 → 水準一覧
+    cross_table: dict[str, int] = field(default_factory=dict)  # "treatment=abx|timepoint=day7" → n
+    comparisons: list[Comparison] = field(default_factory=list) # 自動生成された比較プラン
+    timepoints_sorted: list[str] = field(default_factory=list)  # 時間順にソート済み
+    baseline_timepoint: Optional[str] = None                    # 最初のタイムポイント
+
     def summary(self) -> str:
         lines = [
             f"Samples: {self.n_samples}",
@@ -66,6 +97,10 @@ class ExperimentalDesign:
             lines.append(f"Primary grouping: '{self.primary_group}' ({self.n_groups} groups: {sizes})")
         if self.is_longitudinal:
             lines.append(f"Longitudinal: timepoint column = '{self.timepoint_column}'")
+            if self.timepoints_sorted:
+                lines.append(f"  Timepoints (sorted): {' → '.join(self.timepoints_sorted)}")
+            if self.baseline_timepoint:
+                lines.append(f"  Baseline: {self.baseline_timepoint}")
         if self.is_paired:
             lines.append(f"Paired design: subject column = '{self.subject_column}'")
         if self.group_columns:
@@ -73,7 +108,20 @@ class ExperimentalDesign:
         if self.continuous_columns:
             lines.append(f"Continuous columns: {', '.join(self.continuous_columns)}")
         if self.has_unbalanced_design:
-            lines.append("⚠ Unbalanced design detected")
+            lines.append("Unbalanced design detected")
+
+        # 多因子クロステーブル
+        if self.cross_table and len(self.factors) >= 2:
+            lines.append(f"\nCross-design ({' × '.join(self.factors)}):")
+            for combo, n in sorted(self.cross_table.items()):
+                lines.append(f"  {combo}: n={n}")
+
+        # 比較プラン
+        if self.comparisons:
+            lines.append(f"\nAuto-generated comparisons ({len(self.comparisons)}):")
+            for c in self.comparisons:
+                lines.append(f"  {c.summary_line()}")
+
         return "\n".join(lines)
 
 
@@ -195,6 +243,150 @@ def parse_metadata(metadata_path: str) -> ExperimentalDesign:
             vals = [r.get(col, "") for r in rows if r.get(col)]
             group_values[col] = sorted(set(vals))
 
+    # ── 多因子デザイン解析 ─────────────────────────────────────────
+    # 全因子（primary + 他のカテゴリ列 + timepoint）
+    factors: list[str] = []
+    factor_levels: dict[str, list[str]] = {}
+
+    if primary_group:
+        factors.append(primary_group)
+        factor_levels[primary_group] = sorted(set(
+            r.get(primary_group, "") for r in rows if r.get(primary_group)
+        ))
+    if timepoint_col:
+        factors.append(timepoint_col)
+        tp_vals = [r.get(timepoint_col, "") for r in rows if r.get(timepoint_col)]
+        # 数値ソートを試みる（day0, day7 → 0, 7）
+        try:
+            tp_nums = [(float(re.sub(r"[^\d.]", "", v) or "0"), v) for v in set(tp_vals)]
+            factor_levels[timepoint_col] = [v for _, v in sorted(tp_nums)]
+        except (ValueError, TypeError):
+            factor_levels[timepoint_col] = sorted(set(tp_vals))
+    for col in group_cols:
+        if col != primary_group:
+            factors.append(col)
+            factor_levels[col] = sorted(set(
+                r.get(col, "") for r in rows if r.get(col)
+            ))
+
+    # クロステーブル（因子の組み合わせごとのサンプル数）
+    cross_table: dict[str, int] = {}
+    cross_factors = [f for f in [primary_group, timepoint_col] if f]
+    if len(cross_factors) >= 2:
+        for r in rows:
+            combo_parts = []
+            for f in cross_factors:
+                v = r.get(f, "")
+                if v:
+                    combo_parts.append(f"{f}={v}")
+            if len(combo_parts) == len(cross_factors):
+                key = " | ".join(combo_parts)
+                cross_table[key] = cross_table.get(key, 0) + 1
+
+    # タイムポイントのソートとベースライン検出
+    timepoints_sorted: list[str] = factor_levels.get(timepoint_col, []) if timepoint_col else []
+    baseline_tp: Optional[str] = timepoints_sorted[0] if timepoints_sorted else None
+
+    # ── 比較プラン自動生成 ────────────────────────────────────────
+    comparisons: list[Comparison] = []
+
+    # サンプルをグループ化する関数
+    def _get_samples(conditions: dict[str, str]) -> list[str]:
+        result = []
+        for r in rows:
+            match = all(r.get(k) == v for k, v in conditions.items())
+            if match:
+                result.append(r.get(id_col, ""))
+        return [s for s in result if s]
+
+    primary_levels = factor_levels.get(primary_group, []) if primary_group else []
+
+    # (A) 全体の群間比較（primary group のペアワイズ）
+    if len(primary_levels) >= 2:
+        from itertools import combinations as _comb
+        for ga, gb in _comb(primary_levels, 2):
+            sids_a = _get_samples({primary_group: ga})
+            sids_b = _get_samples({primary_group: gb})
+            comparisons.append(Comparison(
+                name=f"{ga} vs {gb} (overall)",
+                type="between_group",
+                factor=primary_group,
+                group_a=ga, group_b=gb,
+                sample_ids_a=sids_a, sample_ids_b=sids_b,
+                n_a=len(sids_a), n_b=len(sids_b),
+                rationale=f"Overall comparison between {primary_group} levels.",
+            ))
+
+    # (B) タイムポイント内の群間比較（同一時点で群を比較）
+    if timepoint_col and primary_group and len(primary_levels) >= 2 and len(timepoints_sorted) >= 2:
+        for tp in timepoints_sorted:
+            for ga, gb in _comb(primary_levels, 2):
+                sids_a = _get_samples({primary_group: ga, timepoint_col: tp})
+                sids_b = _get_samples({primary_group: gb, timepoint_col: tp})
+                if sids_a and sids_b:
+                    comparisons.append(Comparison(
+                        name=f"{ga} vs {gb} at {timepoint_col}={tp}",
+                        type="between_group",
+                        factor=primary_group,
+                        group_a=ga, group_b=gb,
+                        filter_conditions={timepoint_col: tp},
+                        sample_ids_a=sids_a, sample_ids_b=sids_b,
+                        n_a=len(sids_a), n_b=len(sids_b),
+                        rationale=f"Group comparison within timepoint {tp}.",
+                    ))
+
+    # (C) 群内の時系列比較（同一群で時間変化を追跡）
+    if timepoint_col and primary_group and len(timepoints_sorted) >= 2:
+        for grp in primary_levels:
+            # ベースライン vs 各後続タイムポイント
+            if baseline_tp:
+                for tp in timepoints_sorted[1:]:
+                    sids_base = _get_samples({primary_group: grp, timepoint_col: baseline_tp})
+                    sids_post = _get_samples({primary_group: grp, timepoint_col: tp})
+                    if sids_base and sids_post:
+                        comparisons.append(Comparison(
+                            name=f"{grp}: {baseline_tp} → {tp}",
+                            type="within_time",
+                            factor=timepoint_col,
+                            group_a=baseline_tp, group_b=tp,
+                            filter_conditions={primary_group: grp},
+                            sample_ids_a=sids_base, sample_ids_b=sids_post,
+                            n_a=len(sids_base), n_b=len(sids_post),
+                            rationale=f"Temporal change in {grp} group from baseline ({baseline_tp}) to {tp}.",
+                        ))
+
+    # (D) 交互作用検出候補（treatment効果がtimepointで異なるか）
+    if timepoint_col and primary_group and len(primary_levels) >= 2 and len(timepoints_sorted) >= 2:
+        comparisons.append(Comparison(
+            name=f"{primary_group} × {timepoint_col} interaction",
+            type="interaction",
+            factor=f"{primary_group} × {timepoint_col}",
+            rationale=(
+                f"Test whether the effect of {primary_group} differs across {timepoint_col}. "
+                "Requires two-way PERMANOVA or interaction plot."
+            ),
+        ))
+
+    # (E) 他のカテゴリ列との比較（secondary factors）
+    for sec_col in group_cols:
+        if sec_col == primary_group:
+            continue
+        sec_levels = factor_levels.get(sec_col, [])
+        if 2 <= len(sec_levels) <= 5:
+            for ga, gb in _comb(sec_levels, 2):
+                sids_a = _get_samples({sec_col: ga})
+                sids_b = _get_samples({sec_col: gb})
+                if sids_a and sids_b:
+                    comparisons.append(Comparison(
+                        name=f"{ga} vs {gb} (by {sec_col})",
+                        type="between_group",
+                        factor=sec_col,
+                        group_a=ga, group_b=gb,
+                        sample_ids_a=sids_a, sample_ids_b=sids_b,
+                        n_a=len(sids_a), n_b=len(sids_b),
+                        rationale=f"Secondary factor comparison on {sec_col}.",
+                    ))
+
     design = ExperimentalDesign(
         sample_ids=sample_ids,
         n_samples=len(sample_ids),
@@ -210,6 +402,12 @@ def parse_metadata(metadata_path: str) -> ExperimentalDesign:
         is_longitudinal=timepoint_col is not None,
         n_groups=n_groups,
         has_unbalanced_design=unbalanced,
+        factors=factors,
+        factor_levels=factor_levels,
+        cross_table=cross_table,
+        comparisons=comparisons,
+        timepoints_sorted=timepoints_sorted,
+        baseline_timepoint=baseline_tp,
     )
     return design
 
@@ -966,6 +1164,23 @@ def _build_step_prompt(
 
     if group_labels:
         lines.append(f"## Group labels (in metadata column '{design.primary_group}'): {group_labels}")
+
+    # 比較プラン（多因子デザインの場合）
+    if design.comparisons:
+        lines.append("")
+        lines.append("## PLANNED COMPARISONS (use these exact groups/filters)")
+        for c in design.comparisons:
+            if c.type == "interaction":
+                lines.append(f"  - INTERACTION: {c.name} — {c.rationale}")
+            elif c.filter_conditions:
+                filt = ", ".join(f"{k}='{v}'" for k, v in c.filter_conditions.items())
+                lines.append(
+                    f"  - {c.name}: filter metadata where {filt}, "
+                    f"then compare '{c.group_a}' (n={c.n_a}) vs '{c.group_b}' (n={c.n_b})"
+                )
+            else:
+                lines.append(f"  - {c.name}: '{c.group_a}' (n={c.n_a}) vs '{c.group_b}' (n={c.n_b})")
+        lines.append("  Use these comparisons where appropriate for this analysis step.")
 
     if prior_results:
         lines.append("")
