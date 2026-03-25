@@ -17,6 +17,8 @@ seq2pipe ターミナル版エントリポイント。
         --export-dir ~/seq2pipe_results/20240101_120000/exported/
 """
 
+__version__ = "1.1.0"
+
 import re
 import sys
 import csv
@@ -450,7 +452,7 @@ def _print_banner():
 
     print(f"  {DIM}sequence -> pipeline{RESET}")
     print()
-    print(f"  {BOLD}QIIME2 AI Analysis Agent{RESET}")
+    print(f"  {BOLD}QIIME2 AI Analysis Agent{RESET}  {DIM}v{__version__}{RESET}")
     print(f"  {DIM}マニフェスト TSV と自然言語プロンプトで解析を自動化{RESET}")
     print()
     print("─" * 48)
@@ -848,6 +850,7 @@ def main():
         prog="seq2pipe",
         description="seq2pipe — マニフェスト TSV と自然言語プロンプトで QIIME2 + 解析を自動実行",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--fastq-dir",    help="FASTQ ファイルが入ったディレクトリのパス")
     parser.add_argument("--manifest",     help="（後方互換）マニフェスト TSV のパス。--fastq-dir 優先")
     parser.add_argument("--metadata",     help="メタデータ TSV のパス（省略可）")

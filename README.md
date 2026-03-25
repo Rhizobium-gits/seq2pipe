@@ -15,6 +15,8 @@
 ```
 
 > **ローカル LLM で QIIME2 マイクロバイオーム解析を自動化 — オフライン・API キー不要・オープンソース**
+>
+> **Current: v1.1.0**
 
 ---
 
@@ -1107,6 +1109,73 @@ seq2pipe/
 - [SILVA Database](https://www.arb-silva.de/)
 - [Ollama](https://ollama.com/)
 - [MacTeX (LaTeX for macOS)](https://tug.org/mactex/)
+
+---
+
+## Changelog
+
+### v1.1.0 (2026-03-13)
+- プライマー配列を FASTQ リードから自動検出し `trim_left` を設定
+- チャットモードにユーザプロンプト・メタデータのコンテキスト受け渡しを追加
+
+### v1.0.0 (2026-03-03) — Stable Release
+- 論文フォーマットを vibe-coder テクニカルレポート形式に統一
+- 全機能の安定版リリース
+
+### v0.9.0 (2026-03-02)
+- 決定論的解析モジュール (`analysis.py`) で 29 図を自動生成
+- HTML レポートをカテゴリ別手法・数式付きに再設計
+- 16S アンプリコン / ショットガンメタゲノムの入力自動判別
+- アーキテクチャ図・モデル容量情報をドキュメントに追加
+
+### v0.8.0 (2026-02-27)
+- DADA2 パラメータ（trunc_len, trim_left）を FASTQ リード長から自動検出
+- 振り返り・修正モード（refinement mode）を追加
+- HTML / LaTeX+PDF レポート生成機能
+- PDF/SVG 図を macOS `sips` で JPEG に自動変換
+
+### v0.7.0 (2026-02-27)
+- QIIME2 + miniforge の自動インストール (`setup.sh`)
+- Apple Silicon (Rosetta 2) 対応
+- `--auto` フラグによる完全無人実行モード
+- bash 3.x 互換性修正
+
+### v0.6.0 (2026-02-26)
+- 対話チャットモード (`chat_agent.py`) を追加
+- モダン図スタイルガイドをプロンプトに組み込み
+- ターミナルファースト設計へリフォーカス（Streamlit はオプション化）
+
+### v0.5.0 (2026-02-25)
+- Auto Agent モード（自律的にコード生成・実行・修正を繰り返す）
+- code agent を vibe-local スタイル tool-calling ループに全面書き換え
+- PCA, NMDS, 複数メトリクス α/β 多様性, レアファクションを追加
+- 小規模 LLM（7B パラメータ）でも安定動作するロバスト化
+
+### v0.4.0 (2026-02-25)
+- Streamlit GUI アプリ (`app.py`) を追加
+- ターミナル CLI (`cli.py`) を追加、マニフェスト起点のフローに再設計
+- レインボーバナーアニメーション
+- QIIME2 パイプラインと LLM コード生成を分離
+
+### v0.3.0 (2026-02-24)
+- 日本語 / 英語 UI 切り替え (i18n)
+- GitHub Codespaces / Linux 対応（Ollama 起動修正）
+- セッション出力ディレクトリの自動作成
+- `run_qiime2_pipeline`: 単一ツールでフルパイプライン実行
+- テキストフォールバックパーサー（tool-call を JSON テキストで埋め込むモデル対応）
+
+### v0.2.0 (2026-02-23)
+- Python 下流解析・図出力・TeX/PDF レポート生成
+- 自律探索モード (`build_report_tex`)
+- 言語選択 UI（日本語 / English）
+- 7 ラウンドのバグ修正・コードレビュー
+- MIT ライセンス追加
+
+### v0.1.0 (2026-02-23) — Initial Release
+- QIIME2 ローカル AI エージェント（Ollama + tool-calling）
+- マニフェスト生成・パイプライン実行・可視化の基本フロー
+- macOS / Windows / Linux 対応
+- 日英 README・技術論文 (Paper/)
 
 ---
 
