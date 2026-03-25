@@ -17,7 +17,7 @@ seq2pipe ターミナル版エントリポイント。
         --export-dir ~/seq2pipe_results/20240101_120000/exported/
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import re
 import sys
@@ -285,7 +285,10 @@ def _select_mode() -> str:
     print("  3. 対話モード        実験の説明から始めて会話しながら解析を積み重ねる")
     print("                       「次はベータ多様性も見て」など自然な流れで進められる")
     print()
-    choice = _ask("選択 (1/2/3)", "1")
+    print("  4. 研究目的駆動     研究の問いとメタデータを指定 → 実験デザインを自動解析")
+    print("     (manual-auto)    → 40+ 種の可視化・統計検定を研究目的に合わせて全自動実行")
+    print()
+    choice = _ask("選択 (1/2/3/4)", "1")
     return choice.strip()
 
 
@@ -859,6 +862,8 @@ def main():
     parser.add_argument("--model",        help="Ollama モデル名（省略時は自動選択）")
     parser.add_argument("--export-dir",   help="既存の exported/ ディレクトリ（コード生成のみ実行）")
     parser.add_argument("--auto",         action="store_true", help="自律エージェントモードで起動（完全無人実行）")
+    parser.add_argument("--manual-auto",  action="store_true", help="研究目的駆動の自律解析モード（--metadata 必須）")
+    parser.add_argument("--research-question", type=str, default="", help="研究の問い / 仮説（--manual-auto で使用）")
     parser.add_argument("--chat",         action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
     parser.add_argument("--max-rounds",   type=int, default=15, help="自律エージェントの最大ラウンド数（デフォルト 15）")
     # DADA2 パラメータ（省略時は FASTQ から自動検出）
@@ -907,8 +912,10 @@ def main():
             )
             return
 
-    # モード選択（--auto / --chat フラグで省略可）
-    if args.auto:
+    # モード選択（--auto / --manual-auto / --chat フラグで省略可）
+    if args.manual_auto:
+        mode = "4"
+    elif args.auto:
         mode = "2"
     elif args.chat:
         mode = "3"
@@ -953,6 +960,35 @@ def main():
                 initial_prompt=user_prompt,
                 metadata_path=metadata_path,
             )
+            return
+
+        # モード4: 研究目的駆動（export-dir のみ）
+        if mode == "4":
+            from manual_auto_agent import (
+                parse_metadata, build_analysis_plan, run_manual_auto,
+            )
+            meta = args.metadata or _ask("メタデータ TSV のパス")
+            if not meta or not Path(meta).exists():
+                print(f"❌ メタデータが見つかりません: {meta}")
+                sys.exit(1)
+            rq = args.research_question or _ask("研究の問い")
+            if not rq:
+                rq = "Comprehensive exploratory analysis of microbiome data"
+
+            exp_design = parse_metadata(meta)
+            print(f"\n{exp_design.summary()}\n")
+            plan = build_analysis_plan(rq, exp_design, export_files, meta, model)
+            print(f"\n{plan.summary()}\n")
+
+            ma_result = run_manual_auto(
+                research_question=rq, design=exp_design, plan=plan,
+                export_files=export_files,
+                output_dir=str(Path(export_dir).parent),
+                figure_dir=str(fig_dir), metadata_path=meta, model=model,
+                log_callback=_log, install_callback=_install_callback,
+            )
+            print(f"\n📊 完了: {ma_result.completed_steps}/{len(plan.steps)} ステップ成功")
+            print(f"📁 全図: {len(ma_result.all_figures)} 件 → {fig_dir}")
             return
 
         user_prompt = ""
@@ -1004,8 +1040,8 @@ def main():
         print(f"❌ ディレクトリが存在しません: {fastq_dir}")
         sys.exit(1)
 
-    # --auto モードではメタデータは省略（対話なし）
-    if args.auto:
+    # --auto / --manual-auto モードではメタデータは引数のみ（対話なし）
+    if args.auto or args.manual_auto:
         metadata_path = args.metadata or ""
     else:
         metadata_path = args.metadata or _ask("メタデータ TSV のパス（省略可）", "")
@@ -1014,7 +1050,7 @@ def main():
         metadata_path = ""
 
     user_prompt = ""
-    if mode != "2":
+    if mode not in ("2", "4"):
         print()
         print("やりたい解析を自然言語で入力してください。")
         print("例: 属レベルの積み上げ棒グラフ、Shannon 多様性のグループ比較、Bray-Curtis PCoA")
@@ -1102,11 +1138,13 @@ def main():
     print(f"   sampling_depth={sampling_dep}  threads={n_threads}")
     if mode == "2":
         print(f"🤖 モード              : 自律エージェント（最大 {args.max_rounds} ラウンド）")
+    elif mode == "4":
+        print(f"🔬 モード              : 研究目的駆動 自律解析 (manual-auto)")
     _hr()
     print()
 
-    # --auto でない場合は続行確認
-    if not args.auto:
+    # --auto / --manual-auto でない場合は続行確認
+    if not args.auto and not args.manual_auto:
         if not _ask_bool("上記の設定で解析を開始しますか?", True):
             print("中断しました。")
             sys.exit(0)
@@ -1196,6 +1234,101 @@ def main():
             initial_prompt=user_prompt,
             metadata_path=metadata_path,
         )
+        return
+
+    # ── モード 4: 研究目的駆動の自律解析（manual-auto）───────────────
+    if mode == "4":
+        from manual_auto_agent import (
+            parse_metadata, build_analysis_plan, run_manual_auto,
+        )
+        print("─" * 48)
+        print("  🔬 STEP 2/2 : 研究目的駆動 自律解析 (manual-auto)")
+        print("─" * 48)
+
+        if not metadata_path:
+            print("⚠️  --manual-auto にはメタデータ (--metadata) が必要です。")
+            metadata_path = _ask("メタデータ TSV のパス")
+            if not metadata_path or not Path(metadata_path).exists():
+                print(f"❌ メタデータが見つかりません: {metadata_path}")
+                sys.exit(1)
+
+        rq = args.research_question
+        if not rq:
+            print()
+            print("研究の問い・仮説を入力してください。")
+            print("例: 抗生物質投与群とコントロール群の腸内細菌叢組成の違いを明らかにしたい")
+            rq = _ask("研究の問い")
+        if not rq:
+            rq = "Comprehensive exploratory analysis of microbiome data"
+
+        print()
+        print("📋 メタデータを解析中...")
+        exp_design = parse_metadata(metadata_path)
+        print(f"\n{exp_design.summary()}\n")
+
+        export_files = get_exported_files(pipeline_result.export_dir)
+        plan = build_analysis_plan(
+            research_question=rq,
+            design=exp_design,
+            export_files=export_files,
+            metadata_path=metadata_path,
+            model=model,
+        )
+        print(f"\n{plan.summary()}\n")
+
+        if not args.manual_auto:
+            # 対話モードではプラン確認
+            if not _ask_bool(f"{len(plan.steps)} ステップの解析プランを実行しますか?", True):
+                print("中断しました。")
+                sys.exit(0)
+
+        ma_result = run_manual_auto(
+            research_question=rq,
+            design=exp_design,
+            plan=plan,
+            export_files=export_files,
+            output_dir=pipeline_result.output_dir,
+            figure_dir=str(fig_dir),
+            metadata_path=metadata_path,
+            model=model,
+            log_callback=_log,
+            install_callback=_install_callback,
+        )
+
+        # レポート自動生成
+        print()
+        print("─" * 48)
+        print("  📄 STEP 3/3 : レポート自動生成")
+        print("─" * 48)
+        try:
+            report_path = generate_html_report(
+                fig_dir=str(fig_dir),
+                output_dir=pipeline_result.output_dir,
+                fastq_dir=fastq_dir,
+                n_samples=n_samples,
+                dada2_params={
+                    "trim_left_f": trim_left_f, "trim_left_r": trim_left_r,
+                    "trunc_len_f": trunc_len_f, "trunc_len_r": trunc_len_r,
+                    "sampling_depth": sampling_dep, "n_threads": n_threads,
+                },
+                completed_steps=getattr(pipeline_result, "completed_steps", []),
+                failed_steps=getattr(pipeline_result, "failed_steps", []),
+                export_files=export_files,
+                user_prompt=rq,
+                model=model,
+                log_callback=_log,
+            )
+            print(f"✅ HTML レポート生成完了: {report_path}")
+            try:
+                import subprocess as _sp
+                _sp.Popen(["open", report_path])
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"⚠️  レポート生成失敗: {e}")
+
+        print(f"\n📊 解析完了: {ma_result.completed_steps}/{len(plan.steps)} ステップ成功")
+        print(f"📁 全図: {len(ma_result.all_figures)} 件 → {fig_dir}")
         return
 
     # ── STEP 2: LLM による解析コード生成・実行 ────────────────────────

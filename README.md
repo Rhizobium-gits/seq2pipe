@@ -16,7 +16,7 @@
 
 > **ローカル LLM で QIIME2 マイクロバイオーム解析を自動化 — オフライン・API キー不要・オープンソース**
 >
-> **Current: v1.1.0**
+> **Current: v1.2.0**
 
 ---
 
@@ -849,6 +849,33 @@ cd ~/seq2pipe
 
 Runs the full QIIME2 pipeline + deterministic analysis (29 figures) + adaptive LLM agent + HTML report automatically.
 
+### Mode 4 — Research-driven autonomous analysis (--manual-auto)
+
+```bash
+./launch.sh --fastq-dir ~/input --manual-auto \
+    --metadata metadata.tsv \
+    --research-question "抗生物質投与群とコントロール群の腸内細菌叢の違い"
+```
+
+The most comprehensive mode. Parses your metadata to understand experimental design (groups, timepoints, paired subjects), then builds a custom analysis plan:
+
+| Phase | Analyses |
+|-------|----------|
+| Data Quality | DADA2 stats, read depth, ASV frequency |
+| Composition | Phylum/Genus/Family stacked bars, heatmap, violin, core microbiome, indicator species |
+| Alpha Diversity | Multi-metric boxplot, raincloud plot, rarefaction, effect sizes, trajectory (longitudinal) |
+| Beta Diversity | PCoA (all metrics), NMDS, t-SNE, UMAP, PCA-CLR biplot, PERMANOVA/ANOSIM, beta dispersion, dendrogram |
+| Differential | Volcano plot, MA plot, forest plot, LEfSe-style, multi-group heatmap |
+| Advanced | Co-occurrence network, correlation clustermap, ternary plot, UpSet diagram, Sankey/alluvial, Venn diagram |
+| Publication | Multi-panel composite figures, statistical summary table |
+
+Statistical tests adapt automatically:
+- 2 groups → Mann-Whitney U
+- 2 groups (paired) → Wilcoxon signed-rank
+- 3+ groups → Kruskal-Wallis + Dunn's post-hoc
+- Beta diversity → PERMANOVA (999 permutations)
+- Multiple testing → Benjamini-Hochberg FDR correction
+
 ### Taxonomic analysis (`--classifier`)
 
 Enable taxonomic analysis by providing a SILVA 138 Naive Bayes classifier:
@@ -1113,6 +1140,16 @@ seq2pipe/
 ---
 
 ## Changelog
+
+### v1.2.0 (2026-03-25)
+- **`--manual-auto` モード**: 研究目的駆動の自律解析モードを追加
+  - メタデータから実験デザインを自動解析（グループ・縦断・ペア設計の検出）
+  - 40+ 種の可視化・統計解析レジストリから条件に合う解析を自動選択
+  - データ適応型の統計検定選択（2群: Mann-Whitney, 3+群: Kruskal-Wallis, ペア: Wilcoxon）
+  - 新規可視化: Raincloud plot, t-SNE, UMAP, UpSet diagram, Ternary plot, LEfSe-style, Forest plot, Alluvial/Sankey
+  - PERMANOVA/ANOSIM, FDR 補正, 効果量 (Cliff's delta) を自動適用
+  - `manual_auto_agent.py` (新モジュール, 700+ 行)
+- CLI にモード 4 を追加（`--manual-auto --metadata meta.tsv --research-question "..."`）
 
 ### v1.1.0 (2026-03-13)
 - プライマー配列を FASTQ リードから自動検出し `trim_left` を設定
