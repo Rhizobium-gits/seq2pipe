@@ -67,7 +67,7 @@
 % -------------------------------------------------------
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small v1.0}
+\fancyhead[L]{\small v1.2}
 \fancyhead[C]{\small seq2pipe Technical Report}
 \fancyhead[R]{\small March 2026}
 \fancyfoot[C]{\thepage}
@@ -92,7 +92,7 @@
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small seq2pipe project}\\[2pt]
   {\small \url{https://github.com/Rhizobium-gits/seq2pipe}}\\[8pt]
-  {\small March 2026 --- v1.0 (10 modules, 11,488 lines, 29 auto-generated figures)}
+  {\small March 2026 --- v1.2 (13 modules, 15,355 lines, 29+43 analysis registry)}
 \end{center}
 
 \vspace{6mm}
@@ -124,6 +124,18 @@ automatically generating genus/phylum composition figures (fig13--fig15).
 After analysis completes, a \textbf{post-analysis refinement mode} is activated
 where users can iteratively refine figures through natural language instructions
 (e.g.\ ``change colors'', ``move legend outside'').
+In v1.2, a \textbf{research-driven autonomous analysis mode} (\texttt{--manual-auto})
+was introduced. Given a research question and metadata file, the system
+deterministically parses the experimental design (group structure, longitudinal timepoints,
+paired subjects) and selects from a registry of 43 analysis specifications
+spanning 7 phases: data quality, taxonomic composition, alpha/beta diversity,
+differential abundance, advanced network/ordination analyses, and publication-ready
+composite figures. Statistical tests are automatically adapted to the experimental
+design --- Mann-Whitney~U for unpaired 2-group, Wilcoxon signed-rank for paired,
+Kruskal-Wallis with Dunn's post-hoc for multi-group, and PERMANOVA for
+beta diversity --- with Benjamini-Hochberg FDR correction applied throughout.
+Visualizations include t-SNE, UMAP, Raincloud plots, Volcano plots, LEfSe-style
+effect size plots, UpSet diagrams, Ternary plots, Alluvial/Sankey diagrams, and more.
 The entire workflow runs on the user's local machine, eliminating
 dependencies on cloud services or paid APIs.
 \end{abstract}
@@ -235,7 +247,8 @@ seq2pipe was developed according to eight core design principles:
 Figure~\ref{fig:arch} illustrates the 3-step architecture of seq2pipe.
 The user launches \texttt{cli.py} via platform-specific launch scripts.
 \texttt{cli.py} presents a rainbow ASCII banner and prompts the user to
-select between two operating modes.
+select between four operating modes (directed analysis, autonomous, interactive chat,
+and research-driven manual-auto).
 In \texttt{--auto} mode, a 4-step automated pipeline executes:
 STEP~1 runs \texttt{pipeline\_runner.py} for the QIIME2 pipeline and exports results,
 STEP~1.5 runs \texttt{analysis.py} to deterministically generate 29 PNG figures,
@@ -620,6 +633,64 @@ Additionally, within the refinement session, keyword detection triggers report g
     manual compilation.
 \end{itemize}
 
+\subsection{Research-Driven Autonomous Analysis (\texttt{--manual-auto})}
+
+Added in v1.2, \texttt{manual\_auto\_agent.py} (1,262 lines) provides a
+research-question-driven analysis mode that automatically builds and executes
+a comprehensive analysis plan.
+
+\paragraph{Experimental Design Parsing}
+\texttt{parse\_metadata()} deterministically analyzes the metadata TSV and produces
+an \texttt{ExperimentalDesign} dataclass:
+\begin{itemize}[nosep]
+  \item \textbf{Group column}: auto-selected from priority list (treatment, group, condition, genotype, diet, etc.)
+  \item \textbf{Timepoint}: column name patterns (timepoint, day, week, visit, dpi, etc.)
+  \item \textbf{Subject column}: column name patterns (subject, patient, donor, mouse, etc.)
+  \item \textbf{Paired design}: detected via subject$\times$group cross-check
+  \item \textbf{Imbalanced design}: warning if max/min group size ratio $> 2.0$
+  \item \textbf{Continuous variables}: numeric columns with $> 10$ unique values
+\end{itemize}
+
+\paragraph{43-Analysis Registry}
+\texttt{ANALYSIS\_REGISTRY} defines 43 analysis specifications across 7 phases:
+\begin{enumerate}[nosep]
+  \item \textbf{Data Quality} (3): DADA2 stats, read depth, ASV frequency
+  \item \textbf{Composition} (8): phylum/genus/family stacked bars, heatmap, violin,
+    indicator species, etc.
+  \item \textbf{Alpha Diversity} (5): multi-metric boxplot, raincloud plot,
+    rarefaction, effect size forest plot, longitudinal trajectory
+  \item \textbf{Beta Diversity} (9): PCoA (all metrics + 95\% ellipses), NMDS,
+    t-SNE, UMAP, PCA-CLR biplot, PERMANOVA/ANOSIM, beta dispersion, dendrogram
+  \item \textbf{Differential Abundance} (5): volcano plot (FDR), MA plot,
+    forest plot (Cliff's delta), LEfSe-style, multi-group KW heatmap
+  \item \textbf{Advanced} (10): co-occurrence network, correlation clustermap,
+    ternary plot (3 groups), UpSet diagram, alluvial/Sankey, Venn diagram, etc.
+  \item \textbf{Publication} (3): 4-panel main figure, 6-panel supplementary,
+    statistical summary table
+\end{enumerate}
+
+Each specification encodes required data categories, min/max group counts, and
+longitudinal/paired requirements. \texttt{build\_analysis\_plan()} filters the registry
+based on data availability and experimental design.
+
+\paragraph{Adaptive Statistical Test Selection}
+\texttt{\_select\_stat\_test()} chooses the optimal test based on design:
+\begin{itemize}[nosep]
+  \item 2 groups, unpaired $\to$ Mann-Whitney U test
+  \item 2 groups, paired $\to$ Wilcoxon signed-rank test
+  \item 3+ groups, unpaired $\to$ Kruskal-Wallis + Dunn's post-hoc (Bonferroni)
+  \item 3+ groups, paired $\to$ Friedman test + Nemenyi post-hoc
+  \item Beta diversity $\to$ PERMANOVA (999 permutations)
+  \item Multiple testing $\to$ Benjamini-Hochberg FDR correction
+\end{itemize}
+
+\paragraph{Execution Flow}
+\texttt{run\_manual\_auto()} iterates over plan steps, for each:
+(1) builds a step-specific prompt with research context, design summary, and prior results;
+(2) requests code from the LLM;
+(3) executes with up to 3 retries (including auto pip install);
+(4) records results and passes context to subsequent steps.
+
 \subsection{Python Downstream Analysis}
 
 \texttt{tool\_execute\_python()} executes Python code via
@@ -958,7 +1029,14 @@ seq2pipe achieves the following:
   \item \textbf{Automated error correction}: NEVER GIVE UP policy ---
     rewrites and retries until \texttt{EXIT CODE: 0}
   \item \textbf{Small-LLM robustness}: four-layer fallback system
-  \item Two operation modes: directed (Mode 1) and fully autonomous (Mode 2)
+  \item Four operation modes: directed (Mode 1), autonomous (Mode 2),
+    interactive chat (Mode 3), and research-driven manual-auto (Mode 4)
+  \item \textbf{Research-driven autonomous analysis (\texttt{manual\_auto\_agent.py})}:
+    deterministically parses experimental design from metadata and selects from
+    a 43-analysis registry with adaptive statistical test selection
+  \item \textbf{43-analysis registry}: PCoA, NMDS, t-SNE, UMAP, raincloud plots,
+    volcano plots, LEfSe-style, UpSet diagrams, ternary plots, alluvial/Sankey,
+    PERMANOVA, forest plots, and more
   \item \textbf{Post-analysis refinement mode}:
     iterative figure refinement via natural language
   \item \textbf{Automatic PDF/SVG to PNG conversion (\texttt{sips})}:
@@ -987,9 +1065,10 @@ seq2pipe achieves the following:
 \begin{itemize}
   \item Support for additional marker genes (ITS, 18S rRNA)
   \item Pillow-based PDF/SVG $\to$ PNG conversion for Linux and Windows
-  \item Machine learning-based analyses (Random Forest feature importance,
+  \item Machine learning-based analyses (Random Forest / XGBoost feature importance,
     supervised classification) in the deterministic module
-  \item Integration of statistical result annotation directly into figures
+  \item LLM pass-2 in manual-auto mode for research-question-specific analysis steps
+  \item Multi-factor experimental designs (two or more interacting factors)
 \end{itemize}
 
 % -------------------------------------------------------
@@ -998,21 +1077,28 @@ seq2pipe achieves the following:
 
 We have described seq2pipe, an interactive AI agent that integrates
 local LLM inference with the QIIME2 microbiome analysis platform.
-The system combines three complementary modules:
+The system combines four complementary module layers:
 \texttt{qiime2\_agent.py} orchestrates 11 specialized tools for
 QIIME2 pipeline generation, \texttt{analysis.py} deterministically
 generates 29 publication-quality PNG figures without LLM dependency,
-and \texttt{code\_agent.py} --- a vibe-local-style tool-calling agent
+\texttt{code\_agent.py} --- a vibe-local-style tool-calling agent
 with 5 tools --- provides flexible additional analysis by reading
-actual file contents before writing code and automatically correcting errors.
+actual file contents before writing code and automatically correcting errors,
+and \texttt{manual\_auto\_agent.py} selects from a 43-analysis registry
+to execute research-question-driven analyses adapted to the experimental design.
+The \texttt{--manual-auto} mode introduced in v1.2 enables researchers to specify
+their research question and metadata, after which the system deterministically
+parses the experimental design and executes a comprehensive suite of analyses ---
+including volcano plots, LEfSe-style effect sizes, PERMANOVA, t-SNE, UMAP,
+raincloud plots, and 30+ additional visualization types --- with statistical tests
+automatically selected based on design (Mann-Whitney / Wilcoxon / Kruskal-Wallis /
+Friedman / PERMANOVA) and FDR multiple testing correction applied throughout.
 A post-analysis refinement mode allows iterative figure improvement via
 natural language, and \texttt{report\_generator.py} produces HTML or
 LaTeX/PDF reports.
 Together they enable researchers to automate an entire 16S rRNA analysis workflow ---
-from raw FASTQ data through 29 publication-quality figures
-and an HTML report --- entirely offline and without any cloud dependencies.
-The adaptive autonomous mode further extends the analysis by dynamically
-selecting data-driven explorations beyond the deterministic figure set.
+from raw FASTQ data through publication-quality figures
+and reports --- entirely offline and without any cloud dependencies.
 
 seq2pipe is released as open source under the MIT License and is available at:
 \texttt{https://github.com/Rhizobium-gits/seq2pipe}

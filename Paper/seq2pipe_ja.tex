@@ -72,7 +72,7 @@
 % -------------------------------------------------------
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small v1.0}
+\fancyhead[L]{\small v1.2}
 \fancyhead[C]{\small seq2pipe Technical Report}
 \fancyhead[R]{\small 2026年3月}
 \fancyfoot[C]{\thepage}
@@ -97,7 +97,7 @@
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small seq2pipe project}\\[2pt]
   {\small \url{https://github.com/Rhizobium-gits/seq2pipe}}\\[8pt]
-  {\small 2026 年 3 月 --- v1.0 (10 モジュール, 11,488 行, 29 図自動生成)}
+  {\small 2026 年 3 月 --- v1.2 (13 モジュール, 15,355 行, 29+43 解析レジストリ)}
 \end{center}
 
 \vspace{6mm}
@@ -122,6 +122,13 @@ STEP 2 の適応型自律エージェントは STEP 1.5 の解析サマリーを
 属・門レベルの分類組成図（fig13〜fig15）も自動生成される。
 解析完了後は \textbf{振り返り・修正モード} が起動し、
 「色を変えて」「凡例を外に出して」などの自然言語指示で図を対話的に修正できる。
+v1.2 では \textbf{研究目的駆動の自律解析モード}（\texttt{--manual-auto}）を追加した。
+ユーザーが研究の問いとメタデータを指定すると、実験デザイン（群数・縦断・ペア設計）を
+決定論的に解析し、43 種の解析レジストリから条件に合う 25〜41 ステップを自動選択して実行する。
+統計検定は Mann-Whitney U / Wilcoxon / Kruskal-Wallis / Friedman / PERMANOVA から
+デザインに基づいて自動選択され、Benjamini-Hochberg FDR 補正が適用される。
+可視化は PCoA・NMDS に加え t-SNE・UMAP・Raincloud plot・Volcano plot・LEfSe-style・
+UpSet diagram・Ternary plot・Alluvial/Sankey など 40 種以上に対応する。
 処理はすべてユーザーのローカル環境で完結し、
 クラウドサービスや有料 API への依存を排除する。
 \end{abstract}
@@ -216,7 +223,7 @@ seq2pipe は以下の設計原則に従って開発した。
 図~\ref{fig:arch} に seq2pipe の 4 ステップアーキテクチャを示す。
 ユーザーは起動スクリプトを通じてエントリーポイント（\texttt{cli.py}）を起動する。
 \texttt{cli.py} は虹色 ASCII バナーを表示し、
-2 つの操作モード（指定解析モード / 自律エージェントモード）を選択させる。
+4 つの操作モード（指定解析 / 自律エージェント / 対話チャット / 研究目的駆動）を選択させる。
 \texttt{--auto} モードでは 4 ステップの自動化パイプラインが実行される:
 STEP 1 で \texttt{pipeline\_runner.py} が QIIME2 パイプラインを実行し結果をエクスポート、
 STEP 1.5 で \texttt{analysis.py} が決定論的に 29 種類の PNG 図を生成、
@@ -562,6 +569,61 @@ LLM が既存コードを修正して再実行する。
     手動コンパイル手順をユーザーに通知する。
 \end{itemize}
 
+\subsection{研究目的駆動の自律解析モード（\texttt{--manual-auto}）}
+
+v1.2 で追加された \texttt{manual\_auto\_agent.py}（1,262 行）は、
+メタデータと研究の問いから包括的な解析プランを自動構築・実行する。
+
+\paragraph{実験デザイン解析}
+\texttt{parse\_metadata()} はメタデータ TSV を決定論的に解析し、
+\texttt{ExperimentalDesign} データクラスを生成する:
+\begin{itemize}[nosep]
+  \item \textbf{グループ列}: 優先リスト（treatment, group, condition, genotype, diet 等）から自動選択
+  \item \textbf{タイムポイント}: カラム名パターン（timepoint, day, week, visit, dpi 等）
+  \item \textbf{被験者列}: カラム名パターン（subject, patient, donor, mouse 等）
+  \item \textbf{ペアデザイン}: 被験者列$\times$グループ列の組み合わせから自動判定
+  \item \textbf{不均衡検出}: 群間サンプル数比 $> 2.0$ で警告
+  \item \textbf{連続変数}: 数値型かつユニーク値 $> 10$ のカラム
+\end{itemize}
+
+\paragraph{43 種の解析レジストリ}
+\texttt{ANALYSIS\_REGISTRY} は 7 フェーズ・43 種の解析仕様を定義する:
+\begin{enumerate}[nosep]
+  \item \textbf{Data Quality}（3 種）: DADA2 統計、リード深度、ASV 頻度分布
+  \item \textbf{Composition}（8 種）: 門/属/科積み上げ棒、ヒートマップ、バイオリン、
+    Indicator Species 等
+  \item \textbf{Alpha Diversity}（5 種）: マルチメトリクス箱ひげ図、Raincloud plot、
+    レアファクション、効果量 Forest plot、縦断軌跡
+  \item \textbf{Beta Diversity}（9 種）: PCoA（全メトリクス+95\%信頼楕円）、NMDS、
+    t-SNE、UMAP、PCA-CLR biplot、PERMANOVA/ANOSIM、Beta Dispersion、樹形図
+  \item \textbf{Differential Abundance}（5 種）: Volcano plot（FDR 補正）、MA plot、
+    Forest plot（Cliff's delta）、LEfSe-style、多群 KW ヒートマップ
+  \item \textbf{Advanced}（10 種）: 共起ネットワーク、相関 clustermap、Ternary plot（3群）、
+    UpSet diagram、Alluvial/Sankey、Venn diagram 等
+  \item \textbf{Publication}（3 種）: 4パネル Main Figure、6パネル Supplementary、統計サマリーテーブル
+\end{enumerate}
+
+各解析仕様は必要データカテゴリ・最小/最大グループ数・縦断/ペア要件を持ち、
+\texttt{build\_analysis\_plan()} がデータ可用性と実験デザインに基づいて自動フィルタリングする。
+
+\paragraph{データ適応型統計検定}
+\texttt{\_select\_stat\_test()} が実験デザインに基づいて最適な検定を自動選択する:
+\begin{itemize}[nosep]
+  \item 2 群・対応なし $\to$ Mann-Whitney U test
+  \item 2 群・対応あり $\to$ Wilcoxon signed-rank test
+  \item 3+ 群・対応なし $\to$ Kruskal-Wallis + Dunn's post-hoc（Bonferroni）
+  \item 3+ 群・対応あり $\to$ Friedman test + Nemenyi post-hoc
+  \item $\beta$ 多様性 $\to$ PERMANOVA（999 permutations）
+  \item 多重検定補正 $\to$ Benjamini-Hochberg FDR
+\end{itemize}
+
+\paragraph{実行フロー}
+\texttt{run\_manual\_auto()} は各ステップについて:
+(1) ステップ固有のプロンプトを構築（研究目的・デザイン・前ステップ結果を含む）、
+(2) LLM にコード生成を依頼、
+(3) 実行・リトライ（最大 3 回、pip 自動インストール含む）、
+(4) 結果を記録し次ステップへコンテキストとして渡す。
+
 \subsection{マニフェスト自動生成}
 
 \texttt{tool\_generate\_manifest()} は FASTQ ファイルの命名規則
@@ -853,7 +915,13 @@ seq2pipe は以下の目標を達成した。
     \texttt{run\_python} が失敗するとエージェントがトレースバックを読んで
     コードを修正し、\texttt{EXIT CODE: 0} になるまで再実行
   \item \textbf{小型 LLM 向けロバストネス機能}: 4 層フォールバック機構
-  \item 2 つの操作モード: 指定解析（モード 1）・完全自律（モード 2 / \texttt{--auto}）
+  \item 4 つの操作モード: 指定解析（モード 1）・完全自律（モード 2）・対話チャット（モード 3）・研究目的駆動（モード 4 / \texttt{--manual-auto}）
+  \item \textbf{研究目的駆動の自律解析（\texttt{manual\_auto\_agent.py}）}:
+    メタデータから実験デザインを決定論的に解析し、43 種の解析レジストリから
+    条件に合うステップを自動選択・実行。統計検定はデザインに基づいて自動選択
+  \item \textbf{43 種の解析レジストリ}: PCoA・NMDS・t-SNE・UMAP・Raincloud plot・
+    Volcano plot・LEfSe-style・UpSet diagram・Ternary plot・Alluvial/Sankey・
+    PERMANOVA・Forest plot 等を網羅
   \item \textbf{解析後の振り返り・修正モード}:
     自然言語指示で図を対話的に修正・再実行
   \item \textbf{PDF/SVG $\to$ PNG 自動変換（\texttt{sips}）}:
@@ -881,9 +949,9 @@ seq2pipe は以下の目標を達成した。
 \begin{itemize}
   \item ITS / 18S rRNA など他のマーカー遺伝子への対応
   \item \texttt{Pillow} を利用した Linux / Windows 向け PDF/SVG $\to$ PNG 変換の実装
-  \item 差次存在量解析（volcano plot）・機械学習（Random Forest）の
-    自律タスクへの追加
-  \item 統計的検定結果の図への自動アノテーション
+  \item 機械学習（Random Forest / XGBoost）による分類器構築と特徴量重要度の自動解析
+  \item manual-auto モードの LLM パス 2 による研究目的固有の解析ステップ追加
+  \item 多因子デザイン（2 因子以上の交互作用）への対応
 \end{itemize}
 
 % -------------------------------------------------------
@@ -892,17 +960,22 @@ seq2pipe は以下の目標を達成した。
 
 本稿では、ローカル LLM と QIIME2 を統合した自動解析エージェント
 seq2pipe の設計・実装を報告した。
-本システムは 3 つの相補的なモジュールを組み合わせる:
+本システムは 4 つの相補的なモジュール層を組み合わせる:
 \texttt{qiime2\_agent.py} が 11 ツールで QIIME2 パイプライン生成を担い、
 \texttt{analysis.py} が LLM に依存せず 29 種類の出版品質 PNG 図を確実に生成し、
-\texttt{code\_agent.py} が vibe-local 方式の 5 ツールで
-追加の柔軟な解析を提供する。
+\texttt{code\_agent.py} が vibe-local 方式の 5 ツールで追加の柔軟な解析を提供し、
+\texttt{manual\_auto\_agent.py} が 43 種の解析レジストリから
+実験デザインに合う解析を自動選択・実行する。
+v1.2 で追加された \texttt{--manual-auto} モードにより、
+研究者は研究の問いとメタデータを指定するだけで、
+実験デザインに最適化された包括的な解析（Volcano plot・LEfSe-style・
+PERMANOVA・t-SNE・UMAP・Raincloud plot 等 40 種以上）を全自動で実行できる。
+統計検定は実験デザイン（群数・ペア・縦断）に基づいて自動選択され、
+FDR 多重検定補正が適用される。
 解析完了後は振り返り・修正モードにより自然言語で図を対話的に改善でき、
 \texttt{report\_generator.py} が HTML または LaTeX+PDF レポートを自動生成する。
-これにより研究者は生 FASTQ データから 29 種類の出版品質の図と
-HTML レポートまでを、完全オフラインかつクラウド不要の環境で自動化できる。
-さらに適応型自律エージェント（STEP 2）により、
-決定論的解析の結果をもとにデータ特性に応じた応用解析が自動的に実行される。
+これにより研究者は生 FASTQ データから出版品質の図とレポートまでを、
+完全オフラインかつクラウド不要の環境で自動化できる。
 
 seq2pipe はオープンソース（MIT ライセンス）として公開されており、
 \texttt{https://github.com/Rhizobium-gits/seq2pipe} からアクセスできる。
