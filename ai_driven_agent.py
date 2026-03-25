@@ -886,7 +886,7 @@ def _build_replan_prompt(
     registry_menu: str,
     recon: DataRecon,
 ) -> str:
-    """stdout に含まれる統計結果を渡してリプランさせる"""
+    """発見に基づく調査計画を含むリプランプロンプト"""
     completed_text = ""
     for s in completed_steps[-6:]:
         status = "SUCCESS" if s["success"] else "FAILED"
@@ -898,10 +898,20 @@ def _build_replan_prompt(
 
     remaining_text = "\n".join(f"  - {k}" for k in remaining_keys[:10])
 
-    return f"""You are a microbiome bioinformatician reviewing results mid-analysis.
+    comparisons_text = ""
+    if design.comparisons:
+        comparisons_text = "\n## AVAILABLE COMPARISONS\n"
+        for c in design.comparisons[:10]:
+            comparisons_text += f"  - {c.summary_line()}\n"
+
+    return f"""You are an investigative microbiome bioinformatician.
+You don't just run analyses — you INVESTIGATE discoveries.
 
 ## RESEARCH QUESTION
 {research_question}
+
+## EXPERIMENTAL DESIGN
+{design.summary()}
 
 ## INITIAL DATA RECONNAISSANCE
 {recon.summary()}
@@ -911,29 +921,53 @@ def _build_replan_prompt(
 
 ## REMAINING PLANNED ANALYSES
 {remaining_text}
-
-## ALL AVAILABLE ANALYSES
+{comparisons_text}
+## ALL AVAILABLE ANALYSES (can add from menu)
 {registry_menu}
 
-## YOUR TASK
-Based on the ACTUAL STATISTICAL OUTPUTS above, decide:
+## YOUR TASK — Think like a scientist investigating data
 
-1. SKIP analyses that are no longer needed:
-   - If alpha showed NO significance → skip alpha_effectsize, alpha_raincloud
-   - If beta showed NO group separation → skip beta_dispersion, sample_dendrogram
-   - If no differential genera found → skip effect_size_forest
+### 1. SKIP analyses no longer needed
+Based on what you've learned from completed analyses.
 
-2. ADD analyses prompted by discoveries:
-   - If a specific genus is highly differential → add genus_violin to examine it
-   - If unexpected clustering in PCoA → add tsne or umap for alternative view
-   - If strong PERMANOVA → add pca_clr for compositional analysis
+### 2. ADD from menu
+Existing analyses that should be added given findings.
 
-3. REORDER based on findings:
-   - Move hypothesis-confirming analyses earlier
-   - Defer exploratory analyses if strong signal found
+### 3. INVESTIGATE — Custom follow-up investigations
+This is the most important part. Based on discoveries, propose CUSTOM analyses
+that are NOT in the menu. Think about:
+
+- **Co-occurrence patterns**: If taxa A and B are strongly correlated, does this
+  pattern hold within each treatment group? Does the correlation break down after treatment?
+- **Differential taxa follow-up**: If Genus X is enriched in group A, what are its
+  ecological partners? Do its co-occurring taxa also shift?
+- **Cluster investigation**: If PCoA shows clear clusters, which taxa drive the separation?
+  Compute taxa contributions to PC1/PC2.
+- **Temporal patterns**: If a taxon changes over time in one group, does the same taxon
+  change in the other group? At what rate?
+- **Cross-comparison**: If effect is significant at timepoint X, is it also significant
+  at timepoint Y? Is the effect growing or shrinking?
+- **Ecological interpretation**: If diversity drops, is it driven by loss of rare taxa
+  or expansion of dominant taxa? Decompose the change.
+
+### 4. REORDER remaining analyses
 
 Return JSON:
-{{"skip": ["key1"], "add": [{{"key": "x", "reason": "specific reason from outputs", "priority": 8}}], "reorder": [], "reasoning": "Brief explanation referencing actual statistical values"}}
+{{
+  "skip": ["key1"],
+  "add": [{{"key": "x", "reason": "reason from findings", "priority": 8}}],
+  "investigate": [
+    {{
+      "title": "Short descriptive title",
+      "hypothesis": "What you expect to find and why",
+      "method": "Specific analysis method (e.g., Spearman correlation of taxon A vs B per group)",
+      "code_instructions": "Detailed instructions for generating the Python code: what to read, compute, and plot",
+      "priority": 9
+    }}
+  ],
+  "reorder": [],
+  "reasoning": "Chain of reasoning: what you discovered → what it implies → what to investigate next"
+}}
 
 Return ONLY JSON."""
 
@@ -977,10 +1011,12 @@ class AIDrivenResult:
     results: list[AIDrivenStepResult] = field(default_factory=list)
     all_figures: list[str] = field(default_factory=list)
     replan_history: list[dict] = field(default_factory=list)
+    investigations: list[dict] = field(default_factory=list)  # 発見駆動の追加調査
     completed_steps: int = 0
     failed_steps: int = 0
     skipped_by_ai: int = 0
     added_by_ai: int = 0
+    investigated_by_ai: int = 0
 
 
 def _extract_stats_from_stdout(stdout: str) -> str:
@@ -1086,64 +1122,153 @@ def run_ai_driven(
     while plan_queue:
         item = plan_queue.pop(0)
         key = item["key"]
-        spec = spec_map.get(key)
-        if not spec:
-            continue
-
-        step_counter += 1
         reason = item.get("reason", "")
+        is_investigation = key.startswith("investigate_")
+        investigation_data = item.get("_investigation", {})
 
-        _log(f"{'─' * 48}")
-        _log(f"  📊 Step {step_counter}: {spec.title}")
-        _log(f"  💡 Reason: {reason[:100]}")
-        _log(f"{'─' * 48}")
+        # レジストリ解析 or カスタム調査かで分岐
+        if is_investigation:
+            spec = None
+            step_title = investigation_data.get("title", "Follow-up Investigation")
+            step_counter += 1
 
-        for pkg in spec.extra_packages:
-            try:
-                __import__(pkg.replace("-", "_").split("[")[0])
-            except ImportError:
-                approved = install_callback(pkg) if install_callback else True
-                if approved:
-                    pip_install(pkg, log_callback)
+            _log(f"{'─' * 48}")
+            _log(f"  🔬 Step {step_counter}: INVESTIGATION — {step_title}")
+            _log(f"  💡 Hypothesis: {investigation_data.get('hypothesis', '')[:120]}")
+            _log(f"  🧪 Method: {investigation_data.get('method', '')[:120]}")
+            _log(f"{'─' * 48}")
 
-        expanded = _expand_prompt(spec, design, metadata_path, research_question)
-        analysis_step = AnalysisStep(
-            step_num=step_counter, spec=spec, code_prompt=expanded,
-            figure_prefix=f"ai{step_counter:02d}_{spec.key}",
-        )
+            # カスタム調査用のプロンプト構築
+            prior_summaries = [
+                f"{c['title']}: {'OK' if c['success'] else 'FAILED'}"
+                + (f" | {c.get('stdout_excerpt', '')[:120]}" if c.get("stdout_excerpt") else "")
+                for c in completed_info[-4:]
+            ]
 
-        prior_summaries = [
-            f"{c['title']}: {'OK' if c['success'] else 'FAILED'}"
-            + (f" | {c.get('stdout_excerpt', '')[:120]}" if c.get("stdout_excerpt") else "")
-            for c in completed_info[-4:]
-        ]
-        prompt = _build_step_prompt(
-            step=analysis_step, design=design, export_files=export_files,
-            figure_dir=figure_dir, metadata_path=metadata_path,
-            research_question=research_question, prior_results=prior_summaries,
-        )
+            files_text = ""
+            for cat, paths in export_files.items():
+                for p in paths:
+                    files_text += f"  [{cat}] {p}\n"
+            if metadata_path:
+                files_text += f"  [metadata] {metadata_path}\n"
 
-        _log("  LLM にコード生成を依頼中...")
-        messages = [
-            {"role": "system", "content": "You are a microbiome analysis expert. Generate only Python code in ```python ... ```."},
-            {"role": "user", "content": prompt},
-        ]
+            meta_read = ""
+            if metadata_path and design.primary_group:
+                meta_read = (
+                    f"meta = pd.read_csv(r'{metadata_path}', sep='\\t', comment='#')\n"
+                    f"id_col = meta.columns[0]\nmeta = meta.set_index(id_col)\n"
+                    f"group_col = '{design.primary_group}'\n"
+                )
+
+            prompt = f"""You are an investigative microbiome bioinformatician.
+A previous analysis revealed something interesting. Now you need to investigate further.
+
+## RESEARCH QUESTION
+{research_question}
+
+## EXPERIMENTAL DESIGN
+{design.summary()}
+
+## INVESTIGATION TASK
+Title: {investigation_data.get('title', '')}
+Hypothesis: {investigation_data.get('hypothesis', '')}
+Method: {investigation_data.get('method', '')}
+Detailed instructions: {investigation_data.get('code_instructions', '')}
+
+## PREVIOUS FINDINGS
+{chr(10).join(f'  - {s}' for s in prior_summaries)}
+
+## AVAILABLE FILES
+{files_text}
+
+## HOW TO READ METADATA
+{meta_read}
+
+## FILE FORMATS
+feature-table.tsv: skiprows=1, index_col=0 (row=ASV, col=sample)
+taxonomy.tsv: index_col=0, cols: Taxon, Confidence. Genus: str.extract(r'g__([^;]+)')[0]
+alpha TSV: index_col=0, 1 numeric col
+beta TSV: square distance matrix, index_col=0
+
+## CODE REQUIREMENTS
+import matplotlib; matplotlib.use('Agg')
+import matplotlib.pyplot as plt; import pandas as pd
+FIGURE_DIR = r'{figure_dir}'; DPI = 150
+import os; os.makedirs(FIGURE_DIR, exist_ok=True)
+Save as: os.path.join(FIGURE_DIR, 'ai{step_counter:02d}_investigation_*.png')
+PNG only. No plt.show(). Print key statistical results to stdout.
+
+## IMPORTANT
+- Print any p-values, correlations, or key findings to stdout
+- This is an INVESTIGATION — include interpretation in print statements
+- Example: print(f"Spearman r={{r:.3f}}, p={{p:.4f}} — {{interpretation}}")
+
+Output ONLY Python code in ```python ... ```."""
+
+            _log("  LLM にカスタム調査コードを依頼中...")
+            messages = [
+                {"role": "system", "content": "You are a microbiome analysis expert. Generate only Python code in ```python ... ```."},
+                {"role": "user", "content": prompt},
+            ]
+
+        else:
+            spec = spec_map.get(key)
+            if not spec:
+                continue
+            step_title = spec.title
+            step_counter += 1
+
+            _log(f"{'─' * 48}")
+            _log(f"  📊 Step {step_counter}: {step_title}")
+            _log(f"  💡 Reason: {reason[:100]}")
+            _log(f"{'─' * 48}")
+
+            for pkg in spec.extra_packages:
+                try:
+                    __import__(pkg.replace("-", "_").split("[")[0])
+                except ImportError:
+                    approved = install_callback(pkg) if install_callback else True
+                    if approved:
+                        pip_install(pkg, log_callback)
+
+            expanded = _expand_prompt(spec, design, metadata_path, research_question)
+            analysis_step = AnalysisStep(
+                step_num=step_counter, spec=spec, code_prompt=expanded,
+                figure_prefix=f"ai{step_counter:02d}_{spec.key}",
+            )
+
+            prior_summaries = [
+                f"{c['title']}: {'OK' if c['success'] else 'FAILED'}"
+                + (f" | {c.get('stdout_excerpt', '')[:120]}" if c.get("stdout_excerpt") else "")
+                for c in completed_info[-4:]
+            ]
+            prompt = _build_step_prompt(
+                step=analysis_step, design=design, export_files=export_files,
+                figure_dir=figure_dir, metadata_path=metadata_path,
+                research_question=research_question, prior_results=prior_summaries,
+            )
+
+            _log("  LLM にコード生成を依頼中...")
+            messages = [
+                {"role": "system", "content": "You are a microbiome analysis expert. Generate only Python code in ```python ... ```."},
+                {"role": "user", "content": prompt},
+            ]
 
         try:
             response = _agent.call_ollama(messages, model)
         except Exception as e:
             _log(f"  ❌ Ollama エラー: {e}")
-            result.results.append(AIDrivenStepResult(key=key, title=spec.title, reason=reason, success=False, stderr=str(e)))
+            result.results.append(AIDrivenStepResult(key=key, title=step_title, reason=reason, success=False, stderr=str(e)))
             result.failed_steps += 1
-            completed_info.append({"key": key, "title": spec.title, "success": False, "stdout_excerpt": "", "figures": []})
+            completed_info.append({"key": key, "title": step_title, "success": False, "stdout_excerpt": "", "figures": []})
             continue
 
         code = _extract_code(response.get("content", ""))
         if not code:
             _log("  ⚠️ コード生成なし。スキップ。")
-            result.results.append(AIDrivenStepResult(key=key, title=spec.title, reason=reason, success=False, stderr="No code"))
+            result.results.append(AIDrivenStepResult(key=key, title=step_title, reason=reason, success=False, stderr="No code"))
             result.failed_steps += 1
-            completed_info.append({"key": key, "title": spec.title, "success": False, "stdout_excerpt": "", "figures": []})
+            completed_info.append({"key": key, "title": step_title, "success": False, "stdout_excerpt": "", "figures": []})
             continue
 
         _log(f"  コード生成完了 ({len(code.splitlines())} 行)")
@@ -1183,7 +1308,7 @@ def run_ai_driven(
                     pass
 
         step_result = AIDrivenStepResult(
-            key=key, title=spec.title, reason=reason,
+            key=key, title=step_title, reason=reason,
             success=step_success, figures=new_figs,
             stdout=last_stdout, stderr=last_stderr, code=last_code,
         )
@@ -1204,7 +1329,7 @@ def run_ai_driven(
             _log(f"  ❌ 失敗: {last_stderr[:200]}")
 
         completed_info.append({
-            "key": key, "title": spec.title, "success": step_success,
+            "key": key, "title": step_title, "success": step_success,
             "stdout_excerpt": stats_excerpt,
             "figures": [Path(f).name for f in new_figs],
         })
@@ -1260,6 +1385,29 @@ def run_ai_driven(
                         new_queue.extend(key_to_item.values())
                         plan_queue = new_queue
 
+                    # ── 発見駆動の追加調査（investigate）────────
+                    for inv in replan_data.get("investigate", []):
+                        inv_title = inv.get("title", "Follow-up investigation")
+                        inv_hyp = inv.get("hypothesis", "")
+                        inv_method = inv.get("method", "")
+                        inv_code = inv.get("code_instructions", "")
+                        inv_priority = inv.get("priority", 7)
+
+                        if inv_title and inv_code:
+                            # カスタム調査をキューに追加（特殊な key = "investigate_N"）
+                            inv_key = f"investigate_{result.investigated_by_ai + 1}"
+                            plan_queue.append({
+                                "key": inv_key,
+                                "reason": f"Discovery: {inv_hyp[:100]}",
+                                "priority": inv_priority,
+                                "_investigation": inv,  # 生データを保持
+                            })
+                            result.investigated_by_ai += 1
+                            result.investigations.append(inv)
+                            _log(f"    🔬 AI 調査追加: {inv_title}")
+                            _log(f"       仮説: {inv_hyp[:100]}")
+                            _log(f"       手法: {inv_method[:100]}")
+
                     _log(f"    📋 残りプラン: {len(plan_queue)} ステップ")
             except Exception as e:
                 _log(f"    ⚠️ リプランニング失敗（続行）: {e}")
@@ -1270,6 +1418,7 @@ def run_ai_driven(
     _log(f"  ❌ Failed:    {result.failed_steps}")
     _log(f"  ⏭  Skipped by AI: {result.skipped_by_ai}")
     _log(f"  ➕ Added by AI:   {result.added_by_ai}")
+    _log(f"  🔬 Investigations: {result.investigated_by_ai}")
     _log(f"  🔄 Replanning events: {len(result.replan_history)}")
     _log(f"  📊 Total figures: {len(result.all_figures)}")
     _log(f"{'═' * 56}\n")
