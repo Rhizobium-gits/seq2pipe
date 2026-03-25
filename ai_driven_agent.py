@@ -62,9 +62,16 @@ class DataRecon:
     beta_metrics: list[str] = field(default_factory=list)
     has_denoising: bool = False
     denoising_pass_rate: float = 0.0
-    sparsity: float = 0.0              # feature table の 0 の割合
-    evenness_mean: float = 0.0         # Pielou's J 平均
-    dominance_mean: float = 0.0        # Simpson's dominance 平均
+    chimera_rate: float = 0.0
+    merge_rate: float = 0.0
+    sparsity: float = 0.0
+    evenness_mean: float = 0.0
+    dominance_mean: float = 0.0
+    singleton_fraction: float = 0.0    # 1サンプルにしか出現しないASVの割合
+    goods_coverage_mean: float = 0.0   # Good's coverage 平均
+    fb_ratio: float = 0.0             # Firmicutes/Bacteroidetes 比
+    proteobacteria_fraction: float = 0.0
+    unclassified_fraction: float = 0.0
 
     # 群間統計検定結果
     alpha_group_tests: list[dict] = field(default_factory=list)
@@ -180,6 +187,14 @@ class DataRecon:
             sparsity=self.sparsity,
             evenness_mean=self.evenness_mean,
             dominance_mean=self.dominance_mean,
+            singleton_fraction=self.singleton_fraction,
+            goods_coverage_mean=self.goods_coverage_mean,
+            fb_ratio=self.fb_ratio,
+            proteobacteria_fraction=self.proteobacteria_fraction,
+            unclassified_fraction=self.unclassified_fraction,
+            chimera_rate=self.chimera_rate,
+            merge_rate=self.merge_rate,
+            denoising_pass_rate=self.denoising_pass_rate,
             high_variance_genera=self.high_variance_genera,
         )
 
@@ -316,6 +331,25 @@ def run_data_recon(
                 if dom_vals:
                     recon.dominance_mean = statistics.mean(dom_vals)
 
+            # シングルトン比率（1サンプルにしか出現しないASV）
+            n_singletons = 0
+            for asv_id, asv_counts in ft_matrix.items():
+                n_present = sum(1 for v in asv_counts.values() if v > 0)
+                if n_present == 1:
+                    n_singletons += 1
+            recon.singleton_fraction = n_singletons / len(ft_matrix) if ft_matrix else 0
+
+            # Good's coverage per sample: C = 1 - (n_singletons_in_sample / total_reads_in_sample)
+            coverage_vals = []
+            for sid in sample_ids:
+                counts = [ft_matrix[asv].get(sid, 0) for asv in ft_matrix]
+                total_c = sum(counts)
+                if total_c > 0:
+                    n_sing = sum(1 for c in counts if c == 1)
+                    coverage_vals.append(1 - n_sing / total_c)
+            if coverage_vals:
+                recon.goods_coverage_mean = statistics.mean(coverage_vals)
+
             # 群別平均リード数
             if group_map:
                 from collections import defaultdict
@@ -400,6 +434,17 @@ def run_data_recon(
                         (name, count / grand_total * 100)
                         for name, count in sorted(genus_total.items(), key=lambda x: -x[1])[:15]
                     ]
+
+                    # F/B 比・Proteobacteria 比率
+                    firm = phylum_total.get("Firmicutes", 0)
+                    bact = phylum_total.get("Bacteroidetes", 0) + phylum_total.get("Bacteroidota", 0)
+                    recon.fb_ratio = firm / bact if bact > 0 else 0.0
+                    proteo = phylum_total.get("Proteobacteria", 0) + phylum_total.get("Pseudomonadota", 0)
+                    recon.proteobacteria_fraction = proteo / grand_total if grand_total > 0 else 0.0
+
+                    # 未分類比率
+                    unclass = genus_total.get("Unknown", 0) + genus_total.get("", 0) + genus_total.get("__", 0)
+                    recon.unclassified_fraction = unclass / grand_total if grand_total > 0 else 0.0
 
                 # 群別優占属
                 if group_map:
@@ -599,12 +644,29 @@ def run_data_recon(
             input_idx = next((i for i, h in enumerate(header) if "input" in h.lower()), None)
             nonchim_idx = next((i for i, h in enumerate(header)
                                 if "non-chimeric" in h.lower() or "nonchimeric" in h.lower()), None)
+            merged_idx = next((i for i, h in enumerate(header) if "merged" in h.lower()), None)
+            filtered_idx = next((i for i, h in enumerate(header) if "filtered" in h.lower()), None)
+
             if input_idx is not None and nonchim_idx is not None:
                 total_in = sum(int(r[input_idx]) for r in rows if len(r) > max(input_idx, nonchim_idx))
                 total_out = sum(int(r[nonchim_idx]) for r in rows if len(r) > max(input_idx, nonchim_idx))
                 if total_in > 0:
                     recon.denoising_pass_rate = total_out / total_in
-            _log(f"  🔬 Denoising pass rate: {recon.denoising_pass_rate:.1%}")
+
+                # キメラ率 = (merged - non_chimeric) / merged
+                if merged_idx is not None:
+                    total_merged = sum(int(r[merged_idx]) for r in rows if len(r) > merged_idx)
+                    if total_merged > 0:
+                        recon.chimera_rate = (total_merged - total_out) / total_merged
+
+                # マージ率 = merged / filtered
+                if merged_idx is not None and filtered_idx is not None:
+                    total_filtered = sum(int(r[filtered_idx]) for r in rows if len(r) > filtered_idx)
+                    if total_filtered > 0:
+                        recon.merge_rate = total_merged / total_filtered
+
+            _log(f"  🔬 Denoising: pass={recon.denoising_pass_rate:.1%}, "
+                 f"chimera={recon.chimera_rate:.1%}, merge={recon.merge_rate:.1%}")
         except Exception:
             pass
 
