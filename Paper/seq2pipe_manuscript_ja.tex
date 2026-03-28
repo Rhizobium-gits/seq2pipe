@@ -415,6 +415,64 @@ $\beta$有意 & Y & N & Y & Y & Y & Y & Y \\
 \label{fig:three-way}
 \end{figure}
 
+\subsection{AI駆動実行：フロー・エラー・マシン性能の定量評価}
+
+Moving Picturesデータに対してqwen2.5-coder:7B（Ollama、Apple Silicon）で
+AI駆動モードを完全実行した。30ステップが実行された。
+
+\paragraph{実行フロー}
+30ステップはレジストリステップ13件（解析カタログから定義済み）と
+LLM生成のInvestigationステップ17件に分解される。
+図\ref{fig:exec-flow}に完全なタイムラインを示す。
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_execution_flow.png}
+\caption{AI駆動実行の完全フロー（30ステップ）。
+(A) スコアと成功/失敗。緑=成功、橙=レジストリ失敗、赤=Investigation失敗。紫「R」はリプランイベント。
+(B) リトライ回数（1=初回成功、3=最大リトライ消費）。
+(C) エラー種別（積み上げ）。
+(D) 累積成功率。}
+\label{fig:exec-flow}
+\end{figure}
+
+\paragraph{成功率}
+レジストリステップ: 54\%（7/13）、Investigationステップ: 6\%（1/17）、全体: 27\%（8/30）。
+成功ステップの平均合成スコア0.43、失敗ステップ0.22。
+
+\paragraph{エラー分析}
+\texttt{NameError}が最多（18件）——LLMが\texttt{import os}を忘れるか
+\texttt{matplotlib.use('Agg')}の順序を間違える。
+\texttt{KeyError}（8件）——TSVカラム名の誤認
+（例：\texttt{taxonomy['Taxon']}だがヘッダ形式が異なる）。
+
+\paragraph{リトライの有効性}
+5ステップが初回成功、3ステップがリトライで救済（成功8件中の37.5\%）。
+22ステップは3回のリトライを消費して失敗。
+概念的エラー（間違った解析ロジック）に対してリトライは無効——
+LLMは類似の誤ったコードを繰り返し生成する。
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_error_analysis.png}
+\caption{(A) エラー種別分布。(B) リトライ有効性。(C) レジストリ vs Investigation性能。}
+\label{fig:error-analysis}
+\end{figure}
+
+\paragraph{マシン性能プロファイル}
+図\ref{fig:machine-perf}の8軸レーダー（パネルC）は、
+成功ステップが全軸で高スコアであることを示す。
+最大差は\texttt{statistical\_significance}（0.52 vs 0.26）と
+\texttt{effect\_magnitude}（0.53 vs 0.22）。
+成功はコード正確性だけでなくデータシグナルの強さと相関する。
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_machine_performance.png}
+\caption{マシン性能評価。(A) スコア分布。(B) エラー解決率。(C) 8軸レーダー。(D) 性能サマリ。}
+\label{fig:machine-perf}
+\end{figure}
+
 \subsection{統計検定精度の検証（scipy比較）}
 
 DataInspectorの純Python実装をscipyと100回のモンテカルロデータセットで比較した。

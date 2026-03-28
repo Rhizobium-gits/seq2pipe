@@ -630,54 +630,106 @@ The three scenarios produced qualitatively different decisions:
         not be evaluated due to missing data.
 \end{itemize}
 
-\subsection{AI-Driven Execution: Error Analysis}
+\subsection{AI-Driven Execution: Full Flow Analysis}
 \label{sec:eval-convergence}
 
 We ran the full AI-driven mode on Moving Pictures with
 qwen2.5-coder:7B (Ollama, Apple Silicon M-series).
-The system executed 30 steps over approximately 40 minutes.
+The system executed 30 steps before manual termination
+(due to the investigation loop bug described below).
+Figure~\ref{fig:exec-flow} shows the complete execution timeline.
 
-\paragraph{Success rates by step type.}
-Registry steps (pre-defined from the analysis catalog) achieved a
-54\% success rate (7/13), while LLM-generated investigation steps
-achieved only 6\% (1/17).
-The dominant error mode in investigations was \texttt{KeyError: 'Taxon'}---
-the LLM consistently failed to handle the QIIME2 taxonomy TSV format
-where the column name is \texttt{Taxon} but the file uses
-tab-separated format with an empty index column header.
+\paragraph{Execution flow.}
+The 30 steps decompose into 13 registry steps (pre-defined from
+the analysis catalog) and 17 LLM-generated investigation steps.
+The flow proceeds as:
+Steps 1--7 (registry) $\to$ replan at step 4 $\to$
+steps 8--11 (investigations, all fail) $\to$
+steps 12--18 (mixed, partial success) $\to$
+replan $\to$ steps 19--30 (investigations, nearly all fail).
 
-\paragraph{Score progression.}
-Figure~\ref{fig:convergence} shows composite scores across iterations.
-Registry steps (iterations 1--7) maintain scores between 0.31 and 0.63,
-while investigation steps (iterations 8+) cluster at 0.22
-(the minimum score for failed steps).
-This pattern reveals that the 7B model lacks sufficient code generation
-capability for complex, novel analyses, while performing adequately
-on well-specified registry tasks.
+\paragraph{Success rates.}
+Registry steps achieved 54\% success (7/13);
+investigation steps achieved 6\% (1/17).
+Overall: 8/30 (27\%).
+Successful steps produced an average composite score of 0.43,
+while failed steps scored 0.22 (the minimum floor).
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\textwidth]{fig_convergence_scores.png}
-\caption{Composite evaluation scores across iterations on the
-Moving Pictures dataset.
-Green bars: score $\geq 0.4$ (actionable);
-orange: $0.25$--$0.4$;
-red: $< 0.25$ (failed).
-Blue vertical line separates registry steps (left) from
-LLM-generated investigations (right).
-Running mean (black line) shows declining trend as investigations
-dominate.}
-\label{fig:convergence}
+\includegraphics[width=\textwidth]{fig_execution_flow.png}
+\caption{Complete AI-driven execution flow on Moving Pictures (30 steps).
+(A)~Score and success per step: green=success, orange=registry fail,
+red=investigation fail. Purple ``R'' marks replanning events.
+(B)~Retry attempts: 1=first-try success, 3=all retries exhausted.
+(C)~Error types per step (stacked).
+(D)~Cumulative success rate: registry (green dashed) holds at $\sim$54\%
+while investigations (red dashed) drag overall below 30\%.}
+\label{fig:exec-flow}
 \end{figure}
 
-\paragraph{Critical finding: investigation loop.}
+\paragraph{Error analysis.}
+Figure~\ref{fig:error-analysis} breaks down error types and retry
+effectiveness.
+\texttt{NameError} was the dominant error (18 occurrences),
+caused by the LLM forgetting \texttt{import os} or calling
+\texttt{matplotlib.use('Agg')} after other matplotlib imports.
+\texttt{KeyError} (8 occurrences) arose from incorrect column
+name assumptions (e.g., \texttt{taxonomy['Taxon']} when the
+TSV uses a different header format).
+
+\paragraph{Retry effectiveness.}
+Of 30 steps, 5 succeeded on the first attempt (no retry needed),
+2 succeeded after 1 retry, 1 succeeded after 2 retries.
+The remaining 22 steps exhausted all 3 attempts and failed.
+The retry mechanism ``rescued'' 3 steps that would otherwise have
+failed---a 37.5\% (3/8) contribution to the final success count.
+However, when the underlying error is a conceptual mistake
+(wrong analysis logic), retries are ineffective: the LLM
+repeatedly generates similar incorrect code.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_error_analysis.png}
+\caption{(A)~Error type distribution: \texttt{NameError} dominates (18),
+followed by \texttt{KeyError} (8).
+(B)~Retry effectiveness: first-try success is 100\% reliable;
+max-retry (3 attempts) steps succeed only 4\% of the time.
+(C)~Registry steps outperform investigations in both success rate
+(54\% vs 6\%) and mean composite score (0.39 vs 0.23).}
+\label{fig:error-analysis}
+\end{figure}
+
+\paragraph{Machine performance profile.}
+Figure~\ref{fig:machine-perf} presents the quantitative machine
+evaluation.
+The 8-axis radar plot (panel C) reveals that successful steps
+score higher on all axes, with the largest gap in
+\texttt{statistical\_significance} (0.52 vs 0.26) and
+\texttt{effect\_magnitude} (0.53 vs 0.22).
+This confirms that success correlates with data signal strength,
+not just code correctness.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_machine_performance.png}
+\caption{Machine performance evaluation.
+(A)~Score distribution: successful steps cluster at 0.31--0.63,
+failed steps at 0.22.
+(B)~Error resolution: \texttt{NameError} is occasionally fixed by
+retry (3/18); \texttt{KeyError} is never resolved (0/8).
+(C)~8-axis radar: success profile (green) vs failure profile (red).
+(D)~Summary metrics table.}
+\label{fig:machine-perf}
+\end{figure}
+
+\paragraph{Investigation loop bug.}
 During execution, the LLM generated duplicate investigation titles
 (e.g., ``Sparsity-aware analysis'' appeared $\sim$20 times).
-This revealed a missing deduplication mechanism, which was subsequently
-fixed by adding title-based duplicate checking and a maximum
-investigation cap ($N = 8$).
-This is an example of the system's closed-loop nature exposing its
-own failure modes during operation.
+This revealed a missing deduplication mechanism, subsequently fixed
+by adding title-based duplicate checking and a maximum cap ($N = 8$).
+This is an example of the system's closed-loop nature exposing
+its own failure modes during operation.
 
 \subsection{Cross-Dataset Comparison}
 \label{sec:eval-crossdataset}
