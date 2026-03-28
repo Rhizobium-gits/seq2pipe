@@ -141,6 +141,83 @@ Our contributions are:
         zero false-negative skips, and 100\% reproducibility.
 \end{enumerate}
 
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=0.6cm and 0.8cm,
+  stp/.style={draw, rounded corners=2pt, minimum height=0.6cm,
+               minimum width=1.6cm, font=\scriptsize, align=center},
+  decision/.style={draw, diamond, aspect=2.5, inner sep=1pt,
+                   font=\scriptsize, align=center},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  skip/.style={-{Stealth[length=2mm]}, thick, red!70, dashed},
+  add/.style={-{Stealth[length=2mm]}, thick, blue!70},
+  phase/.style={font=\footnotesize\bfseries, text=gray!70},
+]
+
+% === (a) Static Pipeline ===
+\node[phase] at (-5.5, 2.8) {(a) Static pipeline};
+\node[stp, fill=gray!15] (s1) at (-7,2) {QC};
+\node[stp, fill=gray!15, right=of s1] (s2) {$\alpha$ div};
+\node[stp, fill=gray!15, right=of s2] (s3) {$\beta$ div};
+\node[stp, fill=gray!15, right=of s3] (s4) {$\beta$-disp};
+\node[stp, fill=gray!15, right=of s4] (s5) {Taxa};
+\node[stp, fill=gray!15, right=of s5] (s6) {Diff};
+\node[stp, fill=gray!15, right=of s6] (s7) {Report};
+\foreach \i/\j in {s1/s2, s2/s3, s3/s4, s4/s5, s5/s6, s6/s7} {
+  \draw[arr, gray!60] (\i) -- (\j);
+}
+\node[font=\tiny, text=gray, below=0.1cm of s4] {$p{=}0.81$ (ns)};
+\node[font=\tiny, text=gray, below=0.1cm of s3] {$p{=}0.81$ (ns)};
+
+% === (b) seq2pipe Adaptive ===
+\node[phase] at (-5.5, 0.3) {(b) \seqpipe\ closed-loop};
+
+\node[stp, fill=green!15] (a1) at (-7, -0.5) {QC};
+\node[stp, fill=green!15, right=of a1] (a2) {$\alpha$ div};
+\node[stp, fill=green!15, right=of a2] (a3) {$\beta$ div};
+\node[decision, fill=yellow!20, right=of a3] (d1) {$p < 0.05$?};
+\node[stp, fill=red!10, dashed, above right=0.3cm and 0.8cm of d1] (a4skip) {$\beta$-disp};
+\node[stp, fill=green!15, below right=0.3cm and 0.8cm of d1] (a5) {Taxa};
+\node[decision, fill=yellow!20, right=of a5] (d2) {fc $> 5$?};
+\node[stp, fill=blue!15, above right=0.3cm and 0.6cm of d2] (a6add) {LEfSe};
+\node[stp, fill=green!15, below right=0.3cm and 0.6cm of d2] (a7) {Report};
+
+\draw[arr] (a1) -- (a2);
+\draw[arr] (a2) -- (a3);
+\draw[arr] (a3) -- (d1);
+\draw[skip] (d1) -- node[font=\tiny, above, red!70] {No} (a4skip);
+\draw[arr] (d1) -- node[font=\tiny, below left] {skip} (a5);
+\draw[arr] (a5) -- (d2);
+\draw[add] (d2) -- node[font=\tiny, above, blue!70] {Yes} (a6add);
+\draw[arr] (d2) -- node[font=\tiny, below left] {} (a7);
+
+% Feedback arrow
+\draw[arr, dashed, gray] (a5.south) -- ++(0, -0.6) -| node[font=\tiny, below, pos=0.3]
+  {evaluate \& replan} (d1.south);
+
+% Legend
+\node[font=\tiny] at (3.5, 2.5) {
+  \begin{tabular}{cl}
+    \tikz\draw[fill=gray!15, draw] (0,0) rectangle (0.3,0.2); & Fixed step \\
+    \tikz\draw[fill=green!15, draw] (0,0) rectangle (0.3,0.2); & Adaptive step \\
+    \tikz\draw[fill=red!10, draw, dashed] (0,0) rectangle (0.3,0.2); & Skipped \\
+    \tikz\draw[fill=blue!15, draw] (0,0) rectangle (0.3,0.2); & Added \\
+    \tikz\draw[fill=yellow!20, draw, diamond, inner sep=0pt, minimum size=0.25cm] (0,0) -- (0.15,0.1) -- (0.3,0) -- (0.15,-0.1) -- cycle; & Decision \\
+  \end{tabular}
+};
+\end{tikzpicture}
+\caption{Conceptual comparison.
+(a)~A static pipeline executes all steps in fixed order; non-significant
+results ($\beta$ PERMANOVA $p = 0.81$) do not alter the workflow.
+(b)~\seqpipe\ evaluates each step's output and applies decision nodes
+(yellow diamonds) to skip unnecessary follow-ups (red dashed) or add
+targeted analyses (blue).
+The dashed feedback arrow represents the closed-loop: results feed back
+into the decision logic.}
+\label{fig:concept}
+\end{figure*}
+
 % ======================================================================
 \section{Related Work}
 \label{sec:related}
@@ -212,40 +289,90 @@ on quantitative properties of $H_{t+1}$.
 \label{sec:arch}
 % ======================================================================
 
-\begin{figure}[t]
+\begin{figure*}[t]
 \centering
 \begin{tikzpicture}[
-  layer/.style={draw, rounded corners, minimum width=12cm,
-                minimum height=1.5cm, align=center, font=\small},
-  arrow/.style={-{Stealth[length=3mm]}, thick},
-  label/.style={font=\footnotesize\itshape, text=gray},
+  box/.style={draw, rounded corners=3pt, minimum height=0.7cm,
+              font=\scriptsize, align=center, text width=2.4cm},
+  layer/.style={draw, rounded corners=5pt, minimum height=2.2cm,
+                minimum width=14cm, align=center},
+  io/.style={draw, rounded corners=2pt, fill=white, font=\tiny,
+             minimum height=0.45cm, inner sep=2pt},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  darr/.style={-{Stealth[length=2mm]}, thick, dashed, gray},
+  note/.style={font=\tiny\itshape, text=gray!70},
 ]
-\node[layer, fill=blue!8] (L1) at (0,0)
-  {\textbf{Layer 1: DataInspector} (Pure Python, no scipy)\\
-   TSV parsing $\to$ Mann-Whitney $U$ / Kruskal-Wallis $H$ / PERMANOVA\\
-   Feature table $\to$ sparsity, evenness, genus-level fold change};
-\node[layer, fill=green!8] (L2) at (0,-2.4)
-  {\textbf{Layer 2: EvalMediator + DecisionEngine} (Deterministic)\\
-   8-axis scoring $\to$ SVD compression $\to$ Decision trees\\
-   Anderson~(2001) / Willis~(2019) / Gloor et al.~(2017) / McMurdie~(2014)};
-\node[layer, fill=orange!8] (L3) at (0,-4.8)
-  {\textbf{Layer 3: LLM} (local 7B, required for code execution)\\
-   Code generation (54\% success) + creative hypotheses (6\%)\\
-   \textit{Decisions overridden by Layer 2; code generation has no deterministic fallback}};
-\draw[arrow] (L1.south) -- node[right, label] {DataSnapshot} (L2.north);
-\draw[arrow] (L2.south) -- node[right, label] {Decision} (L3.north);
-\draw[arrow, dashed] (L3.east) -- ++(1.5,0) |- node[right, label, pos=0.25]
-  {execution feedback} (L1.east);
+
+% Layer 1
+\node[layer, fill=blue!5, label={[font=\small\bfseries, anchor=west]north west:Layer 1: DataInspector}] (L1) at (0, 0) {};
+\node[io, fill=blue!10] (ft) at (-5.5, 0.4) {feature-table.tsv};
+\node[io, fill=blue!10] (al) at (-3.2, 0.4) {alpha/*.tsv};
+\node[io, fill=blue!10] (bt) at (-1, 0.4) {beta/*.tsv};
+\node[io, fill=blue!10] (tx) at (1.2, 0.4) {taxonomy.tsv};
+\node[io, fill=blue!10] (mt) at (3.4, 0.4) {metadata.tsv};
+\node[box, fill=blue!15] (kw) at (-4.5, -0.5) {Kruskal-Wallis\\$H$, $p$, $\eta^2$};
+\node[box, fill=blue!15] (pm) at (-1.5, -0.5) {PERMANOVA\\$F$, $p$, ratio};
+\node[box, fill=blue!15] (fc) at (1.5, -0.5) {Fold change\\per genus};
+\node[box, fill=blue!15] (qc) at (4.5, -0.5) {Sparsity, CV\\evenness};
+\draw[arr, blue!50] (ft) -- (kw);
+\draw[arr, blue!50] (al) -- (kw);
+\draw[arr, blue!50] (bt) -- (pm);
+\draw[arr, blue!50] (tx) -- (fc);
+\draw[arr, blue!50] (mt) -- (qc);
+\node[note] at (6.2, 0) {Pure Python};
+\node[note] at (6.2, -0.3) {No scipy};
+
+% Layer 2
+\node[layer, fill=green!5, label={[font=\small\bfseries, anchor=west]north west:Layer 2: EvalMediator + DecisionEngine}] (L2) at (0, -3.3) {};
+\node[box, fill=green!15] (score) at (-4.5, -3) {8-axis scoring\\$s_{t,a} \in [0,1]$};
+\node[box, fill=green!15] (svd) at (-1.5, -3) {SVD compress\\$\mathbf{A} \to$ 3 PCs};
+\node[box, fill=green!15] (dt) at (1.5, -3) {Decision tree\\Anderson / Willis\\Gloor / McMurdie};
+\node[box, fill=green!15, text width=2.8cm] (out) at (5, -3) {skip: [$\beta$-disp, ...]\\add: [LEfSe, ...]\\reorder: [...]};
+\draw[arr, green!50] (score) -- (svd);
+\draw[arr, green!50] (svd) -- (dt);
+\draw[arr, green!50] (dt) -- (out);
+\node[note] at (6.5, -3.8) {Deterministic};
+\node[note] at (6.5, -4.1) {100\% reproducible};
+
+% DataSnapshot arrow
+\draw[arr, thick] (0, -1.1) -- node[right, font=\tiny] {DataSnapshot} (0, -2.2);
+
+% Layer 3
+\node[layer, fill=orange!5, label={[font=\small\bfseries, anchor=west]north west:Layer 3: LLM (7B)}] (L3) at (0, -6.3) {};
+\node[box, fill=orange!15] (plan) at (-4.5, -6) {Plan generation\\(fallback exists)};
+\node[box, fill=orange!20, line width=1pt] (code) at (-1.5, -6) {\textbf{Code generation}\\54\% success\\(no fallback)};
+\node[box, fill=orange!15] (hyp) at (1.5, -6) {Hypothesis\\generation\\6\% success};
+\node[box, fill=orange!10] (merge) at (4.5, -6) {merge()\\Py $>$ LLM};
+\draw[arr, orange!50] (plan) -- (code);
+\draw[arr, orange!50] (hyp) -- (merge);
+\node[note] at (6.3, -6) {LLM required};
+\node[note] at (6.3, -6.3) {for execution};
+
+% Decision arrow
+\draw[arr, thick] (0, -4.4) -- node[right, font=\tiny] {Decision} (0, -5.3);
+
+% Feedback loop
+\draw[darr, thick] (code.south) -- ++(0, -0.5) -- ++(-10, 0) -- ++(0, 7.3)
+  -- ++(3.5, 0) node[font=\tiny, above, pos=0.7] {stdout / figures / errors};
+
+% Retry loop
+\draw[arr, red!50, dashed] (code.east) -- ++(0.5, 0) |- ++(0, -0.6) -| ++(-0.5, 0)
+  node[font=\tiny, right, pos=0.5] {retry $\times 3$};
+
 \end{tikzpicture}
-\caption{Three-layer architecture.
-Layers~1--2 are fully deterministic and LLM-independent; they
-handle all workflow decisions (skip, add, reorder).
-Layer~3 provides the LLM for code generation and is required for
-step execution, but its \textit{decisions} are overridden by
-Layer~2 on conflict.
-The dashed arrow indicates the closed-loop feedback path.}
+\caption{Detailed system architecture and data flow.
+Layer~1 (blue) parses QIIME2 exports and computes statistical tests
+in pure Python.
+Layer~2 (green) scores results across eight axes, compresses the
+knowledge state via SVD, and applies literature-grounded decision
+trees---all deterministically.
+Layer~3 (orange) uses the LLM for code generation (bold box: the
+only component without a deterministic fallback) and hypothesis
+formulation.
+The dashed gray arrow shows the closed-loop feedback path; the red
+dashed loop shows the retry mechanism.}
 \label{fig:architecture}
-\end{figure}
+\end{figure*}
 
 The architecture (Figure~\ref{fig:architecture}) enforces a strict
 separation of concerns.
@@ -351,6 +478,68 @@ deterministic rules:
     CV $> 0.5 \Rightarrow$ add rarefaction;
     sparsity $> 90\% \Rightarrow$ add prevalence-filtered reanalysis.
 \end{itemize}
+
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  test/.style={draw, diamond, aspect=2, inner sep=1pt, font=\scriptsize,
+               fill=yellow!15, align=center, minimum width=2cm},
+  action/.style={draw, rounded corners=2pt, font=\scriptsize, fill=#1,
+                 minimum height=0.5cm, minimum width=1.8cm, align=center},
+  action/.default={green!15},
+  skip/.style={action=red!10},
+  arr/.style={-{Stealth[length=2mm]}, semithick},
+  branch/.style={font=\tiny, midway},
+]
+
+% Alpha branch
+\node[font=\small\bfseries] at (-5.5, 1) {$\alpha$ diversity};
+\node[test] (a1) at (-5.5, 0) {$\min p_\alpha$\\$< 0.05$?};
+\node[test] (a2) at (-3.5, -1.2) {effect\\$d > 0.5$?};
+\node[action] (a3) at (-4.8, -2.5) {+ effect size\\+ rarefaction};
+\node[action] (a4) at (-2.2, -2.5) {+ rarefaction\\only};
+\node[skip] (a5) at (-7.5, -1.2) {skip $\alpha$\\follow-ups};
+\draw[arr] (a1) -- node[branch, right] {Yes} (a2);
+\draw[arr] (a1) -- node[branch, above] {No} (a5);
+\draw[arr] (a2) -- node[branch, left] {Yes} (a3);
+\draw[arr] (a2) -- node[branch, right] {No} (a4);
+
+% Beta branch
+\node[font=\small\bfseries] at (0.5, 1) {$\beta$ diversity};
+\node[test] (b1) at (0.5, 0) {$\min p_\beta$\\$< 0.05$?};
+\node[test] (b2) at (2.5, -1.2) {ratio\\$> 2.0$?};
+\node[action] (b3) at (1.2, -2.5) {+ betadisper\\+ NMDS};
+\node[action] (b4) at (3.8, -2.5) {+ betadisper\\only};
+\node[skip] (b5) at (-1.5, -1.2) {skip all\\$\beta$ steps};
+\draw[arr] (b1) -- node[branch, right] {Yes} (b2);
+\draw[arr] (b1) -- node[branch, above] {No} (b5);
+\draw[arr] (b2) -- node[branch, left] {Yes} (b3);
+\draw[arr] (b2) -- node[branch, right] {No} (b4);
+
+% Taxonomy branch
+\node[font=\small\bfseries] at (6.5, 1) {Taxonomy};
+\node[test] (t1) at (6.5, 0) {$n_{\mathrm{diff}}$\\$\geq 5$?};
+\node[action] (t2) at (5, -1.2) {+ LEfSe\\+ PICRUSt2};
+\node[test] (t3) at (8, -1.2) {fc $> 50$\\abd $< 1\%$?};
+\node[action=orange!15] (t4) at (8, -2.5) {artifact\\warning};
+\draw[arr] (t1) -- node[branch, left] {Yes} (t2);
+\draw[arr] (t1) -- node[branch, right] {No} (t3);
+\draw[arr] (t3) -- node[branch, right] {Yes} (t4);
+
+% References
+\node[font=\tiny\itshape, text=gray] at (-5.5, -3.2) {Willis (2019)};
+\node[font=\tiny\itshape, text=gray] at (0.5, -3.2) {Anderson (2001)};
+\node[font=\tiny\itshape, text=gray] at (6.5, -3.2) {Gloor et al.\ (2017)};
+
+\end{tikzpicture}
+\caption{DecisionEngine decision trees for three analysis categories.
+Yellow diamonds represent data-dependent branch points; green boxes
+are add actions; red boxes are skip actions.
+Each tree is grounded in a specific methodological reference.
+All decisions are deterministic: the same input data always produces
+the same output.}
+\label{fig:decision-tree}
+\end{figure*}
 
 \subsection{Layer 3: LLM Code Generation and Hypothesis}
 
@@ -680,6 +869,53 @@ Creative hypothesis generation---the only function that is both
 LLM-dependent and without deterministic alternative---achieves only
 6\% execution success, motivating future work with larger local
 models or retrieval-augmented generation.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  func/.style={draw, rounded corners=3pt, minimum height=0.7cm,
+               minimum width=3.2cm, font=\scriptsize, align=center},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+]
+% Deterministic side
+\node[func, fill=green!20] (eval) at (0, 0) {Statistical evaluation\\(100\%, Python)};
+\node[func, fill=green!20] (decide) at (0, -1.2) {Workflow decisions\\(100\%, deterministic)};
+\draw[arr] (eval) -- (decide);
+
+% LLM side
+\node[func, fill=orange!15] (plan) at (5, 0.6) {Plan generation\\(fallback exists)};
+\node[func, fill=orange!30, line width=1.2pt] (code) at (5, -0.6) {\textbf{Code generation}\\(54\%, \textbf{no fallback})};
+\node[func, fill=orange!15] (hyp) at (5, -1.8) {Hypothesis gen.\\(6\%, no fallback)};
+
+% Merge
+\node[func, fill=gray!10] (merge) at (2.5, -2.8) {merge(Py, LLM)\\Python wins};
+\draw[arr] (decide) -- (merge);
+\draw[arr] (hyp) -- (merge);
+
+% Labels
+\node[font=\footnotesize\bfseries, text=green!50!black] at (0, 1) {LLM-free};
+\node[font=\footnotesize\bfseries, text=orange!70!black] at (5, 1.5) {LLM-dependent};
+
+% Dividing line
+\draw[dashed, gray] (2.5, 1.5) -- (2.5, -3.3);
+\node[font=\tiny, text=gray, rotate=90] at (2.5, -0.5) {architecture boundary};
+
+% Execution arrow
+\node[func, fill=blue!10] (exec) at (5, -2.8) {Step execution\\(figures, stats)};
+\draw[arr] (code) -- (exec);
+\draw[arr] (merge) -- node[font=\tiny, above] {plan} (exec);
+
+\end{tikzpicture}
+\caption{Functional decomposition by LLM dependency.
+Left (green): functions handled entirely by deterministic Python
+code---no LLM involvement.
+Right (orange): LLM-dependent functions; the bold box (code generation)
+is the only component with no deterministic fallback.
+The dashed line represents the architectural boundary:
+decisions flow left-to-right but Python always overrides LLM
+on conflict.}
+\label{fig:llm-role}
+\end{figure}
 
 \begin{figure}[t]
 \centering

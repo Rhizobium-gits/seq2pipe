@@ -73,6 +73,51 @@ Snakemake~\citep{snakemake}とNextflow~\citep{nextflow}は条件付き規則を�
 \end{enumerate}
 
 % ======================================================================
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=0.6cm and 0.8cm,
+  stp/.style={draw, rounded corners=2pt, minimum height=0.6cm,
+               minimum width=1.6cm, font=\scriptsize, align=center},
+  decision/.style={draw, diamond, aspect=2.5, inner sep=1pt,
+                   font=\scriptsize, align=center},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  skip/.style={-{Stealth[length=2mm]}, thick, red!70, dashed},
+  add/.style={-{Stealth[length=2mm]}, thick, blue!70},
+  phase/.style={font=\footnotesize\bfseries, text=gray!70},
+]
+\node[phase] at (-5.5, 2.8) {(a) 静的パイプライン};
+\node[stp, fill=gray!15] (s1) at (-7,2) {QC};
+\node[stp, fill=gray!15, right=of s1] (s2) {$\alpha$};
+\node[stp, fill=gray!15, right=of s2] (s3) {$\beta$};
+\node[stp, fill=gray!15, right=of s3] (s4) {$\beta$-disp};
+\node[stp, fill=gray!15, right=of s4] (s5) {Taxa};
+\node[stp, fill=gray!15, right=of s5] (s6) {Diff};
+\node[stp, fill=gray!15, right=of s6] (s7) {Report};
+\foreach \i/\j in {s1/s2, s2/s3, s3/s4, s4/s5, s5/s6, s6/s7}
+  \draw[arr, gray!60] (\i) -- (\j);
+
+\node[phase] at (-5.5, 0.3) {(b) \seqpipe\ 閉ループ};
+\node[stp, fill=green!15] (a1) at (-7, -0.5) {QC};
+\node[stp, fill=green!15, right=of a1] (a2) {$\alpha$};
+\node[stp, fill=green!15, right=of a2] (a3) {$\beta$};
+\node[decision, fill=yellow!20, right=of a3] (d1) {$p < 0.05$?};
+\node[stp, fill=red!10, dashed, above right=0.3cm and 0.8cm of d1] (a4skip) {$\beta$-disp};
+\node[stp, fill=green!15, below right=0.3cm and 0.8cm of d1] (a5) {Taxa};
+\node[decision, fill=yellow!20, right=of a5] (d2) {fc $> 5$?};
+\node[stp, fill=blue!15, above right=0.3cm and 0.6cm of d2] (a6add) {LEfSe};
+\node[stp, fill=green!15, below right=0.3cm and 0.6cm of d2] (a7) {Report};
+\draw[arr] (a1) -- (a2); \draw[arr] (a2) -- (a3); \draw[arr] (a3) -- (d1);
+\draw[skip] (d1) -- node[font=\tiny, above, red!70] {No} (a4skip);
+\draw[arr] (d1) -- (a5); \draw[arr] (a5) -- (d2);
+\draw[add] (d2) -- node[font=\tiny, above, blue!70] {Yes} (a6add);
+\draw[arr] (d2) -- (a7);
+\draw[arr, dashed, gray] (a5.south) -- ++(0, -0.6) -| node[font=\tiny, below, pos=0.3] {評価→再計画} (d1.south);
+\end{tikzpicture}
+\caption{概念比較。(a) 静的パイプラインは結果に関わらず全ステップを固定順で実行。(b) \seqpipe は各ステップの出力を評価し、判断ノード（黄色菱形）で不要なフォローアップをスキップ（赤破線）または対象解析を追加（青）する。}
+\label{fig:concept}
+\end{figure*}
+
 \section{関連研究}
 \label{sec:related}
 % ======================================================================
