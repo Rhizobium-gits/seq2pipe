@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import qiime2_agent as _agent
-from code_agent import run_code_agent, CodeExecutionResult
+from code_agent import run_code_agent, CodeExecutionResult, _run_code
+from analysis_templates import match_template, generate_code, _detect_group_col
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -379,7 +380,33 @@ class InteractiveSession:
     # ── 内部メソッド ──────────────────────────────────────────────────────────
 
     def _run_one(self, user_request: str) -> CodeExecutionResult:
-        """コンテキスト付きプロンプトでコード生成・実行。"""
+        """コンテキスト付きプロンプトでコード生成・実行。テンプレート優先。"""
+        # ── テンプレートマッチを試みる ────────────────────────────────────
+        tmpl_name = match_template(user_request)
+        if tmpl_name:
+            group_col = _detect_group_col(self.metadata_path)
+            code = generate_code(
+                tmpl_name,
+                figure_dir=str(self.figure_dir),
+                export_files=self.export_files,
+                metadata_path=self.metadata_path,
+                group_col=group_col,
+            )
+            if code:
+                self._log(f"  テンプレート使用: {tmpl_name}")
+                success, stdout, stderr, new_figs = _run_code(
+                    code, str(self.output_dir), str(self.figure_dir), self._log,
+                )
+                if success and new_figs:
+                    self._log(f"  テンプレート実行成功: {len(new_figs)} 図")
+                    return CodeExecutionResult(
+                        success=True, stdout=stdout, stderr=stderr,
+                        code=code, figures=new_figs,
+                    )
+                else:
+                    self._log(f"  テンプレート実行失敗、LLM にフォールバック")
+
+        # ── LLM ベースのコード生成（フォールバック）──────────────────────
         ctx_block = self.ctx.to_context_block()
         prompt = f"{ctx_block}\n\n## CURRENT TASK\n{user_request}" if ctx_block else user_request
         return run_code_agent(
@@ -458,30 +485,28 @@ def _default_analyses(available: list[str]) -> list[str]:
         )
     if "alpha" in available:
         analyses.append(
-            "Plot Shannon alpha diversity per sample as a boxplot with individual data points (stripplot). "
-            "Use seaborn modern style."
+            "Plot Shannon alpha diversity boxplot with individual data points per group."
         )
         analyses.append(
-            "Plot all alpha diversity metrics (Shannon, Faith PD, observed features, evenness) "
-            "side by side as boxplots."
+            "Alpha diversity group comparison with Kruskal-Wallis test between groups."
         )
     if "feature_table" in available and "taxonomy" in available:
         analyses.append(
-            "Plot relative abundance stacked bar chart at genus level (top 15 genera + Other), "
-            "one bar per sample. Use tab20 palette."
+            "Plot genus-level relative abundance stacked bar chart (top 15 genera + Other)."
         )
         analyses.append(
-            "Plot top 10 most abundant phyla as a horizontal bar chart of mean relative abundance."
+            "Plot phylum-level bar chart of mean relative abundance (top 10 phyla)."
+        )
+        analyses.append(
+            "Generate genus-level heatmap of top 20 genera across samples."
         )
     if "beta" in available:
         analyses.append(
-            "Plot PCoA of Bray-Curtis distances as scatter plot with sample labels. "
-            "Use modern seaborn white style."
+            "PCoA of Bray-Curtis beta diversity distances colored by group."
         )
     if len(analyses) < 4 and "feature_table" in available:
         analyses.append(
-            "Plot rarefaction curve: species richness (observed features) vs. sequencing depth, "
-            "one line per sample."
+            "Plot rarefaction curve: species richness vs sequencing depth."
         )
     return analyses
 

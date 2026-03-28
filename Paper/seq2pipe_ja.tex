@@ -72,7 +72,7 @@
 % -------------------------------------------------------
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small v1.2}
+\fancyhead[L]{\small v1.4}
 \fancyhead[C]{\small seq2pipe Technical Report}
 \fancyhead[R]{\small 2026年3月}
 \fancyfoot[C]{\thepage}
@@ -97,7 +97,7 @@
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small seq2pipe project}\\[2pt]
   {\small \url{https://github.com/Rhizobium-gits/seq2pipe}}\\[8pt]
-  {\small 2026 年 3 月 --- v1.2 (13 モジュール, 15,355 行, 29+43 解析レジストリ)}
+  {\small 2026 年 3 月 --- v1.4 (16 モジュール, 17,000+ 行, 29+43 解析レジストリ + 判断木エンジン)}
 \end{center}
 
 \vspace{6mm}
@@ -129,6 +129,13 @@ v1.2 では \textbf{研究目的駆動の自律解析モード}（\texttt{--manu
 デザインに基づいて自動選択され、Benjamini-Hochberg FDR 補正が適用される。
 可視化は PCoA・NMDS に加え t-SNE・UMAP・Raincloud plot・Volcano plot・LEfSe-style・
 UpSet diagram・Ternary plot・Alluvial/Sankey など 40 種以上に対応する。
+v1.4 では \textbf{AI 駆動の適応的解析モード}（\texttt{--ai-driven}）を追加した。
+DataInspector が feature table・alpha/beta diversity TSV・taxonomy を直接パースし、
+Mann-Whitney U / Kruskal-Wallis / PERMANOVA を scipy に依存せず純 Python で実行する。
+8 軸スコア評価（統計的有意性・生物学的関連性・新規性・行動可能性等）の結果は
+SVD べき乗法で 3 主成分に圧縮され、文献ベースの確定的判断木（DecisionEngine）が
+次の解析ステップを自動決定する。LLM の役割は創造的調査仮説の生成に限定され、
+LLM 障害時も Python 判断木のみで解析を完走できる。
 処理はすべてユーザーのローカル環境で完結し、
 クラウドサービスや有料 API への依存を排除する。
 \end{abstract}
@@ -623,6 +630,48 @@ v1.2 で追加された \texttt{manual\_auto\_agent.py}（1,262 行）は、
 (2) LLM にコード生成を依頼、
 (3) 実行・リトライ（最大 3 回、pip 自動インストール含む）、
 (4) 結果を記録し次ステップへコンテキストとして渡す。
+
+\subsection{AI 駆動の適応的解析モード（\texttt{--ai-driven}）}
+
+v1.4 で追加された \texttt{ai\_driven\_agent.py} および \texttt{eval\_mediator.py} は、
+解析結果を実データから定量評価し、文献ベースの判断木で次のステップを確定的に決定する
+3 層アーキテクチャを実装する。
+
+\paragraph{Layer 1: DataInspector（実データ読み込み層）}
+\texttt{DataInspector} クラスは QIIME2 のエクスポート済み TSV ファイルを直接パースする。
+\begin{itemize}
+  \item \textbf{Feature table}: ASV $\times$ サンプル行列 → スパース度、リード深度 CV、Good's coverage
+  \item \textbf{Alpha diversity}: 各メトリクス TSV → 群別に分割 → 自前の Mann-Whitney U（2 群）/ Kruskal-Wallis（3+ 群）検定。Cliff's delta / $\eta^2$ 近似による効果量も計算
+  \item \textbf{Beta diversity}: 距離行列 TSV → 群内/群間距離を分離 → 擬似 PERMANOVA（199 permutation）
+  \item \textbf{Taxonomy}: 属レベル相対豊度を群別に集計 → fold change、絶対差、組成シフト（Bray-Curtis 風距離）
+\end{itemize}
+すべての統計検定は \texttt{scipy} に依存せず純 Python で実装されており（\texttt{\_mann\_whitney\_u()}, \texttt{\_kruskal\_wallis()}, 正規近似 CDF, Wilson-Hilferty $\chi^2$ 近似）、QIIME2 conda 環境外でも動作する。
+
+\paragraph{Layer 2: EvalMediator + DecisionEngine（評価・判断層）}
+各解析ステップの結果を 8 軸で定量評価する:
+statistical\_significance（p 値対数変換, 20\%）、
+biological\_relevance（fold change + 既知菌属ヒット, 18\%）、
+actionability（次ステップトリガー, 15\%）、
+novelty（既知発見との非類似度, 12\%）、
+data\_quality（スパース度・CV, 10\%）、
+effect\_magnitude（Cliff's delta / pseudo-F, 10\%）、
+confidence（群あたり最小 $n$, 8\%）、
+reproducibility（同カテゴリ間一貫性, 7\%）。
+スコア行列（$n_{\mathrm{steps}} \times 8$）は共分散行列のべき乗法で 3 主成分に圧縮される。
+
+\texttt{DecisionEngine} は文献ベースの確定的判断木を実装する:
+\begin{itemize}
+  \item Anderson (2001): PERMANOVA 有意 $\rightarrow$ betadisper 必須; 非有意 $\rightarrow$ beta 系全ステップをスキップ
+  \item Willis (2019): effect size $> 0.5$ $\rightarrow$ 深掘り; $\leq 0.5$ $\rightarrow$ rarefaction で sampling artifact を確認
+  \item Gloor et al.\ (2017): fold change $> 50$ かつ低豊度（$< 1\%$）$\rightarrow$ 組成バイアス警告 + フィルタ後再検定
+  \item McMurdie \& Holmes (2014): read depth CV $> 0.5$ $\rightarrow$ rarefaction 必須
+\end{itemize}
+
+\paragraph{Layer 3: LLM 補助判断}
+LLM の役割は Python 判断木が生成できない創造的調査仮説（例: 「379$\times$ の Escherichia enrichment は contamination か real bloom か」）に限定される。
+\texttt{Decision.merge\_with\_llm()} により Python 判断が常に LLM 判断に優先し、
+LLM が \texttt{skip} したものを Python が \texttt{add} していれば Python が勝つ。
+LLM 障害時は \texttt{except} ブロック内で Python 判断のみを \texttt{plan\_queue} に適用し、解析を完走する。
 
 \subsection{マニフェスト自動生成}
 

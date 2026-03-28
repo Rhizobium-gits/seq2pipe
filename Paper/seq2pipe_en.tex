@@ -67,7 +67,7 @@
 % -------------------------------------------------------
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small v1.2}
+\fancyhead[L]{\small v1.4}
 \fancyhead[C]{\small seq2pipe Technical Report}
 \fancyhead[R]{\small March 2026}
 \fancyfoot[C]{\thepage}
@@ -92,7 +92,7 @@
   {\normalsize Rhizobium-gits \quad Claude (Anthropic)}\\[4pt]
   {\small seq2pipe project}\\[2pt]
   {\small \url{https://github.com/Rhizobium-gits/seq2pipe}}\\[8pt]
-  {\small March 2026 --- v1.2 (13 modules, 15,355 lines, 29+43 analysis registry)}
+  {\small March 2026 --- v1.4 (16 modules, 17,000+ lines, 29+43 analysis registry + decision engine)}
 \end{center}
 
 \vspace{6mm}
@@ -136,6 +136,18 @@ Kruskal-Wallis with Dunn's post-hoc for multi-group, and PERMANOVA for
 beta diversity --- with Benjamini-Hochberg FDR correction applied throughout.
 Visualizations include t-SNE, UMAP, Raincloud plots, Volcano plots, LEfSe-style
 effect size plots, UpSet diagrams, Ternary plots, Alluvial/Sankey diagrams, and more.
+In v1.4, an \textbf{AI-driven adaptive analysis mode} (\texttt{--ai-driven}) was added.
+A \texttt{DataInspector} directly parses exported TSV files (feature tables, alpha/beta diversity,
+taxonomy) and executes Mann-Whitney~U, Kruskal-Wallis, and PERMANOVA tests in pure Python
+without scipy dependency. Results are scored across 8 axes (statistical significance,
+biological relevance, novelty, actionability, etc.) and compressed via power-iteration SVD
+into 3 principal components. A literature-based \texttt{DecisionEngine} deterministically decides
+next analysis steps: Anderson~(2001) for PERMANOVA$\rightarrow$betadisper logic,
+Willis~(2019) for effect-size-driven alpha interpretation,
+Gloor~et~al.~(2017) for compositional bias detection.
+The LLM role is restricted to creative investigation hypotheses;
+Python decisions always take priority via \texttt{merge\_with\_llm()},
+and the system runs to completion even under LLM failure.
 The entire workflow runs on the user's local machine, eliminating
 dependencies on cloud services or paid APIs.
 \end{abstract}
@@ -713,6 +725,51 @@ without writing an empty manifest. Partial matching rates below 80\%
 trigger an enhanced warning showing the mismatch percentage.
 Path translation to Docker container-internal paths
 (default: \texttt{/data/output}) is performed automatically.
+
+\subsection{AI-Driven Adaptive Analysis (\texttt{--ai-driven})}
+
+Added in v1.4, \texttt{ai\_driven\_agent.py} and \texttt{eval\_mediator.py} implement
+a three-layer architecture that evaluates analysis results from raw data and
+deterministically decides next steps via a literature-based decision tree.
+
+\paragraph{Layer 1: DataInspector}
+The \texttt{DataInspector} class directly parses QIIME2 exported TSV files:
+\begin{itemize}
+  \item \textbf{Feature table}: ASV $\times$ sample matrix $\rightarrow$ sparsity, read depth CV, Good's coverage
+  \item \textbf{Alpha diversity}: per-metric TSV $\rightarrow$ group-split $\rightarrow$ Mann-Whitney~U (2 groups) / Kruskal-Wallis (3+ groups) with Cliff's delta / $\eta^2$ effect sizes
+  \item \textbf{Beta diversity}: distance matrix TSV $\rightarrow$ within/between-group distance separation $\rightarrow$ pseudo-PERMANOVA (199 permutations)
+  \item \textbf{Taxonomy}: genus-level relative abundances per group $\rightarrow$ fold change, absolute difference, Bray-Curtis-like composition shift
+\end{itemize}
+All tests are implemented in pure Python (\texttt{\_mann\_whitney\_u()}, \texttt{\_kruskal\_wallis()},
+normal CDF approximation via Abramowitz \& Stegun, Wilson-Hilferty $\chi^2$ approximation),
+eliminating the scipy dependency.
+
+\paragraph{Layer 2: EvalMediator + DecisionEngine}
+Each analysis step is scored across 8 axes:
+statistical\_significance (log-transformed $p$-values, 20\%),
+biological\_relevance (fold change + known taxa hits, 18\%),
+actionability (downstream trigger count, 15\%),
+novelty (dissimilarity from prior findings, 12\%),
+data\_quality (sparsity, CV, 10\%),
+effect\_magnitude (Cliff's $d$ / pseudo-$F$, 10\%),
+confidence (minimum group $n$, 8\%),
+reproducibility (cross-category consistency, 7\%).
+The score matrix ($n_{\text{steps}} \times 8$) is compressed to 3 principal components
+via power-iteration SVD on the covariance matrix.
+
+The \texttt{DecisionEngine} implements deterministic decision trees:
+\begin{itemize}
+  \item Anderson (2001): PERMANOVA significant $\rightarrow$ betadisper mandatory; not significant $\rightarrow$ skip all beta follow-ups
+  \item Willis (2019): effect size $> 0.5$ $\rightarrow$ deep investigation; $\leq 0.5$ $\rightarrow$ rarefaction to check sampling artifact
+  \item Gloor et al.\ (2017): fold change $> 50$ at low abundance ($< 1\%$) $\rightarrow$ compositional bias warning + filtered retest
+  \item McMurdie \& Holmes (2014): read depth CV $> 0.5$ $\rightarrow$ rarefaction mandatory
+\end{itemize}
+
+\paragraph{Layer 3: LLM Auxiliary}
+The LLM role is restricted to creative investigation hypotheses that the decision tree
+cannot generate. \texttt{Decision.merge\_with\_llm()} ensures Python decisions always
+override LLM decisions. On LLM failure, the \texttt{except} block applies Python-only
+decisions to the plan queue, enabling analysis completion without any LLM involvement.
 
 \subsection{Cross-Platform Compatibility}
 

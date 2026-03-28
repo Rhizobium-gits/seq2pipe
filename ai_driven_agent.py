@@ -40,6 +40,7 @@ from microbiome_knowledge import (
 from experiment_knowledge import (
     ExperimentContext, build_experiment_context,
 )
+from eval_mediator import EvalMediator
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1132,10 +1133,26 @@ def run_ai_driven(
     _log("")
 
     # ═══════════════════════════════════════════════════════════════════
-    # Phase 3: 適応的実行ループ
+    # EvalMediator 初期化 — 多軸スコア評価仲介サーバー
+    # ═══════════════════════════════════════════════════════════════════
+    mediator = EvalMediator(
+        export_files=export_files,
+        metadata_path=metadata_path,
+        group_column=design.primary_group if design.primary_group else "",
+        n_samples=recon.n_samples,
+        min_group_size=min(design.group_sizes.values()) if design.group_sizes else 0,
+        log_callback=log_callback,
+    )
+    # 実験タイプに応じて重みを調整
+    if exp_ctx and exp_ctx.experiment_types:
+        for et in exp_ctx.experiment_types:
+            mediator.adjust_weights_for_experiment(et.name)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Phase 3: 適応的実行ループ (with EvalMediator)
     # ═══════════════════════════════════════════════════════════════════
     _log(f"{'═' * 56}")
-    _log(f"  🔄 Phase 3: Adaptive Execution Loop")
+    _log(f"  🔄 Phase 3: Adaptive Execution Loop (Score-Driven)")
     _log(f"{'═' * 56}\n")
 
     completed_info: list[dict] = []
@@ -1357,28 +1374,91 @@ Output ONLY Python code in ```python ... ```."""
             "figures": [Path(f).name for f in new_figs],
         })
 
-        # ── 適応的リプランニング ──────────────────────────────────
-        if plan_queue and step_counter % replan_interval == 0:
+        # ── EvalMediator: 実データ読み込み + 多軸スコア評価 ────
+        step_score = mediator.evaluate(
+            step_key=key,
+            step_title=step_title,
+            stdout=last_stdout,
+            stderr=last_stderr,
+            success=step_success,
+            figure_paths=new_figs,
+        )
+
+        # ── 適応的リプランニング（Python 判断木 + LLM 補助）──────
+        # スコアに基づく即時判断: novelty spike → 即座にリプラン
+        force_replan = (
+            step_score.axis_scores.get("novelty", 0) > 0.7
+            or step_score.axis_scores.get("statistical_significance", 0) > 0.85
+        )
+
+        if plan_queue and (step_counter % replan_interval == 0 or force_replan):
+            if force_replan:
+                _log(f"\n  ⚡ Score-triggered replanning! "
+                     f"(novelty={step_score.axis_scores.get('novelty', 0):.2f}, "
+                     f"sig={step_score.axis_scores.get('statistical_significance', 0):.2f})")
             _log(f"\n  🔄 Adaptive Replanning (after step {step_counter})...")
+            _log(f"  📊 Knowledge state: composite={mediator.state.mean_composite:.3f}, "
+                 f"momentum={mediator.state.discovery_momentum:+.3f}")
             remaining_keys = [it["key"] for it in plan_queue]
 
-            replan_prompt = _build_replan_prompt(
+            # ═══ Step A: Python 判断木（確定的、LLM 不要）═══
+            py_decision = mediator.decide(remaining_keys)
+            if py_decision.reasoning:
+                _log(f"    🌳 Python decision tree:")
+                for r in py_decision.reasoning:
+                    _log(f"       {r}")
+            if py_decision.skip:
+                _log(f"    🌳 Python skips: {py_decision.skip}")
+            if py_decision.add:
+                _log(f"    🌳 Python adds: {[a['key'] for a in py_decision.add]}")
+            if py_decision.investigate:
+                _log(f"    🌳 Python investigations: {[i['title'] for i in py_decision.investigate]}")
+
+            # ═══ Step B: LLM 補助判断（創造的な調査仮説など）═══
+            decision_prompt = mediator.build_decision_prompt(
+                remaining_keys, registry_menu, research_question,
+            )
+            replan_context = _build_replan_prompt(
                 research_question, design, completed_info,
                 remaining_keys, registry_menu, recon,
             )
+            combined_prompt = (
+                decision_prompt
+                + "\n\n## ADDITIONAL CONTEXT (completed step details)\n"
+                + replan_context
+                + "\n\n## PYTHON DECISION TREE ALREADY DECIDED\n"
+                + f"Skip: {py_decision.skip}\n"
+                + f"Add: {[a['key'] for a in py_decision.add]}\n"
+                + f"Reasoning: {'; '.join(py_decision.reasoning)}\n"
+                + "Do NOT contradict these decisions. Focus on creative investigations "
+                + "and hypotheses that the decision tree cannot generate."
+            )
             replan_msgs = [
-                {"role": "system", "content": "You are a microbiome bioinformatics expert. Return ONLY JSON."},
-                {"role": "user", "content": replan_prompt},
+                {"role": "system", "content": "You are a score-driven analysis decision engine. Return ONLY JSON."},
+                {"role": "user", "content": combined_prompt},
             ]
             try:
                 replan_resp = _agent.call_ollama(replan_msgs, model)
-                replan_data = _parse_replan_json(replan_resp.get("content", ""))
+                llm_data = _parse_replan_json(replan_resp.get("content", ""))
+
+                # ═══ Step C: Python 判断 + LLM 判断をマージ ═══
+                if llm_data:
+                    replan_data = py_decision.merge_with_llm(llm_data)
+                else:
+                    # LLM 失敗 → Python 判断のみで続行
+                    replan_data = {
+                        "skip": py_decision.skip,
+                        "add": py_decision.add,
+                        "reorder": py_decision.reorder,
+                        "investigate": py_decision.investigate,
+                        "reasoning": "Python decision tree only: " + "; ".join(py_decision.reasoning),
+                    }
 
                 if replan_data:
                     result.replan_history.append(replan_data)
                     reasoning = replan_data.get("reasoning", "")
                     if reasoning:
-                        _log(f"    🧠 AI reasoning: {reasoning[:150]}")
+                        _log(f"    🧠 Merged reasoning: {reasoning[:200]}")
 
                     skip_keys = set(replan_data.get("skip", []))
                     if skip_keys:
@@ -1409,6 +1489,18 @@ Output ONLY Python code in ```python ... ```."""
                         plan_queue = new_queue
 
                     # ── 発見駆動の追加調査（investigate）────────
+                    # 重複防止: 既に実行済み or キュー内の類似タイトルをチェック
+                    done_titles = {
+                        inv.get("title", "").lower().strip()
+                        for inv in result.investigations
+                    }
+                    queued_titles = {
+                        it.get("_investigation", {}).get("title", "").lower().strip()
+                        for it in plan_queue if it.get("_investigation")
+                    }
+                    # 最大 investigation 数を制限（無限ループ防止）
+                    MAX_INVESTIGATIONS = 8
+
                     for inv in replan_data.get("investigate", []):
                         inv_title = inv.get("title", "Follow-up investigation")
                         inv_hyp = inv.get("hypothesis", "")
@@ -1416,27 +1508,82 @@ Output ONLY Python code in ```python ... ```."""
                         inv_code = inv.get("code_instructions", "")
                         inv_priority = inv.get("priority", 7)
 
+                        # 重複チェック
+                        title_lower = inv_title.lower().strip()
+                        if title_lower in done_titles or title_lower in queued_titles:
+                            _log(f"    ⏭ 重複調査スキップ: {inv_title}")
+                            continue
+
+                        # 上限チェック
+                        if result.investigated_by_ai >= MAX_INVESTIGATIONS:
+                            _log(f"    ⏭ Investigation 上限到達 ({MAX_INVESTIGATIONS})")
+                            break
+
                         if inv_title and inv_code:
-                            # カスタム調査をキューに追加（特殊な key = "investigate_N"）
                             inv_key = f"investigate_{result.investigated_by_ai + 1}"
                             plan_queue.append({
                                 "key": inv_key,
                                 "reason": f"Discovery: {inv_hyp[:100]}",
                                 "priority": inv_priority,
-                                "_investigation": inv,  # 生データを保持
+                                "_investigation": inv,
                             })
                             result.investigated_by_ai += 1
                             result.investigations.append(inv)
+                            done_titles.add(title_lower)
                             _log(f"    🔬 AI 調査追加: {inv_title}")
                             _log(f"       仮説: {inv_hyp[:100]}")
                             _log(f"       手法: {inv_method[:100]}")
 
                     _log(f"    📋 残りプラン: {len(plan_queue)} ステップ")
             except Exception as e:
-                _log(f"    ⚠️ リプランニング失敗（続行）: {e}")
+                _log(f"    ⚠️ LLM リプランニング失敗 — Python 判断のみで続行: {e}")
+                # LLM が死んでも Python 判断木だけで動く
+                replan_data = {
+                    "skip": py_decision.skip,
+                    "add": py_decision.add,
+                    "reorder": py_decision.reorder,
+                    "investigate": py_decision.investigate,
+                    "reasoning": "Python only (LLM failed): " + "; ".join(py_decision.reasoning),
+                }
+                # Python 判断を適用
+                skip_keys = set(replan_data.get("skip", []))
+                if skip_keys:
+                    before = len(plan_queue)
+                    plan_queue = [it for it in plan_queue if it["key"] not in skip_keys]
+                    skipped = before - len(plan_queue)
+                    if skipped:
+                        result.skipped_by_ai += skipped
+                        _log(f"    ⏭ Python スキップ: {skip_keys}")
+                for add_item in replan_data.get("add", []):
+                    add_key = add_item.get("key", "")
+                    already_done = {c["key"] for c in completed_info}
+                    already_queued = {it["key"] for it in plan_queue}
+                    if add_key in spec_map and add_key not in already_done and add_key not in already_queued:
+                        plan_queue.append(add_item)
+                        result.added_by_ai += 1
+                        _log(f"    ➕ Python 追加: {add_key}")
+                for inv in replan_data.get("investigate", []):
+                    inv_title = inv.get("title", "")
+                    inv_code = inv.get("code_instructions", "")
+                    if inv_title and inv_code:
+                        inv_key = f"investigate_{result.investigated_by_ai + 1}"
+                        plan_queue.append({
+                            "key": inv_key,
+                            "reason": f"Python tree: {inv.get('hypothesis', '')[:100]}",
+                            "priority": inv.get("priority", 7),
+                            "_investigation": inv,
+                        })
+                        result.investigated_by_ai += 1
+                        result.investigations.append(inv)
+                        _log(f"    🔬 Python 調査追加: {inv_title}")
+                _log(f"    📋 残りプラン: {len(plan_queue)} ステップ")
 
+    # ═══════════════════════════════════════════════════════════════════
+    # 最終レポート — EvalMediator 統合スコアサマリ
+    # ═══════════════════════════════════════════════════════════════════
     _log(f"\n{'═' * 56}")
-    _log(f"  🏁 AI-Driven Analysis Complete")
+    _log(f"  🏁 AI-Driven Analysis Complete (Score-Driven)")
+    _log(f"{'═' * 56}")
     _log(f"  ✅ Completed: {result.completed_steps}")
     _log(f"  ❌ Failed:    {result.failed_steps}")
     _log(f"  ⏭  Skipped by AI: {result.skipped_by_ai}")
@@ -1444,6 +1591,25 @@ Output ONLY Python code in ```python ... ```."""
     _log(f"  🔬 Investigations: {result.investigated_by_ai}")
     _log(f"  🔄 Replanning events: {len(result.replan_history)}")
     _log(f"  📊 Total figures: {len(result.all_figures)}")
+
+    # EvalMediator スコアサマリ
+    _log(f"\n{'─' * 56}")
+    _log(f"  📊 Multi-Axis Evaluation Summary")
+    _log(f"{'─' * 56}")
+    _log(mediator.state.compressed_summary())
+    _log(f"\n  Score Matrix:")
+    _log(mediator.state.score_matrix_text())
+
+    # スコアスナップショットを JSON 保存
+    try:
+        import os
+        snapshot_path = os.path.join(output_dir, "eval_scores.json")
+        with open(snapshot_path, "w") as f:
+            json.dump(mediator.get_state_snapshot(), f, indent=2, ensure_ascii=False)
+        _log(f"\n  💾 Score snapshot saved: {snapshot_path}")
+    except Exception:
+        pass
+
     _log(f"{'═' * 56}\n")
 
     return result

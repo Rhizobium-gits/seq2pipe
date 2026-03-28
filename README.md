@@ -16,7 +16,7 @@
 
 > **ローカル LLM で QIIME2 マイクロバイオーム解析を自動化 — オフライン・API キー不要・オープンソース**
 >
-> **Current: v1.2.0**
+> **Current: v1.4.0**
 
 ---
 
@@ -34,8 +34,9 @@
 - データ構造を自動で調査（FASTQ / メタデータ / 既存 QZA）
 - データに合った QIIME2 コマンドをゼロから組み立てる
 - すぐ実行できる `.sh` / `.ps1` スクリプトを書き出す
-- **4 つの操作モード**: 指定解析 / 自律エージェント / 対話チャット / **研究目的駆動 (manual-auto)**
-- **`--manual-auto` モード（v1.2.0 新機能）**: メタデータから実験デザインを自動解析 → 40+ 種の可視化・統計解析を研究目的に合わせて全自動実行
+- **5 つの操作モード**: 指定解析 / 自律エージェント / 対話チャット / 研究目的駆動 / **AI 駆動 (ai-driven)**
+- **`--ai-driven` モード（v1.4.0 新機能）**: AI がデータを偵察 → 統計検定を自前実行 → 8 軸スコア評価 → **文献ベース判断木**で次の解析を確定的に決定。LLM が落ちても Python だけで完走する自律解析エンジン
+- **`--manual-auto` モード（v1.2.0）**: メタデータから実験デザインを自動解析 → 40+ 種の可視化・統計解析を研究目的に合わせて全自動実行
 - **3 ステップ自動解析パイプライン（`--auto` モード）**:
   - **STEP 1**: QIIME2 パイプライン（DADA2 デノイジング → 系統樹 → 多様性解析 → 分類学的解析）
   - **STEP 1.5**: 決定論的包括解析（`analysis.py`）— LLM に依存せず **29 種類の出版品質 PNG 図を確実に生成**
@@ -416,6 +417,88 @@ Total steps: 41 (skipped: 2)
 
 ---
 
+### モード 5 — AI 駆動の適応的解析（--ai-driven）<a id="mode5"></a>
+
+**v1.4.0 新機能。** データを「見て」統計的に判断し、結果に応じて次の解析を動的に決定する自律解析エンジンです。
+
+```bash
+./launch.sh --fastq-dir ~/input --ai-driven \
+    --metadata metadata.tsv \
+    --research-question "重力環境が腸内細菌叢に与える影響"
+```
+
+#### アーキテクチャ — 3 層構造
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Layer 1: DataInspector（Python）                            │
+│   feature-table.tsv → 豊度分布, スパース度計算              │
+│   alpha/*.tsv       → 自前 Mann-Whitney U / Kruskal-Wallis │
+│   beta/*.tsv        → 自前 PERMANOVA (199 permutation)     │
+│   taxonomy.tsv      → 群別相対豊度, fold change 計算       │
+│   scipy 不要 — 全て純 Python 実装                          │
+├─────────────────────────────────────────────────────────────┤
+│ Layer 2: EvalMediator + DecisionEngine（Python）            │
+│   8 軸スコア評価 → SVD 3主成分に圧縮                       │
+│   文献ベース判断木:                                         │
+│     alpha p<0.05 かつ effect>0.5 → 深掘り                  │
+│     beta p>0.05 → beta 系全ステップをスキップ               │
+│     fold_change>10 かつ低豊度 → バイアス警告 + 再検定       │
+│   確定的 — 同じデータなら常に同じ判断                       │
+├─────────────────────────────────────────────────────────────┤
+│ Layer 3: LLM（qwen2.5-coder:7b）                           │
+│   役割限定: 創造的調査仮説の生成 + コード生成のみ           │
+│   Python 判断と矛盾する場合は Python が優先                 │
+│   LLM が落ちても Python 判断木だけで完走可能                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 8 軸評価スコア
+
+各解析ステップの結果を実データから定量評価:
+
+| 軸 | 重み | 計算方法 |
+|----|------|----------|
+| statistical_significance | 20% | p 値の対数スケール変換（実データから自前検定） |
+| biological_relevance | 18% | 群間 fold change + 既知重要菌属へのヒット |
+| actionability | 15% | 次ステップに繋がるトリガー数 |
+| novelty | 12% | 既知発見との非類似度 + 予想外の fold change |
+| data_quality | 10% | スパース度, read depth CV, evenness |
+| effect_magnitude | 10% | Cliff's delta / pseudo-F / fold change |
+| confidence | 8% | 群あたり最小サンプルサイズ |
+| reproducibility | 7% | 同カテゴリ解析間の一貫性 |
+
+#### 判断木の実例
+
+```
+入力: 重力実験 138 サンプル（6 群）
+  Alpha: Shannon Kruskal-Wallis p=0.034, effect=0.05
+  Beta:  Bray-Curtis PERMANOVA p=0.81 (ns)
+  Taxa:  Blautia 5.0x, Escherichia 379x enriched
+
+Python 判断木の出力:
+  SKIP: beta_dispersion, beta_nmds, beta_heatmap, permanova_detail
+    理由: beta p=0.81 で有意でない (Anderson 2001)
+  ADD:  qc_summary [優先度1], differential_volcano [2],
+        lefse [4], indicator_species [5], picrust2 [6]
+    理由: 379x fold change → 正式検定必須
+          9属 >2x → 機能予測で解釈
+  INVESTIGATE: low-abundance bias check
+    理由: 極端な fold change が低豊度菌で発生 → artifact の可能性
+```
+
+#### モード 4 との違い
+
+| | モード 4 (manual-auto) | モード 5 (ai-driven) |
+|---|---|---|
+| プラン決定 | 事前に全ステップを固定 | データを見て動的に変更 |
+| 途中判断 | なし（全ステップ実行） | 各ステップ後にスコア評価 → skip/add |
+| 不要な解析 | 実行してしまう | Python 判断木がスキップ |
+| LLM 依存度 | コード生成に必須 | コード生成のみ（判断は Python） |
+| 耐障害性 | LLM エラーで停止 | LLM なしでも判断木で完走 |
+
+---
+
 ### DADA2 パラメータの自動検出
 
 `--auto` フラグ使用時、リード長から DADA2 パラメータを自動検出します:
@@ -742,6 +825,11 @@ seq2pipe/
 ├── code_agent.py       # LLM コード生成エージェント（vibe-local 方式）
 │                       #   └── run_refinement_loop()  振り返り・修正ループ
 ├── manual_auto_agent.py # 研究目的駆動 自律解析（43 解析レジストリ）
+├── ai_driven_agent.py  # AI 駆動 適応的解析エンジン（Phase 1-3）
+├── eval_mediator.py    # DataInspector + 8軸スコア + DecisionEngine 判断木
+├── microbiome_knowledge.py  # ドメイン知識（メソッド選択・検出力推定）
+├── experiment_knowledge.py  # 実験系文献知識（抗生物質・食事・疾患モデル等）
+├── experiment_analyzer.py   # メタデータ → 実験デザイン自動解析
 ├── report_generator.py # HTML / LaTeX+PDF レポート生成
 ├── chat_agent.py       # 自律解析セッション管理（レガシー）
 ├── Figure/             # デモ出力図（実データ解析結果 29 図）
@@ -822,7 +910,8 @@ Give it your raw FASTQ data, and it automatically handles **pipeline design, exe
 - Inspects your data structure automatically (FASTQ / metadata / existing QZA)
 - Builds the right QIIME2 commands from scratch for your dataset
 - Writes ready-to-run `.sh` / `.ps1` scripts
-- **4 operation modes**: Prompt / Autonomous / Chat / **Research-Driven (manual-auto)**
+- **5 operation modes**: Prompt / Autonomous / Chat / Research-Driven / **AI-Driven (ai-driven)**
+- **`--ai-driven` mode (v1.4.0)**: AI scouts data → runs statistical tests natively in Python → 8-axis scoring → **literature-based decision tree** deterministically decides next analysis. Runs to completion even if LLM fails
 - **`--manual-auto` mode (v1.2.0)**: Auto-parses metadata to understand experimental design → runs 40+ visualization & statistical analyses tailored to your research question
 - **3-step automated analysis pipeline (`--auto` mode)**:
   - **STEP 1**: QIIME2 pipeline (DADA2 denoising, phylogeny, diversity, taxonomy)
@@ -1347,6 +1436,26 @@ seq2pipe/
 ---
 
 ## Changelog
+
+### v1.4.0 (2026-03-27)
+- **`--ai-driven` モード**: データ駆動の適応的解析エンジン（モード 5）
+  - **DataInspector**: feature-table / alpha / beta / taxonomy の TSV を直接パースし、統計検定を純 Python で自前実行（scipy 不要）
+  - **EvalMediator**: 8 軸スコア評価（statistical_significance, biological_relevance, novelty, actionability 等）
+  - **SVD 次元圧縮**: スコア行列をべき乗法で 3 主成分に圧縮、LLM コンテキスト効率を最大化
+  - **DecisionEngine**: 文献ベースの確定的判断木
+    - Anderson (2001): PERMANOVA 有意 → betadisper 必須 / 非有意 → beta 系全スキップ
+    - Willis (2019): effect size + rarefaction で alpha の解釈を判断
+    - Gloor et al. (2017): 組成データ → 低豊度バイアス自動検出
+    - McMurdie & Holmes (2014): read depth CV で rarefaction の要否判断
+  - Python 判断が LLM 判断に優先するマージ機構（`merge_with_llm`）
+  - LLM 障害時も Python 判断木のみで完走可能
+  - `eval_mediator.py` (新モジュール)、`ai_driven_agent.py` (大幅強化)
+
+### v1.3.0 (2026-03-26)
+- AI 駆動モードの Phase 1-3 基本実装
+- `microbiome_knowledge.py`: 包括的ドメイン知識モジュール（Hill numbers, β多様性回転分割, 統計検定決定木等）
+- `experiment_knowledge.py`: 実験系文献知識データベース（抗生物質, 食事介入, IBD, 肥満等）
+- `experiment_analyzer.py`: メタデータから実験デザインを完全自動解析
 
 ### v1.2.0 (2026-03-25)
 - **`--manual-auto` モード**: 研究目的駆動の自律解析モードを追加

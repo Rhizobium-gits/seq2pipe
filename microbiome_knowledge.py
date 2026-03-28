@@ -1009,7 +1009,18 @@ def estimate_power_context(profile: DataProfile) -> dict:
             "Focus on descriptive statistics, effect sizes, and confidence intervals. "
             "Do NOT over-interpret p-values. Report as exploratory.")
 
-    return {"power_level": level, "guidance": guidance, "n_per_group": n}
+    # 検出可能な効果量の推定 (Cohen's d)
+    if n >= 30:
+        detectable = "d ≈ 0.5 (medium)"
+    elif n >= 10:
+        detectable = "d ≈ 0.8 (large)"
+    elif n >= 5:
+        detectable = "d ≈ 1.2 (very large)"
+    else:
+        detectable = "d ≈ 2.0+ (extreme only)"
+
+    return {"power_level": level, "guidance": guidance, "n_per_group": n,
+            "detectable_effect": detectable}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
