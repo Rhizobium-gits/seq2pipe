@@ -731,6 +731,58 @@ by adding title-based duplicate checking and a maximum cap ($N = 8$).
 This is an example of the system's closed-loop nature exposing
 its own failure modes during operation.
 
+\paragraph{Signal strength and code success.}
+Figure~\ref{fig:signal} reveals that success correlates not only with
+code quality but with \emph{data signal strength}.
+The score gap between successful and failed steps is largest on
+\texttt{statistical\_significance} (0.52 vs 0.26) and
+\texttt{effect\_magnitude} (0.53 vs 0.22).
+The retry waterfall (panel C) shows that 5 steps succeed on
+the first attempt, 3 are rescued by retry, and 22 exhaust
+all retries---indicating that the 7B model's failure mode is
+predominantly \emph{conceptual} (wrong analysis logic), not
+syntactic (fixable by retry).
+Panel B quantifies error resolution: \texttt{NameError}
+is partially resolvable (17\% resolution rate), while
+\texttt{KeyError} has 0\% resolution---the LLM cannot
+learn from a single error message that the column name
+is different from what it assumed.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_signal_vs_success.png}
+\caption{(A)~Score distribution: success (mean=0.43) vs failure
+(mean=0.22) with clear separation.
+(B)~Error resolution rate by type: \texttt{NameError} is partially
+fixable (17\%), \texttt{KeyError} is never fixed (0\%).
+(C)~Retry waterfall: 30 steps enter, 5 succeed first try,
+3 rescued by retry, 22 fail all 3 attempts.
+(D)~Per-step detail showing score, error type, and retry count.}
+\label{fig:signal}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_decision_impact.png}
+\caption{DecisionEngine impact across 7 scenarios.
+(A)~Accuracy improvement: up to +33~pp on MP-subject.
+(B)~Noise steps eliminated: up to 7 steps on MP-subject.
+(C)~Safety: zero false-negative skips across all 147 per-step
+decisions (7 scenarios $\times$ 21 steps).}
+\label{fig:decision-impact}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_evaluation_summary.png}
+\caption{Complete system evaluation summary.
+Green cells indicate validated or safe metrics;
+red indicates inadequate performance (LLM investigation success 6\%).
+The core strength---deterministic, LLM-free decision-making---is
+the system's primary contribution.}
+\label{fig:eval-summary}
+\end{figure}
+
 \subsection{Cross-Dataset Comparison}
 \label{sec:eval-crossdataset}
 

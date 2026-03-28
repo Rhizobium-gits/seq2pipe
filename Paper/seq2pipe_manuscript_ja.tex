@@ -473,6 +473,36 @@ LLMは類似の誤ったコードを繰り返し生成する。
 \label{fig:machine-perf}
 \end{figure}
 
+\paragraph{シグナル強度とコード成功の関係}
+図\ref{fig:signal}は成功がコード品質だけでなくデータシグナルの強さと相関することを示す。
+成功/失敗間のスコア差は\texttt{statistical\_significance}（0.52 vs 0.26）と
+\texttt{effect\_magnitude}（0.53 vs 0.22）で最大。
+リトライウォーターフォール（パネルC）は5ステップが初回成功、3がリトライで救済、
+22が全リトライを消費して失敗したことを示す。
+7Bモデルの失敗モードは主に概念的（間違った解析ロジック）であり、構文的（リトライで修正可能）ではない。
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_signal_vs_success.png}
+\caption{(A) スコア分布。(B) エラー種別解決率。(C) リトライウォーターフォール。(D) ステップ別詳細。}
+\label{fig:signal}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_decision_impact.png}
+\caption{DecisionEngineの影響。(A) 精度改善（最大+33pp）。(B) ノイズ除去。
+(C) 安全性：全147判断で誤スキップ=0。}
+\label{fig:decision-impact}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_evaluation_summary.png}
+\caption{システム評価サマリ。緑=検証済み/安全、赤=不十分（Investigation成功率6\%）。}
+\label{fig:eval-summary}
+\end{figure}
+
 \subsection{統計検定精度の検証（scipy比較）}
 
 DataInspectorの純Python実装をscipyと100回のモンテカルロデータセットで比較した。
