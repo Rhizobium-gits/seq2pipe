@@ -65,15 +65,17 @@ made by the deterministic DecisionEngine without LLM involvement.
 Under total LLM failure, the decision-making loop continues to
 operate correctly, though individual analysis steps cannot execute.
 
-We evaluated the system on seven scenarios derived from four public
+We evaluated the system on 12 scenarios derived from four public
 16S rRNA datasets (Moving Pictures, Atacama Soil, Gneiss IBD, and
-FMT; 34--121 samples each).
-The DecisionEngine achieved 95\% agreement with an
-independently defined expert protocol when complete data features
-were available, compared to 62\% for a static pipeline---an
-improvement of 33 percentage points with 87.5\% noise reduction
-and zero false-negative skips across 1,470 per-step decisions
-(10 runs per scenario, standard deviation = 0).
+FMT; 34--121 samples, 2--4 grouping variables each).
+Across 2,520 per-step decisions (120 runs), the DecisionEngine
+achieved a mean accuracy of 73.0\% vs 57.5\% for a static
+pipeline (+15.5~pp), reaching +47.6~pp on scenarios lacking
+significant group differences, with zero false-negative skips
+(standard deviation $= 0$).
+Weight sensitivity analysis across 219 configurations confirmed
+that skip/add decisions depend solely on raw $p$-values and effect
+sizes, not on the 8-axis score weights.
 Statistical tests implemented in pure Python agreed with scipy on
 significance classification in 99--100\% of Monte Carlo trials, and
 all seven established biological conclusions of the Moving Pictures
@@ -680,44 +682,58 @@ static pipeline, the DecisionEngine, and the expert protocol.
 
 \begin{table}[t]
 \centering
-\caption{Decision accuracy across seven scenarios.
-Each cell is the result of 10 identical runs (1,470 total decisions).
-\textbf{Wrong skip} = false negative.
-Standard deviation = 0 for all metrics across all runs.}
+\caption{Decision accuracy across 12 scenarios from 4 public datasets.
+Each cell is the result of 10 identical runs (2,520 total decisions, std $= 0$).}
 \label{tab:comparison}
 \footnotesize
-\begin{tabular}{@{}lccccccc@{}}
+\begin{tabular}{@{}lcccccccccccc@{}}
 \toprule
-& \rotatebox{65}{MP-body} & \rotatebox{65}{MP-subj.} & \rotatebox{65}{AT-trans.}
-& \rotatebox{65}{AT-veg.} & \rotatebox{65}{AT-depth}
-& \rotatebox{65}{GN-IBD} & \rotatebox{65}{FMT} \\
+& \rotatebox{70}{\scriptsize MP-body} & \rotatebox{70}{\scriptsize MP-subj.} & \rotatebox{70}{\scriptsize MP-year}
+& \rotatebox{70}{\scriptsize MP-abx} & \rotatebox{70}{\scriptsize AT-trans.}
+& \rotatebox{70}{\scriptsize AT-veg.} & \rotatebox{70}{\scriptsize AT-depth}
+& \rotatebox{70}{\scriptsize GN-IBD} & \rotatebox{70}{\scriptsize GN-sex}
+& \rotatebox{70}{\scriptsize FMT-treat} & \rotatebox{70}{\scriptsize FMT-type}
+& \rotatebox{70}{\scriptsize FMT-gend.} \\
 \midrule
-Static accuracy (\%) & 95 & 62 & 52 & 57 & 52 & 52 & 52 \\
-\textbf{Adaptive accuracy (\%)} & \textbf{95} & \textbf{95} & 52 & 57 & 52 & \textbf{62} & 52 \\
-Improvement (pp)   & 0 & \textbf{+33} & 0 & 0 & 0 & \textbf{+10} & 0 \\
-Noise (static)     & 1 & 8 & 10 & 9 & 10 & 10 & 10 \\
-Noise (adaptive)   & 1 & \textbf{1} & 10 & 9 & 10 & \textbf{8} & 10 \\
-\textbf{Wrong skip} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} \\
+$n$ & 34 & 34 & 34 & 34 & 54 & 54 & 54 & 87 & 87 & 121 & 121 & 121 \\
+Static (\%) & 95 & 62 & 71 & 71 & 52 & 57 & 52 & 52 & 38 & 52 & 52 & 33 \\
+\textbf{Adaptive} & \textbf{95} & \textbf{95} & \textbf{95} & \textbf{95} & 52 & 57 & 52 & \textbf{62} & \textbf{86} & 52 & 52 & \textbf{81} \\
+$\Delta$ (pp) & 0 & \textbf{+33} & \textbf{+24} & \textbf{+24} & 0 & 0 & 0 & \textbf{+10} & \textbf{+48} & 0 & 0 & \textbf{+48} \\
+Wrong skip & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Three patterns emerge.
-First, when all data features are present (MP-body), both the
-static pipeline and the engine agree with the expert at 95\%;
-the engine correctly executes all follow-ups without
-over-optimization.
-Second, when no significant signals exist (MP-subject), the static
-pipeline executes 8 unnecessary steps (accuracy 62\%), while the
-engine skips 7 of them, achieving 95\% accuracy---a 33 percentage
-point improvement with 87.5\% noise reduction.
-Third, when taxonomy is unavailable (AT, GN, FMT), the engine
-cannot evaluate differential-abundance-dependent steps, yielding a
-52\% accuracy floor identical to the static pipeline.
+Three patterns emerge from the 12-scenario evaluation.
+First, when all data features are present and significant (MP-body),
+the engine achieves 95\%---identical to the static pipeline.
+No over-optimization occurs.
+Second, when group differences are absent (MP-subject, GN-sex,
+FMT-gender), the engine produces the largest improvements
+(+33 to +48~pp) by correctly skipping 5--10 unnecessary follow-ups.
+The maximum improvement of +47.6~pp on GN-sex and FMT-gender
+demonstrates that the engine's primary value is
+\textit{noise reduction when the data does not support the analysis}.
+Third, without taxonomy, improvements are limited to the
+alpha/beta branches (AT, FMT-treatment/type), yielding a 52\%
+floor.
 
-Across all 147 per-step decisions, the engine produced
-\textbf{zero false-negative skips}---it never removed an analysis
-that the expert protocol would execute.
+Across all 2,520 decisions, the engine produced
+\textbf{zero false-negative skips}.
+
+\paragraph{Weight independence.}
+We tested 219 weight configurations including 213 grid-search
+combinations and 6 extreme settings (e.g., 90\% on a single axis).
+\textbf{All 219 configurations produced identical decisions
+(accuracy 73.0\%, wrong skips 0).}
+This is because the DecisionEngine branches on raw $p$-values and
+effect sizes, not on composite scores.
+The 8-axis weights affect only the composite score used for
+display and novelty-spike replanning triggers, not the skip/add
+logic.
+This finding renders weight optimization unnecessary for the
+current architecture and provides a robustness guarantee:
+the system's decisions are invariant to weight perturbation.
 
 \begin{figure}[t]
 \centering
