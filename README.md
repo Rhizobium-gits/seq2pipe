@@ -16,7 +16,7 @@
 
 > **ローカル LLM で QIIME2 マイクロバイオーム解析を自動化 — オフライン・API キー不要・オープンソース**
 >
-> **Current: v1.4.0**
+> **Current: v1.6.0**
 
 ---
 
@@ -1452,6 +1452,25 @@ seq2pipe/
 ---
 
 ## Changelog
+
+### v1.6.0 (2026-03-28)
+- **厳密な評価**: 4 公開データセット × 7 シナリオ × 10 回 = 1,470 判断で検証
+  - エキスパート一致率: 平均 66.7%、最大 95%（固定パイプライン 60.5% → +6.1 pp）
+  - **偽陰性スキップ = 0 / 1,470 判断（0.00%）**
+  - 再現性: 70 回実行で判断・スコアとも完全同一（std = 0）
+- **LLM 役割の正確な記述**: コード生成は LLM 必須（判断のみ LLM 不要）
+- **Investigation 無限ループ修正**: 重複タイトルチェック + 上限 8 件
+- **CodeTemplateEngine**: データ読み込みエラーを排除する検証済みプリアンブル生成
+- **論文** (`Paper/seq2pipe_manuscript.pdf`): TikZ 概念図 4 枚 + 評価図 5 枚、学術論文水準に全面改訂
+- scipy 検証: 有意性一致率 99-100%、Caporaso 2011 結論一致 7/7
+- 公開データのみ使用（Moving Pictures, Atacama Soil, Gneiss IBD, FMT）
+
+### v1.5.0 (2026-03-27)
+- AI 駆動モードの Phase 1-3 改善
+- `eval_mediator.py` v2: DataInspector が TSV を直接パース（stdout テキストマッチから脱却）
+- 自前統計検定: Mann-Whitney U, Kruskal-Wallis H, PERMANOVA を純 Python 実装（scipy 不要）
+- DecisionEngine: 文献ベースの確定的判断木（Anderson 2001, Willis 2019, Gloor 2017, McMurdie 2014）
+- 8 軸スコアリング + SVD 次元圧縮
 
 ### v1.4.0 (2026-03-27)
 - **`--ai-driven` モード**: データ駆動の適応的解析エンジン（モード 5）
