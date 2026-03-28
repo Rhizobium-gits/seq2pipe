@@ -55,9 +55,15 @@ an \textit{EvalMediator} that quantifies each analysis step across
 eight data-derived axes;
 and a \textit{DecisionEngine} that applies literature-grounded
 decision trees to deterministically modify the analysis plan.
-A local large language model (7B parameters) serves as an optional
-auxiliary for code generation and hypothesis formulation, but the
-system completes execution under total LLM failure.
+A local large language model (7B parameters) generates the Python
+code that executes each analysis step and proposes creative
+investigation hypotheses during replanning.
+The LLM is essential for code generation (no deterministic
+alternative is currently implemented), but all workflow
+\textit{decisions}---which steps to skip, add, or reorder---are
+made by the deterministic DecisionEngine without LLM involvement.
+Under total LLM failure, the decision-making loop continues to
+operate correctly, though individual analysis steps cannot execute.
 
 We evaluated the system on seven scenarios derived from four public
 16S rRNA datasets (Moving Pictures, Atacama Soil, Gneiss IBD, and
@@ -117,14 +123,15 @@ narrative emerges.
 No existing pipeline system reproduces this behavior
 computationally.
 
-We introduce \seqpipe, a system that separates this reasoning loop
-into three deterministic layers augmented by an optional LLM.
+We introduce \seqpipe, a system that architecturally separates
+\textit{what to analyze} (deterministic, LLM-free) from
+\textit{how to execute the analysis} (LLM-assisted code generation).
 Our contributions are:
 \begin{enumerate}
-  \item A three-layer architecture that decouples data inspection,
-        evaluation and decision-making (both deterministic), and
-        code generation (LLM-assisted), yielding LLM-failure
-        tolerance.
+  \item A three-layer architecture in which workflow decisions
+        (skip, add, reorder) are fully deterministic and
+        LLM-independent, while code generation leverages a local
+        LLM with retry and fallback mechanisms.
   \item A literature-grounded DecisionEngine encoding analytical
         heuristics from Anderson~(2001), Willis~(2019),
         Gloor et al.~(2017), and McMurdie \& Holmes~(2014) as
@@ -222,25 +229,33 @@ on quantitative properties of $H_{t+1}$.
    8-axis scoring $\to$ SVD compression $\to$ Decision trees\\
    Anderson~(2001) / Willis~(2019) / Gloor et al.~(2017) / McMurdie~(2014)};
 \node[layer, fill=orange!8] (L3) at (0,-4.8)
-  {\textbf{Layer 3: LLM Auxiliary} (local 7B, optional)\\
-   Code generation + creative investigation hypotheses\\
-   \textit{Overridden by Layer 2 on conflict; system completes without Layer 3}};
+  {\textbf{Layer 3: LLM} (local 7B, required for code execution)\\
+   Code generation (54\% success) + creative hypotheses (6\%)\\
+   \textit{Decisions overridden by Layer 2; code generation has no deterministic fallback}};
 \draw[arrow] (L1.south) -- node[right, label] {DataSnapshot} (L2.north);
 \draw[arrow] (L2.south) -- node[right, label] {Decision} (L3.north);
 \draw[arrow, dashed] (L3.east) -- ++(1.5,0) |- node[right, label, pos=0.25]
   {execution feedback} (L1.east);
 \end{tikzpicture}
 \caption{Three-layer architecture.
-Layers~1--2 are fully deterministic and LLM-independent.
-Layer~3 is optional; its outputs are overridden by Layer~2 on
-conflict.
+Layers~1--2 are fully deterministic and LLM-independent; they
+handle all workflow decisions (skip, add, reorder).
+Layer~3 provides the LLM for code generation and is required for
+step execution, but its \textit{decisions} are overridden by
+Layer~2 on conflict.
 The dashed arrow indicates the closed-loop feedback path.}
 \label{fig:architecture}
 \end{figure}
 
 The architecture (Figure~\ref{fig:architecture}) enforces a strict
-separation: Layers~1--2 are deterministic and LLM-free;
-Layer~3 is stochastic and expendable.
+separation of concerns.
+Layers~1--2 are deterministic and LLM-free: they decide
+\textit{what} to analyze.
+Layer~3 uses the LLM to decide \textit{how} to analyze it
+(code generation) and \textit{why} to investigate further
+(hypothesis generation).
+The system can reason about the optimal workflow without the LLM,
+but cannot produce analysis outputs without it.
 
 \subsection{Layer 1: DataInspector}
 
@@ -337,17 +352,44 @@ deterministic rules:
     sparsity $> 90\% \Rightarrow$ add prevalence-filtered reanalysis.
 \end{itemize}
 
-\subsection{Layer 3: LLM Auxiliary}
+\subsection{Layer 3: LLM Code Generation and Hypothesis}
 
-A local 7B model generates initial analysis plans
-(with a domain-knowledge fallback on failure), Python analysis code
-(with up to three retry cycles), and creative investigation
-hypotheses during replanning.
-The merge function $\mathrm{merge}(d_{\mathrm{py}}, d_{\mathrm{llm}})$
-ensures that Python-determined skips override LLM-proposed
-additions.
-Under total LLM failure, all deterministic decisions are applied
-without LLM input.
+The LLM (qwen2.5-coder, 7B parameters, running locally via Ollama)
+performs three functions:
+
+\begin{enumerate}
+  \item \textbf{Initial plan generation} (Phase~2):
+    given the DataRecon summary and domain knowledge, the LLM
+    proposes an ordered list of 12--20 analysis steps as JSON.
+    On failure, a deterministic fallback
+    (\texttt{build\_domain\_driven\_plan()}) generates the plan
+    from the DataProfile without LLM involvement.
+  \item \textbf{Analysis code generation} (Phase~3, each step):
+    the LLM writes a complete Python script (matplotlib, pandas,
+    seaborn) for each analysis step.
+    If the code fails, the error message is passed back to the LLM
+    for correction, up to three attempts.
+    \textit{This is the function for which no deterministic
+    alternative currently exists}; if the LLM fails all three
+    retries, the step is recorded as failed and skipped.
+  \item \textbf{Creative investigation hypotheses} (replanning):
+    during adaptive replanning, the LLM proposes novel follow-up
+    investigations (e.g., ``Is the 324$\times$ Bacteroides
+    enrichment driven by loss of competing taxa?'').
+    These are merged with DecisionEngine outputs via
+    $\mathrm{merge}(d_{\mathrm{py}}, d_{\mathrm{llm}})$, where
+    Python-determined skips override LLM-proposed additions.
+\end{enumerate}
+
+Under total LLM failure, the decision-making loop (Layer~2)
+continues to operate: skip/add/reorder decisions are applied to the
+plan queue, and the system logs which steps \textit{would have}
+been executed.
+However, no analysis outputs (figures, statistical results) are
+produced, as code generation requires the LLM.
+This architectural property means that the \textit{correctness of
+workflow decisions} can be validated independently of code
+generation quality---a separation we exploit in the evaluation.
 
 \subsection{Execution Loop}
 
@@ -600,27 +642,44 @@ biological signal in the data.
 \subsection{Role Decomposition of the LLM}
 \label{sec:eval-role}
 
-We decompose the system's functions into three categories to
-clarify LLM necessity:
-\begin{enumerate}
-  \item \textbf{Statistical evaluation and decision-making}:
-    handled entirely by Layers~1--2.
-    LLM not involved.
-    100\% reproducible.
-  \item \textbf{Analysis code generation}:
-    currently LLM-dependent (54\% success with retries), but
-    architecturally replaceable by template-based generation, as
-    each registry step has a fixed specification.
-    We tested a CodeTemplateEngine that eliminated data-loading
-    errors (import ordering, file format) but could not fix
-    analysis-logic errors, confirming that the 7B bottleneck is
-    analytical reasoning, not data access.
-  \item \textbf{Creative hypothesis generation}:
-    the only function requiring an LLM---deterministic rules
-    cannot propose novel scientific questions.
-    Current 7B success rate is 6\%, motivating future work with
-    larger local models.
-\end{enumerate}
+Table~\ref{tab:llm-role} decomposes the system's functions by LLM
+necessity, current performance, and replaceability.
+
+\begin{table}[t]
+\centering
+\caption{Functional decomposition by LLM dependency.
+``Replaceable'' indicates whether a deterministic alternative exists
+in principle.}
+\label{tab:llm-role}
+\small
+\begin{tabular}{@{}p{3.5cm}cccp{4cm}@{}}
+\toprule
+\textbf{Function} & \textbf{LLM?} & \textbf{Success} & \textbf{Replaceable?} & \textbf{Notes} \\
+\midrule
+Statistical evaluation & No  & 100\% & N/A & Pure Python, Layer 1 \\
+Workflow decisions     & No  & 100\% & N/A & Decision trees, Layer 2 \\
+Initial plan          & Yes$^*$ & ---  & Yes & Fallback exists \\
+Code generation       & \textbf{Yes} & \textbf{54\%} & Partially & Templates fix loading errors but not logic \\
+Error self-repair     & Yes & 37.5\%$^\dagger$ & No & Retry mechanism \\
+Hypothesis generation & \textbf{Yes} & \textbf{6\%}  & No & Only LLM function with no alternative \\
+\bottomrule
+\multicolumn{5}{l}{\footnotesize $^*$Fallback to \texttt{build\_domain\_driven\_plan()} on failure.} \\
+\multicolumn{5}{l}{\footnotesize $^\dagger$3 of 8 successful steps were rescued by retry.}
+\end{tabular}
+\end{table}
+
+The critical dependency is code generation: the system can determine
+the optimal workflow without the LLM, but cannot produce figures or
+statistical outputs without it.
+A CodeTemplateEngine that pre-generates validated data-loading
+preambles eliminated import-ordering errors (the dominant
+\texttt{NameError} class) but could not fix analysis-logic errors,
+confirming that the 7B bottleneck is \textit{analytical reasoning
+in code}, not data format knowledge.
+Creative hypothesis generation---the only function that is both
+LLM-dependent and without deterministic alternative---achieves only
+6\% execution success, motivating future work with larger local
+models or retrieval-augmented generation.
 
 \begin{figure}[t]
 \centering
@@ -709,21 +768,30 @@ tool-use frameworks.
 % ======================================================================
 
 We presented \seqpipe, a closed-loop system for adaptive microbiome
-analysis that architecturally separates deterministic data
-interpretation and decision-making from stochastic code generation.
+analysis that architecturally separates \textit{what to analyze}
+(deterministic, LLM-free) from \textit{how to execute the analysis}
+(LLM-assisted code generation).
 Evaluation on seven scenarios from four public datasets
-demonstrated that the DecisionEngine achieves up to 95\% expert
-agreement with zero false-negative skips and absolute
-reproducibility, while the 7B LLM auxiliary achieves 54\% code
-generation success---sufficient for predefined tasks but inadequate
-for novel investigations.
+demonstrated that the deterministic DecisionEngine achieves up to
+95\% expert agreement with zero false-negative skips and absolute
+reproducibility.
+The LLM remains essential for code generation (54\% success on
+predefined tasks) and is the system's primary bottleneck: creative
+investigations succeed at only 6\%, and the dominant error modes
+(\texttt{NameError}, \texttt{KeyError}) reflect the 7B model's
+limited capacity for code synthesis rather than reasoning.
 
-The core design principle---that analytical decisions should be
-grounded in data, not in language model outputs---yields a system
-that is auditable, reproducible, and robust to LLM failure.
-We argue that this separation of deterministic reasoning from
-stochastic generation is the key architectural principle for
-building reliable autonomous analysis systems.
+The core design principle is that \textbf{workflow decisions should
+be grounded in data, not in language model outputs}, while
+acknowledging that \textbf{analysis execution currently requires
+the LLM}.
+This separation yields a system where decision correctness can be
+validated independently of code generation quality---an architectural
+property that enables targeted improvement of either component
+without affecting the other.
+As local LLMs scale to 30B+ parameters and template-based code
+generation matures, we expect the execution bottleneck to narrow,
+bringing the system closer to fully autonomous operation.
 
 % ======================================================================
 \bibliographystyle{plainnat}
