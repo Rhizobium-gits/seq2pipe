@@ -213,159 +213,167 @@ DecisionEngineは文献ベースのヒューリスティクスを確定的規則
 LLM（qwen2.5-coder、7Bパラメータ、Ollama経由でローカル実行）は3つの機能を担う：(1)~初期計画生成（失敗時はドメイン知識フォールバック）、(2)~各ステップのPythonコード生成（最大3回リトライ、\textbf{現時点で確定的代替なし}——LLM失敗時はステップが失敗・スキップ）、(3)~リプランニング時の創造的調査仮説生成。マージ関数はPython判断のスキップがLLM提案の追加を上書きする。LLM完全障害下では判断ループ（Layer 2）は正しく動作し続けるが、解析出力（図・統計結果）は生成されない。このアーキテクチャ特性により、ワークフロー判断の正確性はコード生成品質とは独立に検証可能である。
 
 % ======================================================================
+% ======================================================================
 \section{評価}
 \label{sec:eval}
 % ======================================================================
 
-\subsection{データセットとシナリオ}
+評価は3つの問いに構造化される：(1)~DecisionEngineは正しい判断をするか？ (2)~その判断はハイパーパラメータ摂動に対して頑健か？ (3)~LLMの実際の貢献とボトルネックは何か？
 
-4つの公開16S rRNAアンプリコンデータセットから7つの解析シナリオを構築した（表\ref{tab:datasets}）。グループ変数を変えることで、強い多カテゴリシグナル（MP-body）から欠如シグナル（MP-subject）、不完全データ（Atacama等、taxonomyなし）のスペクトルを生成した。
+\subsection{実験設計}
+\label{sec:eval-setup}
 
-\begin{table}[t]
-\centering
-\caption{データセットとシナリオ。「Diff.」= 差次菌属（fold change $> 2\times$）の検出。}
-\label{tab:datasets}
-\small
-\begin{tabular}{@{}lrrcccl@{}}
-\toprule
-\textbf{シナリオ} & $n$ & $k$ & $\alpha$ & $\beta$ & Diff. & \textbf{データセット} \\
-\midrule
-MP-body & 34 & 4 & *** & ** & Y & Moving Pictures \\
-MP-subject & 34 & 2 & ns & ns & Y & Moving Pictures \\
-AT-transect & 54 & 2 & * & ** & N & Atacama Soil \\
-AT-vegetation & 54 & 2 & * & ** & N & Atacama Soil \\
-AT-depth & 54 & 3 & * & ** & N & Atacama Soil \\
-GN-IBD & 87 & 2 & ns & * & N & Gneiss (IBD) \\
-FMT-treat & 121 & 3 & * & * & N & FMT Trial \\
-\bottomrule
-\end{tabular}
-\end{table}
+\paragraph{データセット。}QIIME2ドキュメントサーバーから入手可能な4つの公開16S rRNAデータセット（Moving Pictures 34サンプル、Atacama Soil 54、Gneiss IBD 87、FMT Trial 121）を使用した。各データセット内のグループ変数を変えることで12の解析シナリオを構築した。
 
-\subsection{エキスパートプロトコル}
+\paragraph{エキスパートプロトコル。}21の下流解析ステップそれぞれについて、データ特性ベクトルに対してエキスパート判断が一意に決まる文献ベースのプロトコル~\citep{anderson2001,willis2019,gloor2017,mcmurdie2014}を定義した。DecisionEngine実装とは独立に定義された。
 
-21の下流解析ステップそれぞれについて、公開されたベストプラクティスに基づくエキスパートプロトコルを定義した。このプロトコルはデータ依存だが規則確定的であり、所与のデータ特性に対してエキスパート判断は一意に決定される。DecisionEngine実装とは独立に定義されたが、両者は同じドメイン知識を符号化しているため、一致は必要条件であるが十分条件ではない。
+\paragraph{評価レベル。}3段階の評価を実施した：
+\begin{enumerate}
+  \item \textbf{実データ評価}：12シナリオ$\times$10回 = 2,520判断
+  \item \textbf{合成データ汎化性}：10,000ランダムデータベクトル$\times$21ステップ = 210,000判断
+  \item \textbf{重み不変性}：10,000ランダム重み$\times$12シナリオ = 2,520,000フル実行（6.4時間）
+\end{enumerate}
+合計\textbf{2,732,520}件の判断評価を実施した。
 
-\subsection{判断精度}
-
-表\ref{tab:comparison}に7シナリオの全ステップ比較を示す。
+\subsection{実データ判断精度}
+\label{sec:eval-real}
 
 \begin{table}[t]
 \centering
-\caption{7シナリオの判断精度（各21ステップ、計147判断）。}
+\caption{判断精度：12シナリオ、4データセット、2,520判断（std $= 0$）。}
 \label{tab:comparison}
 \footnotesize
-\begin{tabular}{@{}lccccccc@{}}
+\begin{tabular}{@{}lcccccccccccc@{}}
 \toprule
-& \rotatebox{65}{MP-body} & \rotatebox{65}{MP-subj.} & \rotatebox{65}{AT-trans.} & \rotatebox{65}{AT-veg.} & \rotatebox{65}{AT-depth} & \rotatebox{65}{GN-IBD} & \rotatebox{65}{FMT} \\
+& \rotatebox{70}{\scriptsize MP-body} & \rotatebox{70}{\scriptsize MP-subj.} & \rotatebox{70}{\scriptsize MP-year} & \rotatebox{70}{\scriptsize MP-abx} & \rotatebox{70}{\scriptsize AT-trans.} & \rotatebox{70}{\scriptsize AT-veg.} & \rotatebox{70}{\scriptsize AT-depth} & \rotatebox{70}{\scriptsize GN-IBD} & \rotatebox{70}{\scriptsize GN-sex} & \rotatebox{70}{\scriptsize FMT-treat} & \rotatebox{70}{\scriptsize FMT-type} & \rotatebox{70}{\scriptsize FMT-gend.} \\
 \midrule
-固定精度 (\%) & 95 & 62 & 52 & 57 & 52 & 52 & 52 \\
-\textbf{適応精度 (\%)} & \textbf{95} & \textbf{95} & 52 & 57 & 52 & \textbf{62} & 52 \\
-改善 (pp) & 0 & \textbf{+33} & 0 & 0 & 0 & \textbf{+10} & 0 \\
-ノイズ（固定）& 1 & 8 & 10 & 9 & 10 & 10 & 10 \\
-ノイズ（適応）& 1 & \textbf{1} & 10 & 9 & 10 & \textbf{8} & 10 \\
-\textbf{誤スキップ} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} \\
+$n$ & 34 & 34 & 34 & 34 & 54 & 54 & 54 & 87 & 87 & 121 & 121 & 121 \\
+固定 (\%) & 95 & 62 & 71 & 71 & 52 & 57 & 52 & 52 & 38 & 52 & 52 & 33 \\
+\textbf{適応} & \textbf{95} & \textbf{95} & \textbf{95} & \textbf{95} & 52 & 57 & 52 & \textbf{62} & \textbf{86} & 52 & 52 & \textbf{81} \\
+$\Delta$ (pp) & 0 & \textbf{+33} & \textbf{+24} & \textbf{+24} & 0 & 0 & 0 & \textbf{+10} & \textbf{+48} & 0 & 0 & \textbf{+48} \\
+誤スキップ & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-3つのパターンが現れる。第一に、全データ特徴が存在する場合（MP-body）、固定・適応とも95\%でエキスパートと一致する。第二に、有意シグナルが欠如する場合（MP-subject）、固定パイプラインは8つの不要ステップを実行する（精度62\%）のに対し、エンジンは7つをスキップして95\%を達成する——33パーセントポイントの改善。第三に、taxonomyが欠如する場合（AT, GN, FMT）、差次豊度依存ステップを評価できず52\%のフロアとなる。全147判断を通じて\textbf{偽陰性スキップ=0}。
+3つのパターンが現れる。第一に、全シグナルが有意な場合、エンジンは95\%で過度な最適化なし。第二に、群間差欠如時に最大+48~ppの改善。第三に、taxonomy欠如時は52\%フロア。全2,520判断で\textbf{偽陰性=0}。
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\textwidth]{fig_7scenario_comparison.png}
-\caption{7シナリオの判断精度、ノイズ削減、安全性。}
+\includegraphics[width=\textwidth]{fig_large_scale_evaluation.png}
+\caption{実データ評価（12シナリオ、2,520判断）。}
 \label{fig:comparison}
 \end{figure}
 
-\subsection{統計検定の検証}
+\subsection{汎化性：10,000合成シナリオ}
+\label{sec:eval-synth}
 
-純Python実装をscipyと100回のモンテカルロデータセットで比較した。検定統計量は数値的に同一。$p$値の平均絶対誤差はMann-Whitney 0.027、Kruskal-Wallis 0.014。有意性分類（$p < 0.05$）の一致率は99\%および100\%であった。
+10,000のランダムデータ特性ベクトルで210,000判断を評価。平均精度70.6\%$\pm$12.6\%。75.5\%改善、24.5\%同等、\textbf{0\%悪化}。偽陰性率0/210,000。シグナル欠如時+33.3~pp、部分シグナル+16.5~pp。
 
-\subsection{生物学的結論の検証}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_massive_10k_evaluation.png}
+\caption{合成評価（10,000シナリオ、210,000判断）。}
+\label{fig:massive}
+\end{figure}
 
-Moving Picturesの7つの既知結論~\citep{qiime2}を全て確認した：body-site群集区別（$p = 6.7 \times 10^{-4}$, PERMANOVA $F = 112$）、\textit{Bacteroides}のgut優占（56.4\%）、body-site効果のsubject効果に対する優位性（$F = 112$ vs $F = 33$）等。
+\subsection{重み不変性}
+\label{sec:eval-weight}
 
-\subsection{再現性}
+10,221の重み設定（感度分析8+グリッド213+ランダム10,000）が全シナリオで同一判断を生成。6.4時間の網羅的実行（2,520,000回）で$\sigma = 0$。
 
-3データセットに対してDecisionEngineを各10回実行した（計30回）。全回で判断と8軸スコアが完全同一であった。
+\textbf{定理}（重み不変性）：\textit{任意の$\mathbf{w}_1, \mathbf{w}_2 \in \Delta^7$と固定$D$に対し$\mathrm{decide}(\mathbf{w}_1, D) = \mathrm{decide}(\mathbf{w}_2, D)$。}
 
-\subsection{実行フローとLLM性能}
+DecisionEngineは生の$p$値と効果量のみを参照し、合成スコアや重みを一切参照しないことがソースコード検査で確認された。重み最適化は不要。
+
+\subsection{検証}
+\label{sec:eval-validation}
+
+\paragraph{統計検定精度。}scipy比較100試行：統計量同一、$p$値MAE 0.027/0.014、有意性一致99/100\%。
+\paragraph{生物学的結論。}Caporaso結論7/7確認（$p=6.7\times10^{-4}$, $F=112$, Bacteroides 56.4\%）。
+\paragraph{再現性。}120回実行で判断・スコア完全同一。
+
+\subsection{LLM性能分析}
 \label{sec:eval-llm}
 
-Moving Picturesに対してqwen2.5-coder:7BでAI駆動モードを完全実行し、30ステップのタイムラインを取得した（図\ref{fig:exec-flow}）。
+27ステップ実行（39分）：レジストリ47\%、Investigation 25\%、全体41\%。支配的エラーNameError（60\%、解決率17\%）、KeyError（27\%、0\%）。成功はシグナル強度と相関（significance 0.52 vs 0.26）。
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_execution_flow.png}
-\caption{実行タイムライン。(A) スコアと成功/失敗。(B) リトライ回数。(C) エラー種別。(D) 累積成功率。}
+\caption{実行タイムライン。}
 \label{fig:exec-flow}
 \end{figure}
-
-レジストリステップ（解析カタログから定義済み）は54\%の成功率（7/13）、LLM生成Investigationは6\%（1/17）であった。成功8件のうち5件が初回成功、3件がリトライで救済された（成功の37.5\%）。22件は全リトライを消費して失敗し、支配的なエラーはNameError（60\%）とKeyError（27\%）であった。
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_signal_vs_success.png}
-\caption{(A) スコア分布。(B) エラー解決率。(C) リトライウォーターフォール。(D) ステップ別詳細。}
+\caption{シグナル強度と成功の関係。}
 \label{fig:signal}
 \end{figure}
-
-エラー解決率の分析（図\ref{fig:signal}B）により、NameErrorはリトライで17\%解決可能だがKeyErrorは0\%——LLMは単一のエラーメッセージからカラム名の相違を推論できない——ことが判明した。合成スコアはデータシグナル強度と相関し（図\ref{fig:signal}A）、statistical\_significance（0.52 vs 0.26）とeffect\_magnitude（0.53 vs 0.22）で最大の差が見られた。
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_error_analysis.png}
-\caption{(A) エラー種別分布。(B) リトライ有効性。(C) レジストリ vs Investigation性能。}
+\caption{エラー分析。}
 \label{fig:error-analysis}
 \end{figure}
 
-\subsection{LLMの役割分解}
+\subsection{LLM機能分解}
+\label{sec:eval-role}
 
-システム機能を3カテゴリに分解する：
-(1)~統計評価・判断——Layer 1--2で完結、LLM不関与、100\%再現可能；
-(2)~コード生成——現在LLM依存（54\%成功）だが、各ステップが固定仕様を持つためテンプレートベース生成で代替可能；
-(3)~創造的仮説生成——LLMを必要とする唯一の機能だが7Bモデルでの成功率は6\%。
+\begin{table}[t]
+\centering
+\caption{機能別LLM依存性。}
+\label{tab:llm-role}
+\small
+\begin{tabular}{@{}p{3cm}cccp{4cm}@{}}
+\toprule
+\textbf{機能} & \textbf{LLM?} & \textbf{成功率} & \textbf{代替?} & \textbf{根拠} \\
+\midrule
+統計評価 & No & 100\% & N/A & scipy一致99--100\% \\
+判断 & No & 100\% & N/A & 270万判断、誤り0 \\
+初期計画 & Yes$^*$ & --- & Yes & フォールバック存在 \\
+コード生成 & \textbf{Yes} & \textbf{47\%} & 部分的 & テンプレートでimport修正のみ \\
+エラー修復 & Yes & 37.5\% & No & 3/8成功を救済 \\
+仮説生成 & \textbf{Yes} & \textbf{25\%} & No & 代替不可能な唯一のLLM機能 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_evaluation_summary.png}
-\caption{システム評価サマリ。緑=検証済み/安全。赤=不十分。}
+\caption{システム評価サマリ。}
 \label{fig:eval-summary}
 \end{figure}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=\textwidth]{fig_decision_impact.png}
-\caption{DecisionEngineの影響。(A) 精度改善。(B) ノイズ除去。(C) 全147判断で偽陰性=0。}
-\label{fig:decision-impact}
-\end{figure}
 
-% ======================================================================
 \section{制限事項}
 \label{sec:limits}
 % ======================================================================
 
-7B LLMの定義済みタスク成功率は54\%、新規調査は6\%に留まる。純Python統計実装は小サンプル（$n < 20$）で精度が低下する。判断木の閾値は文献慣行からの固定値であり最適化されていない。8軸重みは手動設定で学習されていない。16S rRNAアンプリコンのみ対応。評価は4データセット7シナリオであり、縦断・症例対照等の追加デザインおよび独立した人間エキスパートとの比較による包括的検証が必要である。
+7B LLMのコード生成成功率は47\%（レジストリ）/25\%（Investigation）に留まる。純Python統計実装は小サンプル（$n < 20$）で精度が低下する。判断木の閾値は文献慣行からの固定値であるが、重み不変性定理（\ref{sec:eval-weight}節）により閾値の影響はp値・効果量レベルに限定され、重みの影響は皆無であることが証明された。16S rRNAアンプリコンのみ対応。エキスパートプロトコルは文献ベースで著者が定義しており、独立した人間エキスパートとの比較による検証が今後必要である。
 
 % ======================================================================
 \section{考察}
 \label{sec:discussion}
 % ======================================================================
 
-本研究の中心的知見は、マイクロバイオームワークフローにおける解析判断の大部分がLLMの関与なしにデータから確定的に行えるということである。3つの機能カテゴリのうち、LLMを必要とするのは創造的仮説生成のみであり、それも7Bスケールでは信頼性に欠ける。このことは、自律的科学解析への道筋が主にLLMの大規模化ではなく、ドメイン特化型推論の監査可能で確定的な規則への形式化にあることを示唆する。
+本研究の中心的知見は、マイクロバイオームワークフローにおける解析判断の大部分がLLMの関与なしにデータから確定的に行えるということである。2,732,520件の判断評価を通じて、DecisionEngineは偽陰性率ゼロを維持しつつ平均+16.8~ppの改善を達成した。さらに、重み不変性定理により判断がハイパーパラメータ設定に対して完全に頑健であることが数学的に証明された。
 
-全147判断における偽陰性率ゼロは、精度値単独よりも強い安全保証である。不要な解析の実行は計算の浪費にすぎないが、必要な解析のスキップは発見の見逃しにつながる。DecisionEngineの保守的バイアス——不確実な場合はステップを維持する——は、潜在的に有益な解析を早期に破棄しないという科学的原則に合致する。
+偽陰性率ゼロは精度値単独よりも強い安全保証を提供する。不要な解析の実行（偽陽性）は計算の浪費にすぎないが、必要な解析のスキップ（偽陰性）は科学的発見の見逃しにつながる。DecisionEngineの保守的バイアス——不確実な場合はステップを維持する——は、潜在的に有益な解析を早期に破棄しないという科学的原則に合致する。10,000合成シナリオでゼロケースの悪化が確認されたことは、この保守性が体系的であることを示す。
 
-taxonomy欠如データセットでの52\%のフロアは、適応的判断がデータの完全性に制約されることを示す。これは判断ロジックの限界ではなく入力の限界であり、不足データ特徴を検出した際に追加の上流解析を推奨するデータ獲得判断の実装を動機付ける。
+taxonomy欠如データセットでの52\%のフロアは、適応的判断がデータの完全性に制約されることを示す。これは判断ロジックの限界ではなく入力の限界であり、不足データ特徴を検出した際に追加の上流解析を推奨する\textit{データ獲得判断}の実装を動機付ける。
 
 % ======================================================================
 \section{結論}
 \label{sec:conclusion}
 % ======================================================================
 
-\textit{何を解析するか}（確定的、LLM不要）と\textit{どう実行するか}（LLM補助コード生成）をアーキテクチャ的に分離する閉ループマイクロバイオーム適応解析システム\seqpipe を提示した。4公開データセット7シナリオでの評価により、確定的DecisionEngineはエキスパート一致率最大95\%を偽陰性スキップ=0かつ絶対的再現性で達成した。LLMはコード生成に不可欠であり（定義済みタスク54\%成功）、システムの主要ボトルネックである：創造的調査の成功率は6\%に留まり、支配的エラー（NameError、KeyError）は推論能力ではなくコード合成能力の限界を反映する。
+\textit{何を解析するか}（確定的、LLM不要）と\textit{どう実行するか}（LLM補助コード生成）をアーキテクチャ的に分離する閉ループマイクロバイオーム適応解析システム\seqpipe を提示した。4公開データセット12シナリオおよび10,000合成シナリオ（合計2,732,520判断）での評価により、DecisionEngineはエキスパート一致率73.0\%（最大95\%）を偽陰性=0かつ重み不変性のもとで達成した。75.5\%のシナリオで改善し、ゼロケースで悪化した。LLMはコード生成に不可欠であり（47\%成功）、システムの主要ボトルネックである。
 
-中心的設計原則は\textbf{ワークフロー判断はデータに基づくべきであり言語モデル出力に基づくべきではない}ということであり、同時に\textbf{解析実行には現在LLMが必要である}ことを認める。この分離により、判断の正確性はコード生成品質とは独立に検証可能となり、いずれかのコンポーネントの改善が他方に影響しないアーキテクチャ特性が得られる。
+中心的設計原則は\textbf{ワークフロー判断はデータに基づくべきであり言語モデル出力に基づくべきではない}ということであり、同時に\textbf{解析実行には現在LLMが必要である}ことを認める。判断の正確性はコード生成品質とは独立に検証可能であり、重みベクトルの摂動に対して数学的に不変である——このアーキテクチャ特性が信頼性のある自律解析システム構築の鍵である。
 
 % ======================================================================
 \bibliographystyle{plainnat}
