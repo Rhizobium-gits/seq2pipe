@@ -875,8 +875,9 @@ seq2pipe/
 
 | | Name | Role |
 |---|---|---|
-| [@Rhizobium-gits](https://github.com/Rhizobium-gits) | Rhizobium-gits | Author |
-| [@claude-bot](https://github.com/claude-bot) | Claude (Anthropic) | Co-author — design & implementation |
+| [@Rhizobium-gits](https://github.com/Rhizobium-gits) | Tsubasa Sato | Author |
+
+Coding assistance by [Claude](https://claude.ai/) (Anthropic).
 
 ---
 
@@ -1445,8 +1446,9 @@ seq2pipe/
 
 | | Name | Role |
 |---|---|---|
-| [@Rhizobium-gits](https://github.com/Rhizobium-gits) | Rhizobium-gits | Author |
-| [@claude-bot](https://github.com/claude-bot) | Claude (Anthropic) | Co-author — design & implementation |
+| [@Rhizobium-gits](https://github.com/Rhizobium-gits) | Tsubasa Sato | Author |
+
+Coding assistance by [Claude](https://claude.ai/) (Anthropic).
 
 ---
 
