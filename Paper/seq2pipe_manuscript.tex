@@ -1173,11 +1173,27 @@ invariance analysis (Section~\ref{sec:eval-weight}) demonstrated
 that decisions are independent of the weight vector, rendering
 this a cosmetic rather than functional limitation.
 The system currently supports only 16S rRNA amplicon data.
-The evaluation covers four datasets and seven scenarios; a
+The evaluation covers four datasets and twelve scenarios; a
 comprehensive validation would require additional experimental
 designs (longitudinal, case-control with confounders) and
 comparison with independent human experts rather than a
 literature-derived protocol.
+
+From an engineering perspective, the system lacks several
+features expected of modern bioinformatics infrastructure:
+(a)~no workflow engine integration (Nextflow, Snakemake), relying
+instead on sequential Python execution without formal DAG
+management or checkpointing;
+(b)~limited scalability, with no native HPC or cloud parallelism;
+(c)~containerization is available (Dockerfile provided) but not
+yet tested across HPC environments (Singularity, Apptainer);
+(d)~dependency versions are pinned in the Dockerfile but not in a
+lockfile for bare-metal installations.
+These are engineering gaps, not algorithmic ones: the DecisionEngine
+and DataInspector are portable Python modules that could be embedded
+in a Nextflow workflow with minimal modification.
+We provide a YAML configuration file and structured JSON-Lines
+tracing as steps toward production readiness.
 
 % ======================================================================
 \section{Discussion}

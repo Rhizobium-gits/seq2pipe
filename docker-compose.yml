@@ -1,0 +1,31 @@
+# seq2pipe v2.0.0 docker-compose
+#
+# Usage:
+#   docker-compose run seq2pipe --fastq-dir /data/fastq --ai-driven \
+#     --metadata /data/metadata.tsv --research-question "Your question"
+#
+# GPU support:
+#   docker-compose --profile gpu run seq2pipe-gpu ...
+
+services:
+  seq2pipe:
+    build: .
+    image: seq2pipe:2.0.0
+    volumes:
+      - ${DATA_DIR:-~/data}:/data
+      - ${OUTPUT_DIR:-~/seq2pipe_results}:/results
+    environment:
+      - SEQ2PIPE_MODEL=${SEQ2PIPE_MODEL:-qwen2.5-coder:7b}
+      - SEQ2PIPE_THREADS=${SEQ2PIPE_THREADS:-4}
+
+  seq2pipe-gpu:
+    extends:
+      service: seq2pipe
+    profiles: ["gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

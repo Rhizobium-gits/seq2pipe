@@ -525,6 +525,59 @@ Python 判断木の出力:
 
 ---
 
+### Docker で再現性保証
+
+```bash
+# ビルド
+docker build -t seq2pipe:2.0.0 .
+
+# 実行
+docker run -v ~/data:/data -v ~/results:/results \
+  seq2pipe:2.0.0 --fastq-dir /data --ai-driven \
+  --metadata /data/metadata.tsv --research-question "Your question"
+
+# GPU 付き（Ollama 高速化）
+docker run --gpus all -v ~/data:/data seq2pipe:2.0.0 --fastq-dir /data --ai-driven
+
+# docker-compose
+DATA_DIR=~/data docker-compose run seq2pipe --fastq-dir /data --ai-driven
+```
+
+### YAML 設定ファイル
+
+全パラメータを `config.yaml` で管理。CLI フラグ > YAML > 環境変数 > デフォルト値 の優先順位。
+
+```yaml
+# config.yaml
+pipeline:
+  mode: "ai-driven"
+  n_threads: 4
+dada2:
+  trunc_len_f: auto    # リード長から自動検出
+llm:
+  model: "qwen2.5-coder:7b"
+  max_retries: 3
+ai_driven:
+  replan_interval: 4
+  max_investigations: 8
+logging:
+  level: "INFO"
+  log_eval_scores: true
+  log_decisions: true
+```
+
+### 構造化ロギング（トレーシング）
+
+各ステップの判断・スコア・エラーを JSON Lines で記録:
+
+```jsonl
+{"timestamp":"2026-03-29T00:01:23Z","event":"step_start","step":1,"key":"alpha_boxplot"}
+{"timestamp":"2026-03-29T00:01:45Z","event":"eval_score","step":1,"composite":0.535,"axes":{"statistical_significance":0.79,...}}
+{"timestamp":"2026-03-29T00:01:46Z","event":"decision","step":4,"skip":["beta_nmds"],"add":["lefse"],"reasoning":["beta ns"]}
+```
+
+---
+
 ### DADA2 パラメータの自動検出
 
 `--auto` フラグ使用時、リード長から DADA2 パラメータを自動検出します:
@@ -856,7 +909,13 @@ seq2pipe/
 ├── microbiome_knowledge.py  # ドメイン知識（メソッド選択・検出力推定）
 ├── experiment_knowledge.py  # 実験系文献知識（抗生物質・食事・疾患モデル等）
 ├── experiment_analyzer.py   # メタデータ → 実験デザイン自動解析
+├── config.yaml         # YAML 設定ファイル（全パラメータ集約）
+├── config_loader.py    # Config 駆動: CLI > YAML > ENV > default
+├── trace_logger.py     # 構造化ロギング（JSON Lines トレーシング）
+├── code_templates.py   # LLM コード生成の validated preamble
 ├── report_generator.py # HTML / LaTeX+PDF レポート生成
+├── Dockerfile          # 再現性保証コンテナ（QIIME2 + Ollama + seq2pipe）
+├── docker-compose.yml  # GPU 対応 compose 設定
 ├── chat_agent.py       # 自律解析セッション管理（レガシー）
 ├── Figure/             # デモ出力図（実データ解析結果 29 図）
 │   ├── fig01_dada2_stats.png 〜 fig29_asv_overlap.png

@@ -1,0 +1,72 @@
+# seq2pipe configuration
+# All parameters can be overridden via CLI flags or environment variables.
+# CLI flags take precedence over this file.
+
+# ── Pipeline ──────────────────────────────────────────
+pipeline:
+  mode: "ai-driven"          # auto | manual-auto | ai-driven | chat
+  fastq_dir: ""              # required: path to FASTQ directory
+  output_dir: ""             # default: ~/seq2pipe_results/<timestamp>
+  paired_end: true
+  n_threads: 4
+
+# ── DADA2 Parameters ─────────────────────────────────
+# Set to "auto" for automatic detection from read lengths.
+dada2:
+  trim_left_f: auto
+  trim_left_r: auto
+  trunc_len_f: auto
+  trunc_len_r: auto
+  sampling_depth: auto
+
+# ── Metadata & Research ──────────────────────────────
+metadata:
+  path: ""                   # TSV file path
+  group_column: ""           # auto-detected if empty
+  research_question: ""
+
+# ── Classifier ───────────────────────────────────────
+taxonomy:
+  classifier_path: ""        # SILVA 138 .qza; auto-searched if empty
+
+# ── LLM ──────────────────────────────────────────────
+llm:
+  model: "qwen2.5-coder:7b"
+  endpoint: "http://localhost:11434"
+  max_retries: 3
+  temperature: 0.1
+
+# ── AI-Driven Mode ───────────────────────────────────
+ai_driven:
+  replan_interval: 4         # re-evaluate every N steps
+  max_investigations: 8      # cap on LLM-generated investigations
+  novelty_trigger: 0.7       # composite score threshold for forced replan
+
+# ── EvalMediator ─────────────────────────────────────
+# Weights are decorative (proven invariant to decisions).
+# Listed for transparency; changing them does NOT affect skip/add logic.
+eval_weights:
+  statistical_significance: 0.20
+  biological_relevance: 0.18
+  actionability: 0.15
+  novelty: 0.12
+  data_quality: 0.10
+  effect_magnitude: 0.10
+  confidence: 0.08
+  reproducibility: 0.07
+
+# ── Output ───────────────────────────────────────────
+output:
+  figure_dpi: 150
+  figure_format: "png"
+  generate_report: true
+  report_format: "html"      # html | pdf
+
+# ── Logging ──────────────────────────────────────────
+logging:
+  level: "INFO"              # DEBUG | INFO | WARNING | ERROR
+  file: ""                   # empty = stdout only
+  include_timestamps: true
+  log_eval_scores: true      # log 8-axis scores after each step
+  log_decisions: true        # log DecisionEngine skip/add actions
+  save_eval_json: true       # save eval_scores.json at end
