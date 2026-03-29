@@ -65,33 +65,30 @@ made by the deterministic DecisionEngine without LLM involvement.
 Under total LLM failure, the decision-making loop continues to
 operate correctly, though individual analysis steps cannot execute.
 
-We evaluated the system on 12 scenarios derived from four public
-16S rRNA datasets (Moving Pictures, Atacama Soil, Gneiss IBD, and
-FMT; 34--121 samples, 2--4 grouping variables each).
-Across 2,520 per-step decisions from real datasets (12 scenarios,
-120 runs) and 210,000 decisions from 10,000 synthetic data
-characteristic vectors, the DecisionEngine achieved a mean accuracy
-of 70.6\% (range 52--100\%) vs 53.8\% for a static pipeline,
-a mean improvement of +16.8~pp.
-In 75.5\% of scenarios the engine improved accuracy; in 24.5\% it
-matched the static pipeline; in \textbf{zero cases} did it perform
-worse.
-\textbf{Zero false-negative skips occurred across all 210,000
-decisions.}
-Weight invariance was proven by exhaustive evaluation:
-10,000 random weight configurations $\times$ 12 real-data scenarios
-(2,520,000 full EvalMediator executions over 6.4~hours) produced
-identical decisions with $\sigma = 0$, confirming that skip/add
-logic is mathematically independent of the weight vector
-$\mathbf{w} \in \Delta^7$.
-Statistical tests implemented in pure Python agreed with scipy on
-significance classification in 99--100\% of Monte Carlo trials, and
-all seven established biological conclusions of the Moving Pictures
-dataset were confirmed by the system's outputs.
-Reproducibility was absolute: 30 independent runs produced
-identical decisions and scores.
-The primary bottleneck is the 7B model's code generation capability
-(54\% success on predefined tasks, 6\% on novel investigations),
+We evaluated the system on 252 independent per-step decisions
+across 12 scenarios from four public 16S rRNA datasets
+(Moving Pictures, Atacama Soil, Gneiss IBD, FMT; 34--121 samples).
+When taxonomy data is available, the DecisionEngine improves
+expert agreement from 61\% to 95\% (mean +31~pp) by correctly
+skipping 5--10 unnecessary follow-ups.
+When taxonomy is absent, the engine cannot evaluate
+differential-abundance-dependent steps and matches the static
+pipeline at 52\%.
+The engine produces zero false-negative skips by construction:
+it only removes steps from the plan, never adds steps that the
+expert protocol does not already include.
+This conservative design ensures safety but limits the engine's
+ability to discover analyses that were not initially planned.
+Weight invariance was verified over 10,221 configurations:
+decisions depend solely on raw $p$-values and effect sizes, not on
+the 8-axis score weights.
+Determinism was confirmed over 120 runs ($\sigma = 0$).
+Pure-Python statistical tests agreed with scipy on significance
+classification in 99--100\% of Monte Carlo trials, and all seven
+established biological conclusions of the Moving Pictures dataset
+were confirmed.
+The primary bottleneck is the 7B model's code generation
+(47\% success on registry tasks, 25\% on investigations),
 with \texttt{NameError} (60\%) and \texttt{KeyError} (27\%) as
 dominant failure modes.
 
@@ -857,20 +854,33 @@ making agreement necessary but not sufficient for validation.
 
 \paragraph{Evaluation levels.}
 We conducted three levels of evaluation, each answering a different
-question:
-\begin{enumerate}
-  \item \textbf{Real-data evaluation} (Section~\ref{sec:eval-real}):
-    12 scenarios $\times$ 10 runs = 2,520 decisions.
-    \textit{Does the engine make correct decisions on actual microbiome data?}
-  \item \textbf{Synthetic generalization} (Section~\ref{sec:eval-synth}):
-    10,000 random data vectors $\times$ 21 steps = 210,000 decisions.
-    \textit{Does accuracy generalize beyond the four available datasets?}
-  \item \textbf{Weight invariance} (Section~\ref{sec:eval-weight}):
-    10,000 random weight configurations $\times$ 12 real scenarios = 2,520,000 full EvalMediator executions.
-    \textit{Do the 8-axis weights affect decisions?}
-\end{enumerate}
+question.
+It is important to distinguish \textit{independent decisions}
+(unique scenario $\times$ step combinations) from
+\textit{repeated evaluations} (re-runs for determinism and
+robustness verification):
 
-In total, 2,732,520 per-step decision evaluations were performed.
+\begin{enumerate}
+  \item \textbf{Real-data accuracy} (Section~\ref{sec:eval-real}):
+    12 scenarios $\times$ 21 steps = \textbf{252 independent
+    decisions} (repeated 10 times to verify determinism).
+    Of these, 7 steps per scenario are ``always execute'' and
+    provide a 33\% accuracy baseline; the engine's effective
+    contribution is on the remaining 14 decision-bearing steps.
+
+  \item \textbf{Synthetic generalization} (Section~\ref{sec:eval-synth}):
+    10,000 random data characteristic vectors $\times$ 21 steps
+    = 210,000 decisions.
+    These test whether the engine's \textit{logic} generalizes, but
+    because the expert protocol and engine encode the same domain
+    rules, high agreement is a necessary rather than surprising
+    outcome.
+
+  \item \textbf{Weight invariance} (Section~\ref{sec:eval-weight}):
+    10,221 weight configurations $\times$ 12 scenarios.
+    This does not measure accuracy but proves that the 8-axis
+    weights are inert with respect to skip/add decisions.
+\end{enumerate}
 
 \subsection{Real-Data Decision Accuracy}
 \label{sec:eval-real}
@@ -882,7 +892,9 @@ Each cell represents 10 identical runs (standard deviation $= 0$).
 
 \begin{table}[t]
 \centering
-\caption{Decision accuracy: 12 scenarios, 4 datasets, 2,520 decisions (std $= 0$).}
+\caption{Decision accuracy: 12 scenarios, 252 independent decisions
+(repeated 10$\times$, std $= 0$).
+7 of 21 steps are ``always execute'' (33\% baseline).}
 \label{tab:comparison}
 \footnotesize
 \begin{tabular}{@{}lcccccccccccc@{}}
@@ -905,15 +917,42 @@ Wrong skip & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \t
 
 Three patterns emerge.
 First, when all data features are present and significant
-(MP-body), the engine matches the static pipeline at 95\%---no
-over-optimization occurs.
+(MP-body), the engine matches the static pipeline at 95\%.
+The engine does not over-optimize: when all analyses are
+appropriate, it keeps all of them.
 Second, when group differences are absent or weak (MP-subject,
 GN-sex, FMT-gender), the engine produces the largest gains (+33 to
 +48~pp) by correctly skipping 5--10 unnecessary follow-ups.
-Third, without taxonomy data (Atacama, FMT-treatment/type),
-improvements are limited to the alpha/beta branches, yielding a
-52\% floor.
-Across all 2,520 decisions: \textbf{zero false-negative skips}.
+These are the scenarios where the engine provides genuine value:
+\textit{noise reduction when the data does not support the
+analysis}.
+Third, without taxonomy data (Atacama, FMT-treatment/type), the
+engine cannot evaluate differential-abundance-dependent steps,
+yielding a 52\% floor identical to the static pipeline.
+
+\paragraph{Interpreting zero false-negative skips.}
+The engine produced zero false negatives across all 252
+independent decisions.
+However, this result is \textit{by construction}: the
+DecisionEngine only \textit{removes} steps from the plan; it never
+adds steps that were not already planned.
+This conservative design ensures that no potentially informative
+analysis is discarded, but it also means the engine cannot discover
+analyses that were not in the initial plan.
+The zero false-negative rate should be understood as a safety
+property of the architecture, not as evidence of high precision in
+a traditional classification sense.
+
+\paragraph{Baseline correction.}
+Of the 21 steps, 7 are unconditionally executed regardless of data
+(quality control, basic plots, publication composite), providing a
+33\% accuracy floor.
+The engine's effective contribution operates on the remaining 14
+decision-bearing steps.
+Among scenarios with taxonomy data (MP-body, MP-subject, MP-year,
+MP-antibiotic), the engine correctly classifies 13--14 of these
+14 steps (93--100\%); without taxonomy, it correctly classifies
+only the alpha/beta-dependent subset (2--4 of 14).
 
 \begin{figure}[t]
 \centering
@@ -926,26 +965,30 @@ Across all 2,520 decisions: \textbf{zero false-negative skips}.
 \label{fig:comparison}
 \end{figure}
 
-\subsection{Generalizability: 10,000 Synthetic Scenarios}
+\subsection{Synthetic Generalization}
 \label{sec:eval-synth}
 
-To evaluate beyond the four available datasets, we sampled 10,000
-random data characteristic vectors
-$\mathbf{x} \in \{0,1\}^8 \times \mathbb{Z}_+$
-(independently sampling each binary feature: $\alpha$ significance,
-$\beta$ significance, large effect size, strong separation,
-differential taxa presence, high sparsity, high CV, plus integer
-sample size and differential genera count).
-For each vector, we computed the DecisionEngine's and expert's
-decisions for all 21 steps (210,000 decisions total).
+To test whether the engine's logic generalizes beyond the four
+available datasets, we sampled 10,000 random data characteristic
+vectors and computed both engine and expert decisions for each.
+
+\paragraph{Caveat.}
+Because the expert protocol and the DecisionEngine encode
+\textit{the same domain rules} (both derived from the same
+literature), high agreement in this experiment is a
+\textit{consistency check}, not an independent validation.
+The experiment confirms that the engine's logic covers the data
+feature space without edge-case failures, but it does not prove
+that the rules themselves are optimal.
 
 Results (Figure~\ref{fig:massive}):
-mean adaptive accuracy = 70.6\% $\pm$ 12.6\% (range 52--100\%);
-75.5\% of scenarios improved over static (+16.8~pp mean);
-24.5\% showed no change;
-\textbf{zero scenarios degraded} (the engine is provably
-never-worse-than-static).
-False-negative rate: 0/210,000 (0.0000\%).
+mean accuracy = 70.6\% $\pm$ 12.6\% (range 52--100\%);
+75.5\% of scenarios showed improvement over the static pipeline;
+24.5\% showed no change (all signals present);
+zero scenarios degraded.
+The never-worse-than-static property holds because the engine
+only removes steps---it cannot add a step that the static pipeline
+would not already execute.
 
 By scenario type, the engine's value is inversely proportional to
 signal strength:
@@ -1248,27 +1291,33 @@ We presented \seqpipe, a closed-loop system for adaptive microbiome
 analysis that architecturally separates \textit{what to analyze}
 (deterministic, LLM-free) from \textit{how to execute the analysis}
 (LLM-assisted code generation).
-Evaluation on seven scenarios from four public datasets
-demonstrated that the deterministic DecisionEngine achieves up to
-95\% expert agreement with zero false-negative skips and absolute
-reproducibility.
-The LLM remains essential for code generation (54\% success on
-predefined tasks) and is the system's primary bottleneck: creative
-investigations succeed at only 6\%, and the dominant error modes
-(\texttt{NameError}, \texttt{KeyError}) reflect the 7B model's
-limited capacity for code synthesis rather than reasoning.
 
-The core design principle is that \textbf{workflow decisions should
-be grounded in data, not in language model outputs}, while
-acknowledging that \textbf{analysis execution currently requires
-the LLM}.
-This separation yields a system where decision correctness can be
-validated independently of code generation quality---an architectural
-property that enables targeted improvement of either component
-without affecting the other.
-As local LLMs scale to 30B+ parameters and template-based code
-generation matures, we expect the execution bottleneck to narrow,
-bringing the system closer to fully autonomous operation.
+Across 252 independent per-step decisions from 12 real-data
+scenarios, the DecisionEngine improved expert agreement from 61\%
+to 95\% (mean +31~pp) when taxonomy data was available, while
+matching the static pipeline at 52\% when taxonomy was absent.
+Zero false-negative skips occurred, though this is a structural
+property of the conservative skip-only architecture rather than
+evidence of high precision in a traditional sense.
+The engine's primary value is \textit{noise reduction}: correctly
+eliminating analyses that the data does not support.
+
+The LLM remains essential for code generation (47\% success on
+registry tasks) and is the system's bottleneck.
+The 8-axis score weights were proven invariant to decisions
+over 10,221 configurations, meaning the engine's behavior is
+fully determined by raw statistical values, not by tunable
+hyperparameters.
+
+We acknowledge several honest limitations: the expert ground truth
+encodes the same domain rules as the engine (agreement is necessary
+but not independently validated); the system lacks workflow engine
+integration (Nextflow/Snakemake); and decision rules do not evolve
+within a run.
+Despite these limitations, the architectural separation of
+deterministic reasoning from stochastic code generation provides a
+template for building auditable, reproducible adaptive analysis
+systems in other domains.
 
 % ======================================================================
 \bibliographystyle{plainnat}
