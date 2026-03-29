@@ -135,22 +135,48 @@ Auto-WEKA~\citep{autoweka}とAuto-sklearn~\citep{autosklearn}はベイズ最適�
 Data Interpreter~\citep{hong2024data}やChatGPT Advanced Data Analysisは自然言語プロンプトからコードを生成・実行する。これらのシステムはLLMに判断とコード生成の双方を完全に依存しており、(a)~中間結果のドメイン特化型定量評価、(b)~文献基盤の判断ヒューリスティクス、(c)~LLM障害時の確定的フォールバックが欠如している。\seqpipe はアーキテクチャ分離によりこの3つのギャップに対処する。
 
 % ======================================================================
-\section{概念的フレームワーク}
+\section{概念的フレームワーク：自動と自律の区別}
 \label{sec:concept}
 % ======================================================================
 
-\begin{definition}[解析状態]
-反復$t$における状態$S_t = (D, H_t, P_t, R_t)$は、不変のデータセット$D$、蓄積された発見$H_t$、順序付き計画$P_t$、完了結果$R_t$から成る。
+\emph{自動（automated）}と\emph{自律（autonomous）}の区別は本研究の中心的問題である。
+
+\subsection{パイプライン知性の3段階}
+
+\begin{definition}[静的パイプライン（Level 0）]
+実行計画$P$が実行前に固定。$P_{t+1} = P_t \setminus \{s_t\}$が常に成立し、結果に関わらず変更されない。
 \end{definition}
 
-\begin{definition}[閉ループ解析システム]
-ステップ$s_t \in P_t$を実行し結果$r_t$を観測した後に
-$H_{t+1} = H_t \cup \mathrm{interpret}(r_t, D)$、
-$P_{t+1} = \mathrm{decide}(H_{t+1}, P_t, D)$
-を更新するシステムを閉ループと呼ぶ。
-$\mathrm{interpret}$はデータファイルから直接定量的発見を抽出し（テキスト要約からではなく）、$\mathrm{decide}$はステップの追加・削除・並べ替えにより計画を修正する。
-静的パイプラインでは常に$P_{t+1} = P_t \setminus \{s_t\}$であるが、\seqpipe は$H_{t+1}$の定量的性質に依存する非自明な$\mathrm{decide}$を実装する。
+\begin{definition}[自動パイプライン（Level 1）]
+事前定義の条件規則を持つ：$P_{t+1} = f(P_t, \phi)$。条件$\phi$は実行前に定義され、中間結果の\emph{内容}に依存しない（例：「ファイルが存在すればステップを実行」）。
 \end{definition}
+
+\begin{definition}[自律パイプライン（Level 2）]
+中間結果の\emph{内容を検査}し、文脈依存の判断を行う：
+$H_{t+1} = H_t \cup \mathrm{interpret}(r_t, D)$、
+$P_{t+1} = \mathrm{decide}(H_{t+1}, P_t, D)$。
+$\mathrm{interpret}$は実データから統計的特徴（有意性、効果量、fold change）を計算し、$\mathrm{decide}$はそれらの特徴に基づいて計画を修正する。Level 1との本質的差異は、\emph{データそのもの}が分岐を決定することである。
+\end{definition}
+
+\subsection{\seqpipe の位置づけとその限界}
+
+\seqpipe はLevel 2で動作するが、以下の限定がある：
+\begin{itemize}
+  \item \textbf{知覚において自律的}：DataInspectorが実行時にデータから統計的特徴ベクトル$\mathbf{x} = (p_\alpha, d_\alpha, p_\beta, \mathrm{ratio}, \mathrm{fc}_{\max}, \ldots)$を計算する。同じコードが異なるデータで異なるベクトルを生成する。
+  \item \textbf{判断において自律的}：DecisionEngineはこの実行時計算された特徴に基づいて分岐する。分岐構造（decision graph）自体は固定だが、\emph{グラフ内の経路}はデータが決定する。
+  \item \textbf{規則進化において非自律的}：判断規則は実行内で変化しない。人間なら「rarefactionでartifactが確認された → alpha全体の信頼性を再評価」と推論するが、\seqpipe はしない。これは今後の課題である。
+\end{itemize}
+
+\subsection{判断グラフ}
+
+意思決定プロセスを有向非循環グラフ$G = (V, E)$として形式化する（図\ref{fig:decision-graph}）。各内部ノード$v \in V$は特徴ベクトル$\mathbf{x}$上の述語を検査する：$v: \mathbf{x} \mapsto \{\textsc{true}, \textsc{false}\}$。葉ノードは行動：$\textsc{skip}(s)$、$\textsc{add}(s)$、$\textsc{keep}(s)$。
+
+判断関数全体は：
+$\mathrm{decide}(H_t, P_t, D) = \{a_s \mid s \in P_t,\; a_s = G(\mathbf{x}(H_t, D), s)\}$
+
+\textbf{自律性の根拠}：(1)~述語が検査する特徴は実行時に計算される（事前指定でない）。(2)~特徴ベクトルは各ステップ後に更新される（発見の蓄積）。(3)~4ステップごとに全データを再検査しグラフを再走査する（閉ループ再評価）。
+
+\textbf{限界}：判断\emph{規則}自体は静的であり、実行内で進化しない。完全自律システムは蓄積経験に基づいて$G$自体を更新する——これは将来の研究方向である。
 
 % ======================================================================
 \section{システムアーキテクチャ}

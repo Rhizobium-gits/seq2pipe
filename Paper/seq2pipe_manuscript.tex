@@ -268,32 +268,232 @@ code generation, lacking:
 \seqpipe\ addresses all three gaps through architectural separation.
 
 % ======================================================================
-\section{Conceptual Framework}
+\section{Conceptual Framework: Automation vs Autonomy}
 \label{sec:concept}
 % ======================================================================
 
-We formalize the adaptive analysis loop as follows.
+A critical distinction exists between \emph{automated} and
+\emph{autonomous} analysis systems, which we formalize here.
 
-\begin{definition}[Analytical State]
-At iteration $t$, the state $S_t = (D, H_t, P_t, R_t)$ comprises
-the immutable dataset $D$, accumulated findings $H_t$, the ordered
-plan $P_t$, and completed results $R_t$.
+\subsection{Three Levels of Pipeline Intelligence}
+
+\begin{definition}[Static Pipeline (Level 0)]
+A system where the execution plan $P$ is fixed before runtime.
+$P_{t+1} = P_t \setminus \{s_t\}$ always, regardless of results.
+Example: a QIIME2 workflow runs DADA2, taxonomy, diversity, and
+visualization in fixed order.
 \end{definition}
 
-\begin{definition}[Closed-Loop Analytical System]
-A system is \emph{closed-loop} if, after executing step
-$s_t \in P_t$ and observing result $r_t$, it updates:
+\begin{definition}[Automated Pipeline (Level 1)]
+A system with predefined conditional rules:
+$P_{t+1} = f(P_t, \phi)$ where $\phi$ is a set of
+\emph{pre-specified} conditions (e.g., ``if file X exists, run
+step Y'').
+The conditions $\phi$ are defined before runtime and do not depend
+on the \emph{content} of intermediate results.
+Example: Snakemake with conditional rules.
+\end{definition}
+
+\begin{definition}[Autonomous Pipeline (Level 2)]
+A system that \emph{inspects the content} of intermediate results
+and makes context-dependent decisions:
 \begin{align}
-  H_{t+1} &= H_t \cup \mathrm{interpret}(r_t, D) \\
+  H_{t+1} &= H_t \cup \mathrm{interpret}(r_t, D)
+  \label{eq:interpret} \\
   P_{t+1} &= \mathrm{decide}(H_{t+1}, P_t, D)
+  \label{eq:decide}
 \end{align}
-where $\mathrm{interpret}$ extracts quantitative findings directly
-from data files (not from textual summaries) and $\mathrm{decide}$
-modifies the plan by adding, removing, or reordering steps.
-In a static pipeline, $P_{t+1} = P_t \setminus \{s_t\}$ always;
-\seqpipe\ implements a non-trivial $\mathrm{decide}$ that depends
-on quantitative properties of $H_{t+1}$.
+where $\mathrm{interpret}$ computes quantitative features
+(statistical significance, effect sizes, fold changes) from the
+actual data, and $\mathrm{decide}$ uses those features to modify
+the plan.
+The key difference from Level~1 is that the \emph{data itself}
+determines the branching, not pre-specified file-existence
+conditions.
 \end{definition}
+
+\subsection{Where \seqpipe\ Sits---and Its Limits}
+
+\seqpipe\ operates at Level~2 with the following qualification:
+
+\begin{itemize}
+  \item \textbf{Autonomous in perception}: DataInspector reads raw
+        data files and computes statistical features that were not
+        known before runtime. The same code on different data
+        produces different feature vectors
+        $\mathbf{x} = (p_\alpha, d_\alpha, p_\beta,
+        \mathrm{ratio}, \mathrm{fc}_{\max}, \ldots)$.
+  \item \textbf{Autonomous in decision}: DecisionEngine branches on
+        these runtime-computed features. The branching structure
+        itself is fixed (a decision graph, formalized below), but
+        the \emph{path through the graph} is determined by data.
+  \item \textbf{Not autonomous in rule evolution}: The decision
+        rules do not change across iterations. A human
+        bioinformatician might say ``I tried rarefaction and it
+        confirmed the artifact, so I now \emph{know} the alpha
+        result is unreliable and will reinterpret everything.''
+        \seqpipe\ does not update its rules based on accumulated
+        experience within a run.
+\end{itemize}
+
+\subsection{The Decision Graph}
+
+We formalize the decision-making process as a directed acyclic
+graph $G = (V, E)$ where nodes $V$ represent observable data
+conditions and edges $E$ represent transitions to actions
+(Figure~\ref{fig:decision-graph}).
+
+Each internal node $v \in V$ tests a quantitative predicate on the
+feature vector $\mathbf{x}$:
+\begin{equation}
+  v: \mathbf{x} \mapsto \{\textsc{true}, \textsc{false}\}
+\end{equation}
+
+For example, $v_\beta: p_\beta < 0.05$ tests whether PERMANOVA is
+significant.
+Leaf nodes are actions: $\textsc{skip}(s)$, $\textsc{add}(s)$, or
+$\textsc{keep}(s)$ for step $s$.
+
+The complete decision function is:
+\begin{equation}
+  \mathrm{decide}(H_t, P_t, D) =
+  \bigl\{
+    a_s \,\big|\, s \in P_t,\;
+    a_s = G(\mathbf{x}(H_t, D), s)
+  \bigr\}
+\end{equation}
+where $\mathbf{x}(H_t, D)$ is the feature vector computed by
+DataInspector from the accumulated findings and raw data.
+
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  cond/.style={draw, diamond, aspect=2, inner sep=1pt, font=\scriptsize,
+               fill=yellow!15, align=center, minimum width=1.8cm},
+  act/.style={draw, rounded corners=2pt, font=\scriptsize, fill=#1,
+              minimum height=0.45cm, minimum width=1.6cm, align=center},
+  act/.default={green!15},
+  skip/.style={act=red!10},
+  arr/.style={-{Stealth[length=1.8mm]}, semithick},
+  lab/.style={font=\tiny, midway},
+  phase/.style={font=\scriptsize\bfseries, text=gray!60},
+]
+
+% ── Feature extraction (left) ──
+\node[draw, rounded corners, fill=blue!10, minimum width=2.5cm, minimum height=1.2cm,
+      font=\scriptsize, align=center] (data) at (-6, -1.5)
+  {DataInspector\\$\mathbf{x}(H_t, D)$};
+\node[phase] at (-6, 0) {Layer 1: Perception};
+
+% ── Alpha branch ──
+\node[phase] at (-3, 0) {$\alpha$ branch};
+\node[cond] (a1) at (-3, -1) {$p_\alpha < 0.05$};
+\node[cond] (a2) at (-1.5, -2.2) {$d_\alpha > 0.5$};
+\node[act] (a3) at (-2.8, -3.4) {+effect\_size\\+rarefaction};
+\node[act] (a4) at (-0.3, -3.4) {+rarefaction};
+\node[skip] (a5) at (-4.5, -2.2) {\textsc{skip}\\$\alpha$ follow-ups};
+
+\draw[arr] (data) -- (a1);
+\draw[arr] (a1) -- node[lab, right] {Y} (a2);
+\draw[arr] (a1) -- node[lab, above] {N} (a5);
+\draw[arr] (a2) -- node[lab, left] {Y} (a3);
+\draw[arr] (a2) -- node[lab, right] {N} (a4);
+
+% ── Beta branch ──
+\node[phase] at (2, 0) {$\beta$ branch};
+\node[cond] (b1) at (2, -1) {$p_\beta < 0.05$};
+\node[cond] (b2) at (3.5, -2.2) {ratio $> 2$};
+\node[act] (b3) at (2.2, -3.4) {+betadisper\\+NMDS};
+\node[act] (b4) at (4.8, -3.4) {+betadisper};
+\node[skip] (b5) at (0.5, -2.2) {\textsc{skip}\\all $\beta$};
+
+\draw[arr] (data.east) -- ++(1.5,0) |- (b1);
+\draw[arr] (b1) -- node[lab, right] {Y} (b2);
+\draw[arr] (b1) -- node[lab, above] {N} (b5);
+\draw[arr] (b2) -- node[lab, left] {Y} (b3);
+\draw[arr] (b2) -- node[lab, right] {N} (b4);
+
+% ── Taxonomy branch ──
+\node[phase] at (7, 0) {Taxonomy branch};
+\node[cond] (t1) at (7, -1) {$n_{\mathrm{diff}} \geq 5$};
+\node[act] (t2) at (5.8, -2.2) {+LEfSe\\+PICRUSt2};
+\node[cond] (t3) at (8.2, -2.2) {fc$>$50,\\abd$<$1\%};
+\node[act=orange!15] (t4) at (8.2, -3.4) {artifact\\warning};
+\node[act] (t5) at (6.5, -3.4) {\textsc{keep}};
+
+\draw[arr] (data.east) -- ++(4.5,0) |- (t1);
+\draw[arr] (t1) -- node[lab, left] {Y} (t2);
+\draw[arr] (t1) -- node[lab, right] {N} (t3);
+\draw[arr] (t3) -- node[lab, right] {Y} (t4);
+\draw[arr] (t3) -- node[lab, left] {N} (t5);
+
+% ── References ──
+\node[font=\tiny\itshape, text=gray] at (-3, -4.1) {Willis (2019)};
+\node[font=\tiny\itshape, text=gray] at (2, -4.1) {Anderson (2001)};
+\node[font=\tiny\itshape, text=gray] at (7, -4.1) {Gloor et al.\ (2017)};
+
+% ── Feedback arrow ──
+\draw[arr, dashed, gray, thick] (a3.south) -- ++(0,-0.5) -- ++(12,0) -- ++(0,4.5)
+  -- ++(-14,0) -- (data.north)
+  node[font=\tiny, pos=0.55, above] {execute $\to$ new $r_t$ $\to$ recompute $\mathbf{x}$};
+
+% Legend
+\node[font=\tiny, align=left] at (9.5, -1) {
+  \textcolor{yellow!60!black}{$\diamond$} = data condition\\
+  \textcolor{green!50!black}{$\square$} = add action\\
+  \textcolor{red!50!black}{$\square$} = skip action\\
+  \textcolor{orange!60!black}{$\square$} = warning\\
+  - - - = feedback loop
+};
+\end{tikzpicture}
+\caption{The Decision Graph $G = (V, E)$.
+Each diamond node tests a predicate on the runtime-computed feature
+vector $\mathbf{x}$.
+The path through the graph is determined by data---the same graph
+on different data produces different actions.
+The dashed feedback arrow shows the closed loop: after executing
+an action, new results $r_t$ are generated, $\mathbf{x}$ is
+recomputed, and the graph is re-traversed.
+Literature references anchor each branch to published methodology.}
+\label{fig:decision-graph}
+\end{figure*}
+
+\subsection{What Makes This Autonomous, Not Merely Automated}
+
+The distinction between \seqpipe\ and a conditional Snakemake
+workflow is threefold:
+
+\begin{enumerate}
+  \item \textbf{Feature computation at runtime.}
+    The predicates in $G$ test features ($p$-values, effect sizes,
+    fold changes) that are \emph{computed from the data during
+    execution}, not specified in advance.
+    A Snakemake rule ``if file exists'' tests a pre-known condition;
+    \seqpipe\ tests ``is $p_\beta < 0.05$'' where $p_\beta$ was
+    computed seconds earlier from a distance matrix.
+
+  \item \textbf{Accumulation of findings.}
+    The feature vector $\mathbf{x}$ is updated after each step
+    (Equation~\ref{eq:interpret}).
+    Step~$t$'s decision depends on what was found in
+    steps~$1, \ldots, t{-}1$.
+    For example, if both alpha and beta are non-significant, the
+    engine skips more aggressively than if only one is
+    non-significant.
+
+  \item \textbf{Closed-loop re-evaluation.}
+    The feedback arrow in Figure~\ref{fig:decision-graph} is not
+    metaphorical: every 4 steps (or on a novelty spike), the engine
+    re-inspects all data and re-evaluates the remaining plan.
+    An unexpected finding in step~8 can alter the plan for step~12.
+\end{enumerate}
+
+We acknowledge that the decision \emph{rules} in $G$ are static---
+they do not evolve within a run.
+A fully autonomous system would update $G$ itself based on
+accumulated experience (e.g., ``rarefaction confirmed the artifact,
+so I should lower my confidence in all alpha results'').
+This is a direction for future work.
 
 % ======================================================================
 \section{System Architecture}
