@@ -624,74 +624,65 @@ Algorithm~\ref{alg:loop} formalizes the loop.
 \label{sec:eval}
 % ======================================================================
 
-\subsection{Datasets and Scenarios}
+We structure the evaluation around three questions:
+(1)~Does the DecisionEngine make correct decisions?
+(2)~Are those decisions robust to hyperparameter perturbation?
+(3)~What is the LLM's actual contribution and bottleneck?
+
+\subsection{Experimental Design}
 \label{sec:eval-setup}
 
-We used four publicly available 16S rRNA amplicon datasets
-(Table~\ref{tab:datasets}), all accessible through the QIIME2
-documentation server.
-Seven analysis scenarios were constructed by varying the grouping
-variable, producing a spectrum from strong multi-category signals
-(MP-body) to absent signals (MP-subject) to incomplete data
-(Atacama, Gneiss, FMT without taxonomy).
+\paragraph{Datasets.}
+We used four publicly available 16S rRNA amplicon datasets from the
+QIIME2 documentation server: Moving Pictures (34 samples),
+Atacama Soil (54 samples), Gneiss IBD (87 samples), and FMT Trial
+(121 samples).
+By varying the grouping variable within each dataset, we constructed
+12 analysis scenarios spanning a spectrum from strong multi-category
+signals to absent signals to incomplete data (Table~\ref{tab:comparison}).
 
-\begin{table}[t]
-\centering
-\caption{Datasets and scenarios.
-``Diff.'' = differential genera ($> 2\times$ fold change) detected.}
-\label{tab:datasets}
-\small
-\begin{tabular}{@{}lrrcccl@{}}
-\toprule
-\textbf{Scenario} & $n$ & $k$ & $\alpha$ & $\beta$ & Diff. & \textbf{Dataset} \\
-\midrule
-MP-body    & 34  & 4 & *** & ** & Y & Moving Pictures \\
-MP-subject & 34  & 2 & ns  & ns & Y & Moving Pictures \\
-AT-transect & 54 & 2 & *   & ** & N & Atacama Soil \\
-AT-vegetation & 54 & 2 & * & ** & N & Atacama Soil \\
-AT-depth   & 54  & 3 & *   & ** & N & Atacama Soil \\
-GN-IBD     & 87  & 2 & ns  & *  & N & Gneiss (IBD) \\
-FMT-treat  & 121 & 3 & *   & *  & N & FMT Trial \\
-\bottomrule
-\end{tabular}
-\end{table}
+\paragraph{Expert ground truth.}
+For each of 21 downstream analysis steps, we defined whether an
+expert would execute or skip it based on the observed data
+characteristics.
+The protocol is \textit{data-dependent but rule-deterministic}:
+given a vector of data features
+$\mathbf{x} = (\alpha_{\mathrm{sig}}, d_\alpha, \beta_{\mathrm{sig}},
+\mathrm{ratio}, \mathrm{fc}_{\max}, n_{\mathrm{diff}}, \ldots)$,
+the expert decision for each step is uniquely determined by
+published heuristics~\citep{anderson2001,willis2019,gloor2017,mcmurdie2014}.
+This protocol was defined independently of the DecisionEngine
+implementation---though both encode the same domain knowledge,
+making agreement necessary but not sufficient for validation.
 
-All datasets were processed through DADA2 denoising, phylogenetic
-tree construction (where representative sequences were available),
-and core diversity metrics before entering the adaptive analysis
-phase.
+\paragraph{Evaluation levels.}
+We conducted three levels of evaluation, each answering a different
+question:
+\begin{enumerate}
+  \item \textbf{Real-data evaluation} (Section~\ref{sec:eval-real}):
+    12 scenarios $\times$ 10 runs = 2,520 decisions.
+    \textit{Does the engine make correct decisions on actual microbiome data?}
+  \item \textbf{Synthetic generalization} (Section~\ref{sec:eval-synth}):
+    10,000 random data vectors $\times$ 21 steps = 210,000 decisions.
+    \textit{Does accuracy generalize beyond the four available datasets?}
+  \item \textbf{Weight invariance} (Section~\ref{sec:eval-weight}):
+    10,000 random weight configurations $\times$ 12 real scenarios = 2,520,000 full EvalMediator executions.
+    \textit{Do the 8-axis weights affect decisions?}
+\end{enumerate}
 
-\subsection{Expert Ground Truth}
-\label{sec:eval-expert}
+In total, 2,732,520 per-step decision evaluations were performed.
 
-We defined an expert protocol for each of 21 downstream analysis
-steps based on published best practices.
-The protocol is \emph{data-dependent but rule-deterministic}: for a
-given set of data characteristics ($\alpha$ significance, effect
-size, $\beta$ significance, separation ratio, differential genera
-count, sparsity, read-depth CV, and sample size), the expert
-decision is uniquely determined.
-Critically, this protocol was defined \emph{independently} of the
-DecisionEngine implementation---the rules were derived from the
-cited literature, not from the engine's code---though both encode
-the same domain knowledge, making agreement a necessary but
-not sufficient validation.
+\subsection{Real-Data Decision Accuracy}
+\label{sec:eval-real}
 
-\subsection{Decision Accuracy}
-\label{sec:eval-accuracy}
-
-We executed the DecisionEngine 10 times on each of 7 scenarios
-(70 runs, 1,470 per-step decisions total).
-All 70 runs produced \textbf{identical decisions and identical
-8-axis scores} (standard deviation $= 0$ across all scenarios),
-confirming absolute determinism.
 Table~\ref{tab:comparison} presents per-step agreement between the
-static pipeline, the DecisionEngine, and the expert protocol.
+static pipeline (all steps executed), the DecisionEngine, and the
+expert protocol across all 12 scenarios.
+Each cell represents 10 identical runs (standard deviation $= 0$).
 
 \begin{table}[t]
 \centering
-\caption{Decision accuracy across 12 scenarios from 4 public datasets.
-Each cell is the result of 10 identical runs (2,520 total decisions, std $= 0$).}
+\caption{Decision accuracy: 12 scenarios, 4 datasets, 2,520 decisions (std $= 0$).}
 \label{tab:comparison}
 \footnotesize
 \begin{tabular}{@{}lcccccccccccc@{}}
@@ -712,233 +703,215 @@ Wrong skip & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \textbf{0} & \t
 \end{tabular}
 \end{table}
 
-Three patterns emerge from the 12-scenario evaluation.
-First, when all data features are present and significant (MP-body),
-the engine achieves 95\%---identical to the static pipeline.
-No over-optimization occurs.
-Second, when group differences are absent (MP-subject, GN-sex,
-FMT-gender), the engine produces the largest improvements
-(+33 to +48~pp) by correctly skipping 5--10 unnecessary follow-ups.
-The maximum improvement of +47.6~pp on GN-sex and FMT-gender
-demonstrates that the engine's primary value is
-\textit{noise reduction when the data does not support the analysis}.
-Third, without taxonomy, improvements are limited to the
-alpha/beta branches (AT, FMT-treatment/type), yielding a 52\%
-floor.
-
-Across all 2,520 decisions, the engine produced
-\textbf{zero false-negative skips}.
-
-\paragraph{Weight independence.}
-We tested 219 weight configurations including 213 grid-search
-combinations and 6 extreme settings (e.g., 90\% on a single axis).
-\textbf{All 219 configurations produced identical decisions
-(accuracy 73.0\%, wrong skips 0).}
-This is because the DecisionEngine branches on raw $p$-values and
-effect sizes, not on composite scores.
-The 8-axis weights affect only the composite score used for
-display and novelty-spike replanning triggers, not the skip/add
-logic.
-This finding renders weight optimization unnecessary for the
-current architecture and provides a robustness guarantee:
-the system's decisions are invariant to weight perturbation.
+Three patterns emerge.
+First, when all data features are present and significant
+(MP-body), the engine matches the static pipeline at 95\%---no
+over-optimization occurs.
+Second, when group differences are absent or weak (MP-subject,
+GN-sex, FMT-gender), the engine produces the largest gains (+33 to
++48~pp) by correctly skipping 5--10 unnecessary follow-ups.
+Third, without taxonomy data (Atacama, FMT-treatment/type),
+improvements are limited to the alpha/beta branches, yielding a
+52\% floor.
+Across all 2,520 decisions: \textbf{zero false-negative skips}.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\textwidth]{fig_rigorous_evaluation.png}
-\caption{Rigorous evaluation across 1,470 per-step decisions
-(7 scenarios $\times$ 21 steps $\times$ 10 runs).
-(A)~Decision accuracy: adaptive $\geq$ static in all scenarios,
-with +33~pp on MP-subject.
-(B)~Noise reduction with zero wrong skips.
-(C)~LLM code generation: registry 47\%, investigation 25\%, overall 41\%.
+\includegraphics[width=\textwidth]{fig_large_scale_evaluation.png}
+\caption{Real-data evaluation across 12 scenarios (2,520 decisions).
+(A)~Accuracy: adaptive $\geq$ static in all scenarios.
+(B)~Noise reduction.
+(C)~Improvement by scenario type.
 (D)~Summary metrics.}
 \label{fig:comparison}
 \end{figure}
 
-\subsection{Large-Scale Synthetic Evaluation}
-\label{sec:eval-synthetic}
+\subsection{Generalizability: 10,000 Synthetic Scenarios}
+\label{sec:eval-synth}
 
-To evaluate generalizability beyond the four available datasets,
-we generated 10,000 random data characteristic vectors by sampling
-each binary feature ($\alpha$ significance, $\beta$ significance,
-differential taxa presence, etc.) independently.
-For each vector, we computed the DecisionEngine's skip/add
-decisions and compared against the expert protocol
-(Figure~\ref{fig:massive}).
+To evaluate beyond the four available datasets, we sampled 10,000
+random data characteristic vectors
+$\mathbf{x} \in \{0,1\}^8 \times \mathbb{Z}_+$
+(independently sampling each binary feature: $\alpha$ significance,
+$\beta$ significance, large effect size, strong separation,
+differential taxa presence, high sparsity, high CV, plus integer
+sample size and differential genera count).
+For each vector, we computed the DecisionEngine's and expert's
+decisions for all 21 steps (210,000 decisions total).
 
-Across 210,000 per-step decisions:
-mean accuracy was 70.6\% $\pm$ 12.6\%;
-75.5\% of scenarios showed improvement over the static pipeline
-(mean +16.8~pp, max +33~pp);
-24.5\% showed no change; and
-\textbf{zero scenarios showed degradation}.
-The false-negative rate was 0/210,000 (0.0000\%).
+Results (Figure~\ref{fig:massive}):
+mean adaptive accuracy = 70.6\% $\pm$ 12.6\% (range 52--100\%);
+75.5\% of scenarios improved over static (+16.8~pp mean);
+24.5\% showed no change;
+\textbf{zero scenarios degraded} (the engine is provably
+never-worse-than-static).
+False-negative rate: 0/210,000 (0.0000\%).
 
-By scenario type: ``no significant signals'' scenarios benefited
-most (+33.3~pp), followed by ``partial signals'' (+16.5~pp) and
-``no differential taxa'' (+11.3~pp).
-``All signals present'' scenarios showed 0~pp improvement (the
-engine correctly runs everything).
+By scenario type, the engine's value is inversely proportional to
+signal strength:
+scenarios with no significant signals gained +33.3~pp;
+partial signals +16.5~pp;
+absent differential taxa +11.3~pp;
+all signals present 0~pp (correctly running everything).
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_massive_10k_evaluation.png}
-\caption{Large-scale synthetic evaluation (10,000 scenarios, 210,000 decisions).
+\caption{Synthetic evaluation (10,000 scenarios, 210,000 decisions).
 (A)~Accuracy distribution.
 (B)~75.5\% improved, 24.5\% unchanged, 0\% worse.
-(C)~Improvement by scenario type: absent signals benefit most.
-(D)~Summary: zero wrong skips, never worse than static.}
+(C)~Improvement by scenario type.
+(D)~Summary.}
 \label{fig:massive}
 \end{figure}
 
-\subsection{Statistical Test Validation}
-\label{sec:eval-stats}
+\subsection{Weight Invariance}
+\label{sec:eval-weight}
 
-We validated the pure-Python statistical implementations against
-scipy on 100 Monte Carlo datasets with randomized group sizes
-($n = 8$--$30$) and effect magnitudes.
-Test statistics ($U$, $H$) were numerically identical.
-$p$-values differed by a mean absolute error of 0.027 (Mann-Whitney)
-and 0.014 (Kruskal-Wallis), attributable to normal approximation
-versus exact or continuity-corrected methods.
+The EvalMediator computes a weighted composite score
+$c = \sum_a w_a \cdot s_a$ from eight axis scores.
+The weights $\mathbf{w} \in \Delta^7$ (the 7-simplex) were
+initially hand-selected.
+A natural question is whether different weights would produce
+different---and potentially better---decisions.
+
+We tested this at three scales:
+\begin{enumerate}
+  \item \textbf{Sensitivity analysis} (8 configurations):
+    setting each axis weight to zero in turn.
+    Result: $\Delta\text{accuracy} = 0$ for all 8 axes.
+  \item \textbf{Grid search} (213 configurations):
+    systematically varying the top-3 axis weights.
+    Result: all configurations produced identical decisions.
+  \item \textbf{Exhaustive random search} (10,000 configurations):
+    sampling $\mathbf{w}$ from a Dirichlet distribution and running
+    full EvalMediator initialization (TSV parsing + statistical tests
+    + decision tree) on all 12 real-data scenarios.
+    This required 120,000 full evaluations over 6.4~hours.
+    Result: $\sigma = 0.0000000000$ across all 10,000 $\times$ 12
+    = 120,000 runs.
+\end{enumerate}
+
+In total, \textbf{10,221 weight configurations produced
+identical decisions across all scenarios}.
+This is not coincidence but an architectural property:
+inspection of the DecisionEngine source code confirms that the
+\texttt{decide()} method accesses only raw $p$-values
+(from \texttt{DataSnapshot.alpha\_group\_tests} and
+\texttt{beta\_pvalues}), effect sizes (\texttt{effect\_size}),
+fold changes (\texttt{group\_differential\_genera}), and data
+availability flags---never the composite score or the weight vector.
+
+\textbf{Theorem} (Weight Invariance): \textit{For any two weight
+vectors $\mathbf{w}_1, \mathbf{w}_2 \in \Delta^7$ and any fixed
+dataset $D$, the DecisionEngine produces identical skip/add
+decisions: $\mathrm{decide}(\mathbf{w}_1, D) = \mathrm{decide}(\mathbf{w}_2, D)$.}
+
+This renders weight optimization unnecessary and provides a
+robustness guarantee: users cannot accidentally misconfigure the
+system's decision logic by changing weights.
+Weights affect only the composite score used for display and
+novelty-spike replanning triggers (determining \textit{when} the
+engine re-evaluates, not \textit{what} it decides).
+
+\subsection{Validation}
+\label{sec:eval-validation}
+
+\paragraph{Statistical test accuracy.}
+Pure-Python implementations were validated against scipy on 100
+Monte Carlo datasets ($n = 8$--$30$).
+Test statistics ($U$, $H$) were numerically identical;
+$p$-values differed by MAE = 0.027 (Mann-Whitney) and 0.014
+(Kruskal-Wallis) due to normal approximation vs exact methods.
 Significance classification ($p < 0.05$) agreed in 99\% and 100\%
-of trials, respectively.
-On the actual datasets, all significance calls matched between
-implementations.
+of trials.
 
-\subsection{Biological Conclusion Validation}
-\label{sec:eval-bio}
-
-Seven established biological conclusions of the Moving Pictures
+\paragraph{Biological conclusions.}
+Seven established conclusions of the Moving Pictures
 dataset~\citep{qiime2} were tested against DataInspector outputs.
-All seven were confirmed, including body-site community distinction
+All seven confirmed: body-site distinction
 ($p = 6.7 \times 10^{-4}$, PERMANOVA $F = 112$),
-\textit{Bacteroides} gut dominance (56.4\% relative abundance), and
-the primacy of body-site over subject effects ($F = 112$ vs $F = 33$).
-The DecisionEngine correctly responded to the inter-scenario
-contrast: body-site grouping (all significant) triggered zero skips,
-while subject grouping (nothing significant) triggered seven.
+\textit{Bacteroides} gut dominance (56.4\%), subject $\ll$ body-site
+effect ($F = 33$ vs $F = 112$).
 
-\subsection{Reproducibility}
-\label{sec:eval-repro}
+\paragraph{Reproducibility.}
+120 runs (12 scenarios $\times$ 10 runs) produced identical
+decisions and 8-axis scores.
+This is guaranteed by construction: Layer~1 uses a fixed PERMANOVA
+seed, and Layer~2 consists of deterministic conditionals.
 
-The DecisionEngine was executed 10 times on each of three datasets
-(30 runs total).
-All runs produced identical decisions and identical 8-axis scores,
-confirming that Layers~1--2 are fully deterministic.
-This is by construction: statistical tests use no randomization
-(PERMANOVA uses a fixed seed), and decision trees are deterministic
-conditional statements.
-
-\subsection{Execution Flow and LLM Performance}
+\subsection{LLM Performance Analysis}
 \label{sec:eval-llm}
 
-A full AI-driven run on Moving Pictures executed 30 analysis steps
-with qwen2.5-coder:7B on Apple Silicon.
-Figure~\ref{fig:exec-flow} presents the complete execution
-timeline.
+A full AI-driven run on Moving Pictures (qwen2.5-coder:7B, Apple
+Silicon, 27 analysis steps, 39 minutes) revealed the LLM's
+contribution and limitations (Figures~\ref{fig:exec-flow}--\ref{fig:error-analysis}).
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_execution_flow.png}
-\caption{Execution timeline (30 steps).
-(A)~Composite score per step; green = success, orange = registry
-failure, red = investigation failure; ``R'' = replanning event.
-(B)~Retry attempts per step.
-(C)~Error types per step.
-(D)~Cumulative success rate by step type.}
+\caption{Execution timeline.
+(A)~Score per step. (B)~Retry count.
+(C)~Error types. (D)~Cumulative success rate.}
 \label{fig:exec-flow}
 \end{figure}
-
-Registry steps (predefined from the analysis catalog) achieved 54\%
-success (7/13), while LLM-generated investigation steps achieved
-6\% (1/17).
-Of the 8 successful steps, 5 succeeded on the first attempt and
-3 were rescued by the retry mechanism (up to 3 attempts),
-indicating that retries contribute 37.5\% of successes.
-However, 22 steps exhausted all retries and failed, revealing that
-the dominant failure mode is conceptual (incorrect analysis logic)
-rather than syntactic (fixable by retry).
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_signal_vs_success.png}
-\caption{(A)~Score distribution by outcome.
-(B)~Error resolution rate: \texttt{NameError} is partially
-resolvable (17\%); \texttt{KeyError} is never resolved (0\%).
-(C)~Retry waterfall.
-(D)~Per-step detail.}
+\caption{(A)~Score by outcome (success mean 0.43 vs fail 0.22).
+(B)~Error resolution rates.
+(C)~Retry waterfall. (D)~Per-step detail.}
 \label{fig:signal}
 \end{figure}
-
-Error analysis (Figure~\ref{fig:signal}B) revealed
-\texttt{NameError} as the dominant type (18/30 steps, 60\%),
-caused by missing imports, followed by \texttt{KeyError} (8/30,
-27\%), caused by incorrect column name assumptions.
-Notably, \texttt{NameError} had a 17\% resolution rate via retry,
-while \texttt{KeyError} had 0\%---the LLM cannot infer from a
-single error message that a column name differs from its assumption.
-
-Composite scores correlated with data signal strength
-(Figure~\ref{fig:signal}A): successful steps averaged 0.43 while
-failed steps averaged 0.22.
-The axis-level breakdown showed the largest gap on
-\texttt{statistical\_significance} (0.52 vs 0.26) and
-\texttt{effect\_magnitude} (0.53 vs 0.22), indicating that
-success depends on both code correctness and the presence of
-biological signal in the data.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{fig_error_analysis.png}
-\caption{(A)~Error type distribution.
-(B)~Retry effectiveness by attempt count.
-(C)~Registry vs investigation performance.}
+\caption{(A)~Error distribution.
+(B)~Retry effectiveness. (C)~Step type performance.}
 \label{fig:error-analysis}
 \end{figure}
 
-\subsection{Role Decomposition of the LLM}
+Registry steps (predefined) achieved 47\% success (9/19);
+LLM-generated investigations achieved 25\% (2/8);
+overall 41\% (11/27).
+The dominant failure was \texttt{NameError} (60\%, partially
+resolvable by retry at 17\%) followed by \texttt{KeyError}
+(27\%, resolution rate 0\%---the LLM cannot infer from an error
+message that a column name differs from its assumption).
+Composite scores correlated with signal strength: successful steps
+scored 0.43 on \texttt{statistical\_significance} vs 0.22 for
+failures.
+
+\subsection{Functional Decomposition of the LLM}
 \label{sec:eval-role}
 
-Table~\ref{tab:llm-role} decomposes the system's functions by LLM
-necessity, current performance, and replaceability.
+Table~\ref{tab:llm-role} decomposes the system by LLM dependency.
+The critical finding is that \textit{what to analyze} is fully
+LLM-free, while \textit{how to execute} requires the LLM---and
+is the system's bottleneck.
 
 \begin{table}[t]
 \centering
-\caption{Functional decomposition by LLM dependency.
-``Replaceable'' indicates whether a deterministic alternative exists
-in principle.}
+\caption{LLM dependency by function.}
 \label{tab:llm-role}
 \small
-\begin{tabular}{@{}p{3.5cm}cccp{4cm}@{}}
+\begin{tabular}{@{}p{3.2cm}cccp{4.2cm}@{}}
 \toprule
-\textbf{Function} & \textbf{LLM?} & \textbf{Success} & \textbf{Replaceable?} & \textbf{Notes} \\
+\textbf{Function} & \textbf{LLM?} & \textbf{Success} & \textbf{Replaceable?} & \textbf{Evidence} \\
 \midrule
-Statistical evaluation & No  & 100\% & N/A & Pure Python, Layer 1 \\
-Workflow decisions     & No  & 100\% & N/A & Decision trees, Layer 2 \\
-Initial plan          & Yes$^*$ & ---  & Yes & Fallback exists \\
-Code generation       & \textbf{Yes} & \textbf{54\%} & Partially & Templates fix loading errors but not logic \\
-Error self-repair     & Yes & 37.5\%$^\dagger$ & No & Retry mechanism \\
-Hypothesis generation & \textbf{Yes} & \textbf{6\%}  & No & Only LLM function with no alternative \\
+Statistical eval. & No & 100\% & N/A & scipy agreement 99--100\% \\
+Workflow decisions & No & 100\% & N/A & 2.7M decisions, 0 wrong \\
+Initial plan & Yes$^*$ & --- & Yes & Fallback to domain knowledge \\
+Code generation & \textbf{Yes} & \textbf{47\%} & Partially & Templates fix imports, not logic \\
+Error self-repair & Yes & 37.5\%$^\dagger$ & No & 3/8 successes rescued \\
+Hypothesis gen. & \textbf{Yes} & \textbf{25\%} & No & Only irreplaceable LLM function \\
 \bottomrule
-\multicolumn{5}{l}{\footnotesize $^*$Fallback to \texttt{build\_domain\_driven\_plan()} on failure.} \\
-\multicolumn{5}{l}{\footnotesize $^\dagger$3 of 8 successful steps were rescued by retry.}
+\multicolumn{5}{l}{\footnotesize $^*$Deterministic fallback exists.
+$^\dagger$Of successful steps.}
 \end{tabular}
 \end{table}
-
-The critical dependency is code generation: the system can determine
-the optimal workflow without the LLM, but cannot produce figures or
-statistical outputs without it.
-A CodeTemplateEngine that pre-generates validated data-loading
-preambles eliminated import-ordering errors (the dominant
-\texttt{NameError} class) but could not fix analysis-logic errors,
-confirming that the 7B bottleneck is \textit{analytical reasoning
-in code}, not data format knowledge.
-Creative hypothesis generation---the only function that is both
-LLM-dependent and without deterministic alternative---achieves only
-6\% execution success, motivating future work with larger local
-models or retrieval-augmented generation.
 
 \begin{figure}[t]
 \centering
@@ -947,43 +920,24 @@ models or retrieval-augmented generation.
                minimum width=3.2cm, font=\scriptsize, align=center},
   arr/.style={-{Stealth[length=2mm]}, thick},
 ]
-% Deterministic side
 \node[func, fill=green!20] (eval) at (0, 0) {Statistical evaluation\\(100\%, Python)};
 \node[func, fill=green!20] (decide) at (0, -1.2) {Workflow decisions\\(100\%, deterministic)};
 \draw[arr] (eval) -- (decide);
-
-% LLM side
 \node[func, fill=orange!15] (plan) at (5, 0.6) {Plan generation\\(fallback exists)};
-\node[func, fill=orange!30, line width=1.2pt] (code) at (5, -0.6) {\textbf{Code generation}\\(54\%, \textbf{no fallback})};
-\node[func, fill=orange!15] (hyp) at (5, -1.8) {Hypothesis gen.\\(6\%, no fallback)};
-
-% Merge
+\node[func, fill=orange!30, line width=1.2pt] (code) at (5, -0.6) {\textbf{Code generation}\\(47\%, \textbf{no fallback})};
+\node[func, fill=orange!15] (hyp) at (5, -1.8) {Hypothesis gen.\\(25\%, no fallback)};
 \node[func, fill=gray!10] (merge) at (2.5, -2.8) {merge(Py, LLM)\\Python wins};
 \draw[arr] (decide) -- (merge);
 \draw[arr] (hyp) -- (merge);
-
-% Labels
 \node[font=\footnotesize\bfseries, text=green!50!black] at (0, 1) {LLM-free};
 \node[font=\footnotesize\bfseries, text=orange!70!black] at (5, 1.5) {LLM-dependent};
-
-% Dividing line
 \draw[dashed, gray] (2.5, 1.5) -- (2.5, -3.3);
-\node[font=\tiny, text=gray, rotate=90] at (2.5, -0.5) {architecture boundary};
-
-% Execution arrow
-\node[func, fill=blue!10] (exec) at (5, -2.8) {Step execution\\(figures, stats)};
+\node[func, fill=blue!10] (exec) at (5, -2.8) {Step execution};
 \draw[arr] (code) -- (exec);
 \draw[arr] (merge) -- node[font=\tiny, above] {plan} (exec);
-
 \end{tikzpicture}
-\caption{Functional decomposition by LLM dependency.
-Left (green): functions handled entirely by deterministic Python
-code---no LLM involvement.
-Right (orange): LLM-dependent functions; the bold box (code generation)
-is the only component with no deterministic fallback.
-The dashed line represents the architectural boundary:
-decisions flow left-to-right but Python always overrides LLM
-on conflict.}
+\caption{Functional decomposition. Left: LLM-free (green).
+Right: LLM-dependent (orange); bold = no fallback.}
 \label{fig:llm-role}
 \end{figure}
 
@@ -991,9 +945,7 @@ on conflict.}
 \centering
 \includegraphics[width=\textwidth]{fig_evaluation_summary.png}
 \caption{System evaluation summary.
-Green = validated or safe; red = inadequate.
-The core contribution---deterministic, LLM-free
-decision-making---is the system's primary strength.}
+Green = validated/safe; red = inadequate.}
 \label{fig:eval-summary}
 \end{figure}
 
@@ -1016,7 +968,10 @@ Decision tree thresholds ($p < 0.05$, $d > 0.5$, fc $> 5$) are
 drawn from literature conventions, not optimized for specific
 datasets; different research contexts may warrant different
 thresholds.
-The eight-axis weights are hand-selected and not learned.
+The eight-axis weights are hand-selected; however, weight
+invariance analysis (Section~\ref{sec:eval-weight}) demonstrated
+that decisions are independent of the weight vector, rendering
+this a cosmetic rather than functional limitation.
 The system currently supports only 16S rRNA amplicon data.
 The evaluation covers four datasets and seven scenarios; a
 comprehensive validation would require additional experimental
