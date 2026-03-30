@@ -16,7 +16,7 @@
 
 > **ローカル LLM で QIIME2 マイクロバイオーム解析を自動化 — オフライン・API キー不要・オープンソース**
 >
-> **Current: v2.0.0**
+> **Current: v3.0.0**
 
 ---
 
@@ -1516,6 +1516,30 @@ Coding assistance by [Claude](https://claude.ai/) (Anthropic).
 ---
 
 ## Changelog
+
+### v3.0.0 (2026-03-30) — ReasoningEngine + 71 Analyses
+
+**ReasoningEngine（文脈依存推論）**
+- v2 の静的 if 文 → v3 の推論チェーン（Observation → Interpretation → Hypothesis → Action）
+- 前ステップの結果が後の判断に影響する：
+  - alpha sig + beta ns → `strategy=taxa_focused` → differential 優先、ordination スキップ
+  - alpha ns + beta sig → `strategy=ordination_focused` → ordination 優先
+  - both ns → `strategy=minimal` → 大半スキップ
+  - both sig → `strategy=comprehensive` → 全解析実行
+- rarefaction の結果が alpha の信頼性を更新（artifact 確認 → alpha を non-significant に格下げ）
+- 高スパース + differential → compositional artifact 警告を自動生成
+
+**解析レジストリ拡充（43 → 71）**
+
+| カテゴリ | v2 | v3 | 新規 |
+|---|---|---|---|
+| Composition | 8 | 15 | Phylum heatmap, Top20 grouped bar, Area plot, Bubble chart, F/B ratio, Hill numbers, Accumulation |
+| Alpha | 5 | 8 | Pairwise heatmap, Metadata correlation, Evenness vs Dominance |
+| Beta | 9 | 14 | Pairwise PERMANOVA heatmap, 3D PCoA, Distance boxplot, Significance summary, Procrustes |
+| Differential | 5 | 9 | Log2FC heatmap, Strip plot, Waterfall, Cladogram |
+| Advanced | 9 | 16 | Mantel test, SourceTracker, Volatility, Paired diff, ADONIS R², Random Forest |
+| Publication | 3 | 6 | Diversity composite, Graphical abstract, Methods flowchart |
+| Quality | 3 | 3 | — |
 
 ### v2.0.0 (2026-03-29) — Major Release
 

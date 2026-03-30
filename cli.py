@@ -17,7 +17,7 @@ seq2pipe ターミナル版エントリポイント。
         --export-dir ~/seq2pipe_results/20240101_120000/exported/
 """
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 import re
 import sys
