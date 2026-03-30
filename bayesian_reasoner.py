@@ -123,52 +123,74 @@ DEFAULT_HYPOTHESES = [
 def _p_to_likelihood(p_value: float, direction: str = "support") -> tuple[float, float]:
     """
     p 値から尤度比を計算。
-    Returns: (P(data|H_true), P(data|H_false))
+    v3.1: 尤度を鋭くし、p>0.10 を明確な反証として扱う。
 
-    p=0.001 → 強い支持 → (0.95, 0.05)
-    p=0.05  → 弱い支持 → (0.65, 0.35)
-    p=0.5   → 中立     → (0.50, 0.50)
-    p=0.9   → 反証     → (0.10, 0.90)
+    p=0.001 → 強い支持   → (0.97, 0.03) LR=32
+    p=0.01  → 支持       → (0.90, 0.10) LR=9
+    p=0.05  → 弱い支持   → (0.70, 0.30) LR=2.3
+    p=0.10  → ほぼ中立   → (0.50, 0.50) LR=1
+    p=0.50  → 反証       → (0.15, 0.85) LR=0.18
     """
     if direction == "support":
-        # p が小さいほど仮説を支持
-        strength = min(1.0, max(0.0, -math.log10(max(p_value, 1e-10)) / 4.0))
-        l_true = 0.5 + 0.45 * strength   # 0.50 ~ 0.95
-        l_false = 1.0 - l_true            # 0.05 ~ 0.50
+        if p_value <= 0.001:
+            return 0.97, 0.03
+        elif p_value <= 0.01:
+            # log scale interpolation
+            t = -math.log10(p_value) / 3.0  # 0.01→0.67, 0.001→1.0
+            l_t = 0.70 + 0.27 * t
+            return l_t, 1.0 - l_t
+        elif p_value <= 0.05:
+            # 0.01~0.05: 支持だが弱まる
+            t = (0.05 - p_value) / 0.04  # 0.01→1.0, 0.05→0.0
+            l_t = 0.55 + 0.15 * t        # 0.55~0.70
+            return l_t, 1.0 - l_t
+        elif p_value <= 0.10:
+            # borderline → ほぼ中立
+            return 0.50, 0.50
+        else:
+            # p > 0.10 → 明確な反証（v3.0 では甘すぎた）
+            strength = min(1.0, (p_value - 0.10) / 0.40)  # 0.10→0, 0.50→1
+            l_t = 0.50 - 0.35 * strength  # 0.50~0.15
+            return l_t, 1.0 - l_t
     else:
-        # p が大きいほど仮説を支持（反証の場合）
         strength = min(1.0, max(0.0, p_value * 2))
         l_true = 0.5 + 0.45 * strength
-        l_false = 1.0 - l_true
-    return l_true, l_false
+        return l_true, 1.0 - l_true
 
 
 def _effect_to_likelihood(effect: float, threshold: float = 0.5) -> tuple[float, float]:
     """
     効果量から尤度比を計算。
-    large effect → 仮説支持
-    small effect → 弱い反証
+    v3.1: 小さい effect をより強く反証として扱う。
     """
     if effect >= threshold:
         strength = min(1.0, effect / (threshold * 2))
         return 0.5 + 0.4 * strength, 0.5 - 0.4 * strength
+    elif effect >= threshold * 0.5:
+        # medium effect: 弱い支持
+        return 0.55, 0.45
+    elif effect > 0.1:
+        # small but nonzero: 弱い反証
+        return 0.40, 0.60
     else:
-        weakness = 1.0 - effect / threshold
-        return 0.5 - 0.3 * weakness, 0.5 + 0.3 * weakness
+        # tiny effect: 明確な反証
+        return 0.25, 0.75
 
 
 def _ratio_to_likelihood(ratio: float, threshold: float = 2.0) -> tuple[float, float]:
     """
     between/within 距離比から尤度比。
-    ratio > threshold → 群間分離を支持
+    v3.1: ratio ≈ 1.0 を明確な反証として扱う。
     """
     if ratio >= threshold:
         strength = min(1.0, (ratio - 1.0) / (threshold - 1.0))
-        return 0.5 + 0.4 * strength, 0.5 - 0.4 * strength
-    elif ratio > 1.0:
-        return 0.55, 0.45  # 弱い支持
+        return 0.5 + 0.45 * strength, 0.5 - 0.45 * strength
+    elif ratio > 1.3:
+        return 0.60, 0.40  # weak separation
+    elif ratio > 1.05:
+        return 0.50, 0.50  # neutral
     else:
-        return 0.3, 0.7  # 分離なし
+        return 0.20, 0.80  # no separation → strong reject
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -200,6 +222,39 @@ class BayesianReasoner:
         self.uncertainty_range = uncertainty_range
         self._log = log_callback or (lambda msg: None)
         self._update_count = 0
+        self._seen_evidence = set()  # 重複証拠フィルタ
+
+    def adapt_priors(self, n_samples: int, n_groups: int,
+                     min_group_size: int, has_taxonomy: bool):
+        """
+        改善2: データ特性に基づいて事前確率を調整する。
+        一律 0.5 ではなく、サンプルサイズや群数から情報付き事前分布を設定。
+        """
+        # サンプルサイズが小さい → underpowered の事前確率を上げる
+        if min_group_size < 5:
+            self.hypotheses["underpowered"].prior = 0.7
+            self.hypotheses["underpowered"].posterior = 0.7
+        elif min_group_size < 10:
+            self.hypotheses["underpowered"].prior = 0.5
+            self.hypotheses["underpowered"].posterior = 0.5
+        else:
+            self.hypotheses["underpowered"].prior = 0.2
+            self.hypotheses["underpowered"].posterior = 0.2
+
+        # taxonomy がない → taxa_differential の事前を下げる
+        if not has_taxonomy:
+            self.hypotheses["taxa_differential"].prior = 0.2
+            self.hypotheses["taxa_differential"].posterior = 0.2
+            self.hypotheses["functional_shift"].prior = 0.1
+            self.hypotheses["functional_shift"].posterior = 0.1
+
+        # 群数が多い → multiple testing で偽陽性リスク
+        if n_groups >= 4:
+            self.hypotheses["alpha_differs"].prior = 0.4
+            self.hypotheses["alpha_differs"].posterior = 0.4
+
+        self._log(f"  [Bayes] Priors adapted: n={n_samples}, k={n_groups}, "
+                  f"min_g={min_group_size}, taxonomy={'yes' if has_taxonomy else 'no'}")
 
     def _bayes_update(self, hypothesis: Hypothesis,
                       l_true: float, l_false: float,
@@ -314,21 +369,22 @@ class BayesianReasoner:
                     self._bayes_update(self.hypotheses["compositional_artifact"],
                                      0.80, 0.20, f"fc={max_fc:.0f}x at low abundance")
 
-        # ── Quality metrics ──
+        # ── Quality metrics (重複証拠フィルタ) ──
+        # 同じ quality 証拠は1回だけカウント（v3.0 のバグ修正）
         sparsity = getattr(snapshot, 'sparsity', 0)
-        if sparsity > 0.9:
+        if sparsity > 0.9 and "sparsity" not in self._seen_evidence:
+            self._seen_evidence.add("sparsity")
             self._bayes_update(self.hypotheses["compositional_artifact"],
                              0.65, 0.35, f"sparsity={sparsity:.0%}")
-            self._bayes_update(self.hypotheses["underpowered"],
-                             0.60, 0.40, f"sparse feature table")
 
         reads = getattr(snapshot, 'reads_per_sample', {})
-        if reads:
+        if reads and "read_cv" not in self._seen_evidence:
             import statistics as _st
             vals = list(reads.values())
             if len(vals) > 1 and _st.mean(vals) > 0:
                 cv = _st.stdev(vals) / _st.mean(vals)
                 if cv > 0.5:
+                    self._seen_evidence.add("read_cv")
                     self._bayes_update(self.hypotheses["sampling_artifact"],
                                      0.70, 0.30, f"read depth CV={cv:.2f}")
 
