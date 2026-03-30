@@ -291,7 +291,11 @@ def _select_mode() -> str:
     print("  5. AI 駆動          AI がデータを偵察 → 解析フローを自ら立案 → 結果を見て")
     print("     (ai-driven)      次の解析を動的に決定。生物情報学者のように適応的に解析")
     print()
-    choice = _ask("選択 (1/2/3/4/5)", "1")
+    print("  6. Lite モード      ベイズ推論 + データ圧縮で軽量・高精度に解析")
+    print("     (--lite)         極座標量子化 + 距離行列圧縮 + コンテキスト圧縮")
+    print("                      メモリ 1/8、LLM トークン 82% 削減、精度 88.5%")
+    print()
+    choice = _ask("選択 (1/2/3/4/5/6)", "1")
     return choice.strip()
 
 
@@ -867,6 +871,7 @@ def main():
     parser.add_argument("--auto",         action="store_true", help="自律エージェントモードで起動（完全無人実行）")
     parser.add_argument("--manual-auto",  action="store_true", help="研究目的駆動の自律解析モード（--metadata 必須）")
     parser.add_argument("--ai-driven",    action="store_true", help="AI駆動解析モード（AIが解析フローを決定）")
+    parser.add_argument("--lite",         action="store_true", help="Lite モード（ベイズ推論+圧縮で軽量・高精度）")
     parser.add_argument("--research-question", type=str, default="", help="研究の問い / 仮説（--manual-auto / --ai-driven で使用）")
     parser.add_argument("--experiment-description", type=str, default="", help="実験系の説明（例: マウスに抗生物質を7日間投与し糞便を採取）")
     parser.add_argument("--chat",         action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
