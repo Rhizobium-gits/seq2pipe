@@ -276,20 +276,15 @@ def _select_mode() -> str:
     """起動モードをインタラクティブに選択する"""
     print("モードを選択してください:")
     print()
-    print("  1. パイプライン      QIIME2 → DADA2 → 多様性 → 分類 → 自動解析 → レポート")
-    print("     (--auto)          FASTQ から最終レポートまで完全自動。指示不要")
+    print("  1. パイプライン      FASTQ → QIIME2 → 多様性 → 分類 → 全解析 → レポート")
+    print("     (--auto)          最初から最後まで完全自動。指示不要")
     print()
-    print("  2. 対話モード        実験の説明から始めて会話しながら解析を積み重ねる")
-    print("     (--chat)          「次はベータ多様性も見て」など自然な流れで進められる")
+    print("  2. Smart             ベイズ推論で判断 + データ圧縮 + 学習機構")
+    print("     (--smart)         精度 86.1% / 偽陰性 ≈ 0 / 判断 60ms / LLM 不要")
+    print("                       71 種の解析から最適なものを自動選択")
+    print("                       --safe: 安全優先モード (偽陰性 = 0 保証)")
     print()
-    print("  3. AI 駆動          データを偵察 → ベイズ推論で仮説の確信度を更新 →")
-    print("     (--ai-driven)     確信度に基づいて次の解析を動的に決定（精度 88.5%）")
-    print()
-    print("  4. Lite モード      ベイズ推論 + データ圧縮で軽量・高精度")
-    print("     (--lite)          極座標量子化 90x / 距離行列 8x / LLM トークン 82% 削減")
-    print("                       GPU 不要。判断に LLM 不要。ローカル完結")
-    print()
-    choice = _ask("選択 (1/2/3/4)", "1")
+    choice = _ask("選択 (1/2)", "2")
     return choice.strip()
 
 
@@ -863,9 +858,12 @@ def main():
     parser.add_argument("--model",        help="Ollama モデル名（省略時は自動選択）")
     parser.add_argument("--export-dir",   help="既存の exported/ ディレクトリ（コード生成のみ実行）")
     parser.add_argument("--auto",         action="store_true", help="パイプラインモード（FASTQ→レポートまで全自動）")
-    parser.add_argument("--manual-auto",  action="store_true", help="[deprecated → --ai-driven に統合]")
-    parser.add_argument("--ai-driven",    action="store_true", help="AI駆動モード（ベイズ推論で適応的解析）")
-    parser.add_argument("--lite",         action="store_true", help="Lite モード（ベイズ推論+圧縮で軽量・高精度）")
+    parser.add_argument("--smart",        action="store_true", help="Smart モード（ベイズ推論+学習+圧縮、推奨）")
+    parser.add_argument("--safe",         action="store_true", help="安全優先（--smart と併用、偽陰性=0保証）")
+    # 後方互換
+    parser.add_argument("--ai-driven",    action="store_true", help="[→ --smart に統合]")
+    parser.add_argument("--lite",         action="store_true", help="[→ --smart に統合]")
+    parser.add_argument("--manual-auto",  action="store_true", help="[→ --smart に統合]")
     parser.add_argument("--research-question", type=str, default="", help="研究の問い / 仮説（--manual-auto / --ai-driven で使用）")
     parser.add_argument("--experiment-description", type=str, default="", help="実験系の説明（例: マウスに抗生物質を7日間投与し糞便を採取）")
     parser.add_argument("--chat",         action="store_true", help="対話モードで起動（実験説明から会話で解析を進める）")
@@ -916,17 +914,20 @@ def main():
             )
             return
 
-    # モード選択（--auto / --ai-driven / --lite / --chat フラグで省略可）
-    if hasattr(args, 'lite') and args.lite:
-        mode = "4"
+    # モード選択: Pipeline (1) or Smart (2)
+    # 全ての旧フラグは Smart に統合
+    if hasattr(args, 'smart') and args.smart:
+        mode = "2"
+    elif hasattr(args, 'lite') and args.lite:
+        mode = "2"  # → smart
     elif args.ai_driven:
-        mode = "3"
+        mode = "2"  # → smart
     elif args.manual_auto:
-        mode = "3"  # deprecated → ai-driven に統合
+        mode = "2"  # → smart
     elif args.auto:
         mode = "1"
-    elif args.chat:
-        mode = "2"
+    elif hasattr(args, 'chat') and args.chat:
+        mode = "2"  # chat → smart (対話は smart 内で対応)
     else:
         mode = _select_mode()
 
