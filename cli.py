@@ -276,26 +276,20 @@ def _select_mode() -> str:
     """起動モードをインタラクティブに選択する"""
     print("モードを選択してください:")
     print()
-    print("  1. 解析モード        やりたい解析を自然言語で一回指定して実行")
-    print("                       AI がファイルを読んで → コードを書いて → 実行 → エラー修正")
+    print("  1. パイプライン      QIIME2 → DADA2 → 多様性 → 分類 → 自動解析 → レポート")
+    print("     (--auto)          FASTQ から最終レポートまで完全自動。指示不要")
     print()
-    print("  2. 自律エージェント  AI が自分でファイルを調べて包括的な解析を全自動実行")
-    print("                       指示不要。動くコードができるまで自律的に修正を繰り返す")
+    print("  2. 対話モード        実験の説明から始めて会話しながら解析を積み重ねる")
+    print("     (--chat)          「次はベータ多様性も見て」など自然な流れで進められる")
     print()
-    print("  3. 対話モード        実験の説明から始めて会話しながら解析を積み重ねる")
-    print("                       「次はベータ多様性も見て」など自然な流れで進められる")
+    print("  3. AI 駆動          データを偵察 → ベイズ推論で仮説の確信度を更新 →")
+    print("     (--ai-driven)     確信度に基づいて次の解析を動的に決定（精度 88.5%）")
     print()
-    print("  4. 研究目的駆動     研究の問いとメタデータを指定 → 実験デザインを自動解析")
-    print("     (manual-auto)    → 40+ 種の可視化・統計検定を研究目的に合わせて全自動実行")
+    print("  4. Lite モード      ベイズ推論 + データ圧縮で軽量・高精度")
+    print("     (--lite)          極座標量子化 90x / 距離行列 8x / LLM トークン 82% 削減")
+    print("                       GPU 不要。判断に LLM 不要。ローカル完結")
     print()
-    print("  5. AI 駆動          AI がデータを偵察 → 解析フローを自ら立案 → 結果を見て")
-    print("     (ai-driven)      次の解析を動的に決定。生物情報学者のように適応的に解析")
-    print()
-    print("  6. Lite モード      ベイズ推論 + データ圧縮で軽量・高精度に解析")
-    print("     (--lite)         極座標量子化 + 距離行列圧縮 + コンテキスト圧縮")
-    print("                      メモリ 1/8、LLM トークン 82% 削減、精度 88.5%")
-    print()
-    choice = _ask("選択 (1/2/3/4/5/6)", "1")
+    choice = _ask("選択 (1/2/3/4)", "1")
     return choice.strip()
 
 
@@ -868,9 +862,9 @@ def main():
     parser.add_argument("--output-dir",   help="出力ディレクトリ（省略時は ~/seq2pipe_results/<timestamp>/）")
     parser.add_argument("--model",        help="Ollama モデル名（省略時は自動選択）")
     parser.add_argument("--export-dir",   help="既存の exported/ ディレクトリ（コード生成のみ実行）")
-    parser.add_argument("--auto",         action="store_true", help="自律エージェントモードで起動（完全無人実行）")
-    parser.add_argument("--manual-auto",  action="store_true", help="研究目的駆動の自律解析モード（--metadata 必須）")
-    parser.add_argument("--ai-driven",    action="store_true", help="AI駆動解析モード（AIが解析フローを決定）")
+    parser.add_argument("--auto",         action="store_true", help="パイプラインモード（FASTQ→レポートまで全自動）")
+    parser.add_argument("--manual-auto",  action="store_true", help="[deprecated → --ai-driven に統合]")
+    parser.add_argument("--ai-driven",    action="store_true", help="AI駆動モード（ベイズ推論で適応的解析）")
     parser.add_argument("--lite",         action="store_true", help="Lite モード（ベイズ推論+圧縮で軽量・高精度）")
     parser.add_argument("--research-question", type=str, default="", help="研究の問い / 仮説（--manual-auto / --ai-driven で使用）")
     parser.add_argument("--experiment-description", type=str, default="", help="実験系の説明（例: マウスに抗生物質を7日間投与し糞便を採取）")
@@ -922,15 +916,17 @@ def main():
             )
             return
 
-    # モード選択（--auto / --manual-auto / --ai-driven / --chat フラグで省略可）
-    if args.ai_driven:
-        mode = "5"
-    elif args.manual_auto:
+    # モード選択（--auto / --ai-driven / --lite / --chat フラグで省略可）
+    if hasattr(args, 'lite') and args.lite:
         mode = "4"
-    elif args.auto:
-        mode = "2"
-    elif args.chat:
+    elif args.ai_driven:
         mode = "3"
+    elif args.manual_auto:
+        mode = "3"  # deprecated → ai-driven に統合
+    elif args.auto:
+        mode = "1"
+    elif args.chat:
+        mode = "2"
     else:
         mode = _select_mode()
 
