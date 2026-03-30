@@ -1541,6 +1541,23 @@ Coding assistance by [Claude](https://claude.ai/) (Anthropic).
 | Publication | 3 | 6 | Diversity composite, Graphical abstract, Methods flowchart |
 | Quality | 3 | 3 | — |
 
+**BayesianReasoner（確率的推論）**
+- if 文の二値判断ではなくベイズの定理で仮説の確信度を連続更新
+- 7 仮説: alpha_differs, community_shifts, taxa_differential, functional_shift, sampling_artifact, compositional_artifact, underpowered
+- 複数メトリクスの一致が確信度を乗算的に上昇: Shannon p=0.001 + Observed p=0.0007 → 0.50 → 0.84 → 0.97
+- 矛盾する証拠が打ち消し合う: p=0.03 (支持) + effect=0.05 (反証) → 0.50 → 0.62 → 0.44
+
+**v2 vs v3 精度比較（正直に）**
+
+| | Static | v2 (if文) | v3 (Bayes) |
+|---|---|---|---|
+| **平均精度** | 57.5% | **73.0%** | 69.4% |
+| **taxonomy なしデータ** | 52% | 52-62% | **61-71%** (+9~19pp) |
+| **シグナル欠如データ** | 33-62% | **81-95%** | 52-71% |
+| **Wrong skips** | — | 0 | 0 |
+
+> **v3 Bayes は v2 より平均精度が 3.6pp 低い。** ただし taxonomy なしのデータで v2 が改善できなかったシナリオを +19pp 改善する。v2 は「p<0.05 で全 skip」と大胆にカットして精度を上げるが、v3 は確信度が 0.3-0.6 にとどまり skip しきれない。最適解は v2 + v3 のハイブリッド。
+
 ### v2.0.0 (2026-03-29) — Major Release
 
 **新規性**
