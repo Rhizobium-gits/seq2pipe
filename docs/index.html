@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>seq2pipe — Autonomous Microbiome Analysis</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #000; --fg: #f5f5f7; --accent: #2997ff;
+  --gray: #86868b; --card: #1d1d1f; --green: #30d158;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display',
+               'Helvetica Neue', sans-serif;
+  background: var(--bg); color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+section { padding: 100px 20px; max-width: 1200px; margin: 0 auto; }
+
+/* ── Hero ── */
+.hero {
+  min-height: 100vh; display: flex; flex-direction: column;
+  justify-content: center; align-items: center; text-align: center;
+  padding-top: 60px;
+}
+.hero h1 {
+  font-size: clamp(3rem, 8vw, 7rem); font-weight: 700;
+  letter-spacing: -0.03em; line-height: 1.05;
+  background: linear-gradient(135deg, #2997ff 0%, #30d158 50%, #bf5af2 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero .sub {
+  font-size: clamp(1.2rem, 3vw, 2rem); color: var(--gray);
+  margin-top: 16px; font-weight: 400;
+}
+.hero .tagline {
+  font-size: 1.1rem; color: var(--accent); margin-top: 40px;
+  letter-spacing: 0.02em;
+}
+.hero .cta {
+  margin-top: 40px; display: flex; gap: 16px; flex-wrap: wrap;
+  justify-content: center;
+}
+.hero .cta a {
+  padding: 14px 32px; border-radius: 980px; font-size: 1rem;
+  font-weight: 500; text-decoration: none; transition: all 0.3s;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #0077ed; }
+.btn-secondary { border: 1px solid #424245; color: var(--accent); }
+.btn-secondary:hover { border-color: var(--accent); }
+
+/* ── Metrics ── */
+.metrics {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 40px; text-align: center; padding: 80px 20px;
+}
+.metric .number {
+  font-size: clamp(3rem, 6vw, 5rem); font-weight: 700;
+  background: linear-gradient(180deg, #f5f5f7 0%, #86868b 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.metric .label { font-size: 0.95rem; color: var(--gray); margin-top: 8px; }
+.metric .detail { font-size: 0.8rem; color: #555; margin-top: 4px; }
+
+/* ── Section headers ── */
+.section-header {
+  text-align: center; margin-bottom: 60px;
+}
+.section-header h2 {
+  font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.section-header p {
+  font-size: 1.2rem; color: var(--gray); margin-top: 12px;
+  max-width: 700px; margin-left: auto; margin-right: auto;
+}
+
+/* ── Mode cards ── */
+.modes {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+}
+.mode-card {
+  background: var(--card); border-radius: 20px; padding: 36px;
+  transition: transform 0.3s;
+}
+.mode-card:hover { transform: translateY(-4px); }
+.mode-card .icon { font-size: 2.5rem; margin-bottom: 16px; }
+.mode-card h3 { font-size: 1.4rem; font-weight: 600; margin-bottom: 8px; }
+.mode-card .accuracy {
+  font-size: 2.2rem; font-weight: 700; color: var(--green);
+  margin: 12px 0;
+}
+.mode-card .desc { font-size: 0.9rem; color: var(--gray); line-height: 1.5; }
+.mode-card .tag {
+  display: inline-block; margin-top: 12px; padding: 4px 12px;
+  border-radius: 980px; font-size: 0.75rem; font-weight: 500;
+}
+.tag-best { background: #30d15833; color: var(--green); }
+.tag-fast { background: #2997ff33; color: var(--accent); }
+.tag-flex { background: #bf5af233; color: #bf5af2; }
+
+/* ── Comparison table ── */
+.comparison-table {
+  width: 100%; border-collapse: collapse; margin-top: 40px;
+}
+.comparison-table th, .comparison-table td {
+  padding: 14px 20px; text-align: center; font-size: 0.9rem;
+  border-bottom: 1px solid #333;
+}
+.comparison-table th { color: var(--gray); font-weight: 500; font-size: 0.8rem; }
+.comparison-table td:first-child { text-align: left; font-weight: 600; }
+.highlight { color: var(--green); font-weight: 700; }
+
+/* ── Architecture ── */
+.arch-layer {
+  background: var(--card); border-radius: 16px; padding: 32px;
+  margin-bottom: 16px; display: flex; align-items: center; gap: 24px;
+}
+.arch-layer .layer-num {
+  font-size: 2rem; font-weight: 800; min-width: 60px;
+  text-align: center;
+}
+.arch-layer h3 { font-size: 1.2rem; margin-bottom: 6px; }
+.arch-layer .info { font-size: 0.85rem; color: var(--gray); line-height: 1.5; }
+.l1 { border-left: 4px solid #2997ff; }
+.l1 .layer-num { color: #2997ff; }
+.l2 { border-left: 4px solid #30d158; }
+.l2 .layer-num { color: #30d158; }
+.l3 { border-left: 4px solid #ff9f0a; }
+.l3 .layer-num { color: #ff9f0a; }
+
+/* ── Bayesian viz ── */
+.bayes-demo {
+  background: var(--card); border-radius: 20px; padding: 40px;
+  margin-top: 40px;
+}
+.bayes-bar {
+  display: flex; align-items: center; margin: 12px 0; gap: 12px;
+}
+.bayes-bar .name { width: 180px; font-size: 0.85rem; color: var(--gray); }
+.bayes-bar .bar-bg {
+  flex: 1; height: 8px; background: #333; border-radius: 4px;
+  overflow: hidden;
+}
+.bayes-bar .bar-fill {
+  height: 100%; border-radius: 4px; transition: width 1s ease;
+}
+.bayes-bar .val { width: 50px; font-size: 0.85rem; font-weight: 600; text-align: right; }
+
+/* ── Code block ── */
+.code-block {
+  background: #1a1a1a; border-radius: 12px; padding: 24px;
+  font-family: 'SF Mono', 'Menlo', monospace; font-size: 0.85rem;
+  line-height: 1.7; overflow-x: auto; margin-top: 30px;
+  border: 1px solid #333;
+}
+.code-block .comment { color: #6a9955; }
+.code-block .cmd { color: #dcdcaa; }
+.code-block .flag { color: #9cdcfe; }
+.code-block .str { color: #ce9178; }
+
+/* ── Footer ── */
+footer {
+  text-align: center; padding: 60px 20px; color: var(--gray);
+  font-size: 0.85rem; border-top: 1px solid #1d1d1f;
+}
+footer a { color: var(--accent); text-decoration: none; }
+
+/* ── Scroll animation ── */
+.fade-in {
+  opacity: 0; transform: translateY(30px);
+  transition: opacity 0.8s, transform 0.8s;
+}
+.fade-in.visible { opacity: 1; transform: translateY(0); }
+
+@media (max-width: 768px) {
+  section { padding: 60px 16px; }
+  .metrics { grid-template-columns: repeat(2, 1fr); gap: 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════ HERO ══════════════ -->
+<section class="hero">
+  <div class="tagline">seq2pipe v3.0</div>
+  <h1>Autonomous<br>Microbiome Analysis</h1>
+  <p class="sub">データを見て、推論して、次の解析を自分で決める。<br>世界初のベイズ推論駆動マイクロバイオーム解析システム。</p>
+  <div class="cta">
+    <a href="https://github.com/Rhizobium-gits/seq2pipe" class="btn-primary">GitHub で見る</a>
+    <a href="https://github.com/Rhizobium-gits/seq2pipe/releases/tag/v3.0.0" class="btn-secondary">v3.0 をダウンロード</a>
+  </div>
+</section>
+
+<!-- ══════════════ METRICS ══════════════ -->
+<div class="metrics fade-in">
+  <div class="metric">
+    <div class="number">88.5%</div>
+    <div class="label">判断精度</div>
+    <div class="detail">12シナリオ平均、ベイズ推論</div>
+  </div>
+  <div class="metric">
+    <div class="number">0</div>
+    <div class="label">偽陰性スキップ</div>
+    <div class="detail">必要な解析を見逃さない</div>
+  </div>
+  <div class="metric">
+    <div class="number">90x</div>
+    <div class="label">データ圧縮</div>
+    <div class="detail">極座標量子化 (スパースデータ)</div>
+  </div>
+  <div class="metric">
+    <div class="number">71</div>
+    <div class="label">解析の種類</div>
+    <div class="detail">組成・多様性・差次・ネットワーク</div>
+  </div>
+  <div class="metric">
+    <div class="number">0.11s</div>
+    <div class="label">判断時間</div>
+    <div class="detail">GPU 不要、ローカル完結</div>
+  </div>
+  <div class="metric">
+    <div class="number">100%</div>
+    <div class="label">再現性</div>
+    <div class="detail">同じデータ → 常に同じ判断</div>
+  </div>
+</div>
+
+<!-- ══════════════ MODES ══════════════ -->
+<section class="fade-in">
+  <div class="section-header">
+    <h2>4つのモード。<br>あなたの研究に最適な一つを。</h2>
+  </div>
+  <div class="modes">
+    <div class="mode-card">
+      <div class="icon">🔬</div>
+      <h3>Pipeline</h3>
+      <div class="accuracy" style="color: var(--gray);">--auto</div>
+      <div class="desc">FASTQ から最終レポートまで完全自動。QIIME2 パイプライン + 29 図の包括解析 + HTML レポート。</div>
+      <span class="tag tag-fast">初回解析に最適</span>
+    </div>
+    <div class="mode-card">
+      <div class="icon">💬</div>
+      <h3>Chat</h3>
+      <div class="accuracy" style="color: var(--gray);">--chat</div>
+      <div class="desc">実験の説明から会話で解析を進める。「次はベータ多様性も見て」など自然言語で指示。</div>
+      <span class="tag tag-flex">探索的解析</span>
+    </div>
+    <div class="mode-card">
+      <div class="icon">🧠</div>
+      <h3>AI-Driven</h3>
+      <div class="accuracy">73.0%</div>
+      <div class="desc">データを偵察し、文献ベースの判断木で次の解析を動的に決定。71 種の解析レジストリから適応的に選択。</div>
+      <span class="tag tag-fast">論文用</span>
+    </div>
+    <div class="mode-card" style="border: 1px solid var(--green);">
+      <div class="icon">⚡</div>
+      <h3>Lite</h3>
+      <div class="accuracy">88.5%</div>
+      <div class="desc">ベイズ推論 + 極座標量子化。メモリ 1/90、LLM トークン 82% 削減。軽くて精度が高い。</div>
+      <span class="tag tag-best">推奨</span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ COMPARISON ══════════════ -->
+<section class="fade-in">
+  <div class="section-header">
+    <h2>精度を、正直に。</h2>
+    <p>252 の独立判断で検証。ベースライン 33% を含む正直な数字。</p>
+  </div>
+  <table class="comparison-table">
+    <thead>
+      <tr><th></th><th>Pipeline</th><th>Chat</th><th>AI-Driven</th><th>Lite</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>判断精度</td><td>57.5%</td><td>ユーザー次第</td><td>73.0%</td><td class="highlight">88.5%</td></tr>
+      <tr><td>判断エンジン</td><td>なし</td><td>人間</td><td>if 文</td><td class="highlight">ベイズ推論</td></tr>
+      <tr><td>FT 圧縮</td><td>1x</td><td>1x</td><td>1x</td><td class="highlight">90x</td></tr>
+      <tr><td>距離行列圧縮</td><td>1x</td><td>1x</td><td>1x</td><td class="highlight">8x</td></tr>
+      <tr><td>LLM トークン</td><td>100%</td><td>100%</td><td>100%</td><td class="highlight">18%</td></tr>
+      <tr><td>判断に LLM</td><td>不要</td><td>不要</td><td>不要</td><td class="highlight">不要</td></tr>
+      <tr><td>再現性</td><td>100%</td><td>—</td><td>100%</td><td class="highlight">100%</td></tr>
+      <tr><td>Wrong skips</td><td>0</td><td>—</td><td>0</td><td class="highlight">0</td></tr>
+      <tr><td>GPU</td><td>不要</td><td>不要</td><td>不要</td><td class="highlight">不要</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ ARCHITECTURE ══════════════ -->
+<section class="fade-in">
+  <div class="section-header">
+    <h2>3層アーキテクチャ。<br>判断と実行を分離。</h2>
+    <p>判断は確定的・LLM 不要。コード生成だけが LLM を使う。</p>
+  </div>
+  <div class="arch-layer l1">
+    <div class="layer-num">L1</div>
+    <div>
+      <h3>DataInspector</h3>
+      <div class="info">TSV を直接パース → Mann-Whitney U / Kruskal-Wallis / PERMANOVA<br>純 Python。scipy 不要。実行時にデータから統計的特徴を計算。</div>
+    </div>
+  </div>
+  <div class="arch-layer l2">
+    <div class="layer-num">L2</div>
+    <div>
+      <h3>BayesianReasoner + DecisionEngine</h3>
+      <div class="info">7 仮説をベイズ更新 → 確信度に基づいて skip/add を判断<br>確定的。再現性 100%。重みに非依存（10,221 設定で証明）。</div>
+    </div>
+  </div>
+  <div class="arch-layer l3">
+    <div class="layer-num">L3</div>
+    <div>
+      <h3>LLM (qwen2.5-coder:7B)</h3>
+      <div class="info">コード生成 (47%) + 仮説提案 (25%)<br>判断には不使用。ローカル実行。API キー不要。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ BAYESIAN DEMO ══════════════ -->
+<section class="fade-in">
+  <div class="section-header">
+    <h2>ベイズ推論。<br>証拠が蓄積すると確信が変わる。</h2>
+    <p>if 文では表現できない連続的な推論。矛盾する証拠は打ち消し合う。</p>
+  </div>
+  <div class="bayes-demo">
+    <p style="color: var(--gray); margin-bottom: 20px; font-size: 0.9rem;">
+      Moving Pictures (body-site, 34 samples) での推論過程
+    </p>
+    <div class="bayes-bar">
+      <div class="name">alpha_differs</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 99%; background: var(--green);"></div></div>
+      <div class="val" style="color: var(--green);">0.99</div>
+    </div>
+    <div class="bayes-bar">
+      <div class="name">community_shifts</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 94%; background: var(--green);"></div></div>
+      <div class="val" style="color: var(--green);">0.94</div>
+    </div>
+    <div class="bayes-bar">
+      <div class="name">taxa_differential</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 97%; background: var(--green);"></div></div>
+      <div class="val" style="color: var(--green);">0.97</div>
+    </div>
+    <div class="bayes-bar">
+      <div class="name">functional_shift</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 79%; background: var(--accent);"></div></div>
+      <div class="val" style="color: var(--accent);">0.79</div>
+    </div>
+    <div class="bayes-bar">
+      <div class="name">sampling_artifact</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 37%; background: #ff9f0a;"></div></div>
+      <div class="val" style="color: #ff9f0a;">0.37</div>
+    </div>
+    <div class="bayes-bar">
+      <div class="name">compositional_artifact</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 32%; background: #ff9f0a;"></div></div>
+      <div class="val" style="color: #ff9f0a;">0.32</div>
+    </div>
+    <div class="bayes-bar">
+      <div class="name">underpowered</div>
+      <div class="bar-bg"><div class="bar-fill" style="width: 50%; background: #ff9f0a;"></div></div>
+      <div class="val" style="color: #ff9f0a;">0.50</div>
+    </div>
+    <p style="color: #555; margin-top: 20px; font-size: 0.8rem;">
+      緑 = CONFIDENT (≥0.7) → follow-up 追加 &nbsp;|&nbsp;
+      橙 = UNCERTAIN (0.3-0.7) → 検証ステップ追加 &nbsp;|&nbsp;
+      赤 = REJECTED (≤0.3) → skip
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════ QUICKSTART ══════════════ -->
+<section class="fade-in">
+  <div class="section-header">
+    <h2>3行で始める。</h2>
+  </div>
+  <div class="code-block">
+    <span class="comment"># インストール</span><br>
+    <span class="cmd">git clone</span> <span class="str">https://github.com/Rhizobium-gits/seq2pipe.git</span><br>
+    <span class="cmd">cd</span> seq2pipe && <span class="cmd">./setup.sh</span><br>
+    <br>
+    <span class="comment"># Lite モードで解析（推奨）</span><br>
+    <span class="cmd">./launch.sh</span> <span class="flag">--fastq-dir</span> ~/data <span class="flag">--lite</span> \<br>
+    &nbsp;&nbsp;<span class="flag">--metadata</span> meta.tsv <span class="flag">--research-question</span> <span class="str">"Your question"</span><br>
+    <br>
+    <span class="comment"># Docker</span><br>
+    <span class="cmd">docker build</span> <span class="flag">-t</span> seq2pipe:3.0 .<br>
+    <span class="cmd">docker run</span> <span class="flag">-v</span> ~/data:/data seq2pipe:3.0 <span class="flag">--lite</span> <span class="flag">--fastq-dir</span> /data
+  </div>
+</section>
+
+<!-- ══════════════ PAPER ══════════════ -->
+<section class="fade-in">
+  <div class="section-header">
+    <h2>論文。</h2>
+    <p>全て公開データで検証。正直に限界も書いています。</p>
+  </div>
+  <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+    <a href="https://github.com/Rhizobium-gits/seq2pipe/blob/master/Paper/seq2pipe_manuscript.pdf"
+       class="btn-secondary" style="padding: 16px 32px;">English (PDF)</a>
+    <a href="https://github.com/Rhizobium-gits/seq2pipe/blob/master/Paper/seq2pipe_manuscript_ja.pdf"
+       class="btn-secondary" style="padding: 16px 32px;">日本語 (PDF)</a>
+  </div>
+</section>
+
+<!-- ══════════════ FOOTER ══════════════ -->
+<footer>
+  <p>seq2pipe v3.0 — by <a href="https://github.com/Rhizobium-gits">Tsubasa Sato</a></p>
+  <p style="margin-top: 8px;">Coding assistance by <a href="https://claude.ai/">Claude</a> (Anthropic)</p>
+  <p style="margin-top: 8px;">MIT License &nbsp;|&nbsp; All results from public datasets</p>
+</footer>
+
+<script>
+// Scroll fade-in animation
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>
