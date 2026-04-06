@@ -1992,6 +1992,24 @@ def tool_run_qiime2_pipeline(
     use_docker = False
     docker_image = "quay.io/qiime2/amplicon:2024.10"
 
+    # WSL2 フォールバック (Windows)
+    use_wsl = False
+    if not qiime_exec and os.name == 'nt':
+        wsl_exec = shutil.which("wsl")
+        if wsl_exec and os.environ.get("QIIME2_USE_WSL") == "1":
+            # WSL 内の QIIME2 を確認
+            try:
+                wsl_check = subprocess.run(
+                    ["wsl", "bash", "-c",
+                     "ls ~/miniforge3/envs/qiime2*/bin/qiime 2>/dev/null"],
+                    capture_output=True, text=True, timeout=10)
+                if wsl_check.returncode == 0 and wsl_check.stdout.strip():
+                    use_wsl = True
+                    qiime_exec = "wsl"
+                    print("  Using QIIME2 via WSL2 (Ubuntu)")
+            except Exception:
+                pass
+
     if not qiime_exec:
         # Docker フォールバック
         docker_exec = shutil.which("docker")
@@ -2032,8 +2050,25 @@ def tool_run_qiime2_pipeline(
     failed = []
 
     def _exec(cmd: str, step: str) -> tuple:
-        """コマンドを実行してステップ結果を返す（Docker 自動変換対応）"""
-        if use_docker and cmd.strip().startswith("qiime "):
+        """コマンドを実行してステップ結果を返す（WSL/Docker 自動変換対応）"""
+        if use_wsl and cmd.strip().startswith("qiime "):
+            # WSL 経由: パスを変換して実行
+            wsl_out = str(Path(out_dir).resolve()).replace('\\', '/')
+            if wsl_out[1] == ':':
+                wsl_out = '/mnt/' + wsl_out[0].lower() + wsl_out[2:]
+            # qiime コマンドにフルパスを付与
+            wsl_qiime = "~/miniforge3/envs/qiime2-amplicon-2024.10/bin/qiime"
+            qiime_cmd = cmd.replace("qiime ", f"{wsl_qiime} ", 1)
+            # ファイルパスも WSL 形式に変換
+            import re as _re
+            def _win_to_wsl(m):
+                drive = m.group(1).lower()
+                path = m.group(2).replace('\\', '/')
+                return f"/mnt/{drive}{path}"
+            qiime_cmd = _re.sub(r'([A-Z]):([\\/][^\s"]+)', _win_to_wsl, qiime_cmd)
+            cmd = f'wsl bash -c "cd {wsl_out} && {qiime_cmd}"'
+
+        elif use_docker and cmd.strip().startswith("qiime "):
             # qiime コマンドを Docker 経由に変換
             # ホストの out_dir を /data にマウント
             host_dir = str(Path(out_dir).resolve())

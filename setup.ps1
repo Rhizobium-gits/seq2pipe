@@ -68,11 +68,54 @@ foreach ($pattern in $searchPaths) {
 }
 
 if (-not $qiime2Found) {
+    # Also check WSL
+    $wslExe = Get-Command wsl -ErrorAction SilentlyContinue
+    if ($wslExe) {
+        try {
+            $wslQ = wsl bash -c "ls ~/miniforge3/envs/qiime2*/bin/qiime 2>/dev/null" 2>&1
+            if ($wslQ -match "qiime") {
+                $qiime2Found = $true
+                Write-Ok "QIIME2 found in WSL"
+                $envFile = Join-Path $ScriptDir ".env"
+                $c = @(); if (Test-Path $envFile) { $c = Get-Content $envFile | Where-Object {$_ -notmatch "^QIIME2_USE_WSL="} }
+                $c += "QIIME2_USE_WSL=1"; $c | Set-Content -Path $envFile -Encoding UTF8
+            }
+        }
+        catch {}
+    }
+}
+
+if (-not $qiime2Found) {
     Write-Warn "QIIME2 not found."
     Write-Host ""
-    Write-Host "  QIIME2 requires Miniforge (conda) on Windows." -ForegroundColor White
+    Write-Host "  Option 1: Install via WSL2 (recommended for Windows)" -ForegroundColor White
+    Write-Host "  Option 2: Install Miniforge + conda directly" -ForegroundColor White
     Write-Host ""
-    $ans = Read-Host "Install Miniforge + QIIME2 now? (may take 10-20 min) [Y/n]"
+    $ans = Read-Host "Install QIIME2 via WSL2? (recommended) [Y/n]"
+    if ($ans -ine "n") {
+        Write-Info "Running WSL2 QIIME2 installer..."
+        $wslInstaller = Join-Path $ScriptDir "install_qiime2_wsl.ps1"
+        if (Test-Path $wslInstaller) {
+            & powershell -ExecutionPolicy Bypass -File $wslInstaller
+            # Re-check
+            try {
+                $wslQ2 = wsl bash -c "ls ~/miniforge3/envs/qiime2*/bin/qiime 2>/dev/null" 2>&1
+                if ($wslQ2 -match "qiime") {
+                    $qiime2Found = $true
+                    Write-Ok "QIIME2 installed in WSL"
+                }
+            }
+            catch {}
+        }
+        else {
+            Write-Err "install_qiime2_wsl.ps1 not found. Run git pull first."
+        }
+    }
+}
+
+if (-not $qiime2Found) {
+    Write-Warn "QIIME2 still not found. Trying direct conda install..."
+    $ans = Read-Host "Install Miniforge + QIIME2 directly? (may take 10-20 min) [Y/n]"
     if ($ans -ine "n") {
         # Install Miniforge
         $condaCmd = Get-Command conda -ErrorAction SilentlyContinue
