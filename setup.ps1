@@ -1,6 +1,6 @@
 # ===========================================================
 # seq2pipe -- Windows PowerShell Setup Script
-# Ollama のインストール・モデルのダウンロードを自動で行います
+# Installs: Python, Ollama, LLM model, Miniforge + QIIME2
 # ===========================================================
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -8,15 +8,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 function Write-Info  { param($msg) Write-Host "[INFO] $msg" -ForegroundColor Cyan }
 function Write-Ok    { param($msg) Write-Host "[ OK ] $msg" -ForegroundColor Green }
 function Write-Warn  { param($msg) Write-Host "[WARN] $msg" -ForegroundColor Yellow }
-function Write-Err   { param($msg) Write-Host "[ERR ] $msg" -ForegroundColor Red; exit 1 }
+function Write-Err   { param($msg) Write-Host "[ERR ] $msg" -ForegroundColor Red }
 function Write-Sep   { Write-Host ("-" * 60) -ForegroundColor DarkGray }
 
-# ----------------------------------------------------------
-# バナー
-# ----------------------------------------------------------
 Write-Host @"
 
-  seq2pipe -- Windows セットアップ
+  seq2pipe -- Windows Setup
   sequence -> pipeline
 
 "@ -ForegroundColor Cyan
@@ -24,9 +21,9 @@ Write-Host @"
 Write-Sep
 
 # ----------------------------------------------------------
-# STEP 1: Python の確認
+# STEP 1: Python
 # ----------------------------------------------------------
-Write-Info "Python を確認しています..."
+Write-Info "Checking Python..."
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if (-not $pythonCmd) {
     $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
@@ -34,188 +31,214 @@ if (-not $pythonCmd) {
 if ($pythonCmd) {
     $pyVer = & $pythonCmd.Name --version 2>&1
     Write-Ok "Python: $pyVer"
-} else {
-    Write-Warn "Python が見つかりません。"
-    Write-Host "  https://www.python.org/downloads/ からインストールしてください。"
-    Write-Host "  インストール時に 'Add Python to PATH' にチェックを入れてください。"
-    $ans = Read-Host "インストール後に続行しますか? [y/N]"
-    if ($ans -ine "y") { exit 1 }
+}
+else {
+    Write-Warn "Python not found."
+    Write-Host "  Install from https://www.python.org/downloads/"
+    Write-Host "  Check 'Add Python to PATH' during install."
+    Read-Host "Press Enter after installing Python"
 }
 
 Write-Sep
 
 # ----------------------------------------------------------
-# STEP 2: Ollama のインストール
+# STEP 2: Miniforge + QIIME2 conda
 # ----------------------------------------------------------
-Write-Info "Ollama を確認しています..."
+Write-Info "Checking QIIME2 conda environment..."
+
+$qiime2Found = $false
+$qiime2Bin = ""
+
+# Search common paths
+$searchPaths = @(
+    "$env:USERPROFILE\miniforge3\envs\qiime2*\Scripts\qiime.exe",
+    "$env:USERPROFILE\miniconda3\envs\qiime2*\Scripts\qiime.exe",
+    "$env:USERPROFILE\anaconda3\envs\qiime2*\Scripts\qiime.exe",
+    "$env:USERPROFILE\miniforge3\envs\qiime2*\bin\qiime",
+    "C:\miniforge3\envs\qiime2*\Scripts\qiime.exe"
+)
+foreach ($pattern in $searchPaths) {
+    $found = Get-Item $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) {
+        $qiime2Bin = Split-Path $found.FullName -Parent
+        $qiime2Found = $true
+        Write-Ok "QIIME2 found: $qiime2Bin"
+        break
+    }
+}
+
+if (-not $qiime2Found) {
+    Write-Warn "QIIME2 not found."
+    Write-Host ""
+    Write-Host "  QIIME2 requires Miniforge (conda) on Windows." -ForegroundColor White
+    Write-Host ""
+    $ans = Read-Host "Install Miniforge + QIIME2 now? (may take 10-20 min) [Y/n]"
+    if ($ans -ine "n") {
+        # Install Miniforge
+        $condaCmd = Get-Command conda -ErrorAction SilentlyContinue
+        if (-not $condaCmd) {
+            Write-Info "Downloading Miniforge..."
+            $mfUrl = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe"
+            $mfPath = "$env:TEMP\Miniforge3-Setup.exe"
+            Invoke-WebRequest -Uri $mfUrl -OutFile $mfPath -UseBasicParsing
+            Write-Info "Installing Miniforge (silent)..."
+            Start-Process -FilePath $mfPath -ArgumentList "/S /D=$env:USERPROFILE\miniforge3" -Wait
+            Remove-Item $mfPath -Force -ErrorAction SilentlyContinue
+
+            # Add to PATH for this session
+            $env:PATH = "$env:USERPROFILE\miniforge3\Scripts;$env:USERPROFILE\miniforge3\condabin;$env:PATH"
+            Write-Ok "Miniforge installed"
+        }
+        else {
+            Write-Ok "conda already available"
+        }
+
+        # Create QIIME2 environment
+        Write-Info "Creating QIIME2 conda environment (this takes 10-20 min)..."
+        Write-Host "  Installing qiime2-amplicon-2024.10..."
+        $condaExe = "$env:USERPROFILE\miniforge3\condabin\conda.bat"
+        if (-not (Test-Path $condaExe)) {
+            $condaExe = "conda"
+        }
+
+        & $condaExe create -n qiime2-amplicon-2024.10 `
+            -c https://packages.qiime2.org/qiime2/2024.10/amplicon/released `
+            -c conda-forge -c bioconda -c defaults `
+            qiime2-amplicon=2024.10 --yes 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+
+        # Verify
+        $qiimeCheck = Get-Item "$env:USERPROFILE\miniforge3\envs\qiime2*\Scripts\qiime.exe" -ErrorAction SilentlyContinue
+        if ($qiimeCheck) {
+            $qiime2Bin = Split-Path $qiimeCheck.FullName -Parent
+            $qiime2Found = $true
+            Write-Ok "QIIME2 installed: $qiime2Bin"
+        }
+        else {
+            Write-Err "QIIME2 installation may have failed. Check conda output above."
+        }
+    }
+}
+
+# Save QIIME2 path
+if ($qiime2Found) {
+    $envContent = @()
+    $envFile = Join-Path $ScriptDir ".env"
+    if (Test-Path $envFile) {
+        $envContent = Get-Content $envFile | Where-Object { $_ -notmatch "^QIIME2_CONDA_BIN=" }
+    }
+    $envContent += "QIIME2_CONDA_BIN=$qiime2Bin"
+    $envContent | Set-Content -Path $envFile -Encoding UTF8
+    Write-Ok "QIIME2 path saved to .env"
+}
+
+Write-Sep
+
+# ----------------------------------------------------------
+# STEP 3: Ollama
+# ----------------------------------------------------------
+Write-Info "Checking Ollama..."
 $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
 if ($ollamaCmd) {
     $ollamaVer = & ollama --version 2>&1
     Write-Ok "Ollama: $ollamaVer"
-} else {
-    Write-Info "Ollama をインストールします..."
-
-    # winget 経由（Windows 11 / 最新 Windows 10）
+}
+else {
+    Write-Info "Installing Ollama..."
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
-        Write-Info "winget 経由でインストールします..."
         & winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements
-    } else {
-        # 直接ダウンロード
-        Write-Info "インストーラーを直接ダウンロードします..."
+    }
+    else {
         $installerUrl = "https://ollama.com/download/OllamaSetup.exe"
         $installerPath = "$env:TEMP\OllamaSetup.exe"
-        Write-Info "ダウンロード中: $installerUrl"
         Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
-        Write-Info "インストーラーを実行します..."
         Start-Process -FilePath $installerPath -Wait
         Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
     }
-
-    # インストール後の確認
     $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
     if ($ollamaCmd) {
-        Write-Ok "Ollama のインストールが完了しました"
-    } else {
-        Write-Warn "Ollama のインストールを確認できませんでした。"
-        Write-Host "  ターミナルを再起動して再度実行してください。"
+        Write-Ok "Ollama installed"
+    }
+    else {
+        Write-Warn "Ollama install not confirmed. Restart terminal and retry."
     }
 }
 
 Write-Sep
 
 # ----------------------------------------------------------
-# STEP 3: Ollama サービスの起動
+# STEP 4: Start Ollama + pull model
 # ----------------------------------------------------------
-Write-Info "Ollama サービスを確認しています..."
+Write-Info "Checking Ollama service..."
 try {
     $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 3 -UseBasicParsing
-    Write-Ok "Ollama サービス: 起動中"
-} catch {
-    Write-Info "Ollama サービスを起動します..."
+    Write-Ok "Ollama service running"
+}
+catch {
+    Write-Info "Starting Ollama..."
     Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
     Start-Sleep -Seconds 4
     try {
         $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -UseBasicParsing
-        Write-Ok "Ollama サービスが起動しました"
-    } catch {
-        Write-Warn "Ollama の起動確認がタイムアウトしました。しばらく待って再試行してください。"
+        Write-Ok "Ollama started"
+    }
+    catch {
+        Write-Warn "Ollama start timed out. Wait and retry."
     }
 }
 
-Write-Sep
-
-# ----------------------------------------------------------
-# STEP 4: LLM モデルの選択とダウンロード
-# ----------------------------------------------------------
 Write-Host ""
-Write-Host "使用するモデルを選択してください:" -ForegroundColor White
+Write-Host "Select LLM model:" -ForegroundColor White
+Write-Host "  1) qwen2.5-coder:7b  [recommended] (4.7 GB, RAM 8GB+)" -ForegroundColor White
+Write-Host "  2) qwen2.5-coder:3b  [lightweight] (1.9 GB, RAM 4GB+)" -ForegroundColor White
+Write-Host "  3) Skip (use existing model)"
 Write-Host ""
-Write-Host "  1) qwen2.5-coder:7b  [推奨] コード生成特化・高精度 (約 4.7GB)" -ForegroundColor White
-Write-Host "     RAM 8GB 以上推奨"
-Write-Host ""
-Write-Host "  2) qwen2.5-coder:3b  [軽量] 高速・省メモリ (約 1.9GB)" -ForegroundColor White
-Write-Host "     RAM 4GB 以上"
-Write-Host ""
-Write-Host "  3) llama3.2:3b       [汎用] 会話能力が高い (約 2.0GB)" -ForegroundColor White
-Write-Host ""
-Write-Host "  4) qwen3:8b          [最高品質] 推論も高性能 (約 5.2GB)" -ForegroundColor White
-Write-Host "     RAM 16GB 以上推奨"
-Write-Host ""
-Write-Host "  s) スキップ (既存モデルをそのまま使用)"
-Write-Host ""
-$choice = Read-Host "選択 [1/2/3/4/s]"
+$choice = Read-Host "Select [1/2/3]"
 
 switch ($choice) {
     "1"   { $model = "qwen2.5-coder:7b" }
     "2"   { $model = "qwen2.5-coder:3b" }
-    "3"   { $model = "llama3.2:3b" }
-    "4"   { $model = "qwen3:8b" }
-    { $_ -in "s","S" } { $model = "" }
-    default { $model = "qwen2.5-coder:7b"; Write-Warn "デフォルト ($model) を使用します" }
+    default { $model = "" }
 }
 
 if ($model) {
-    $existing = & ollama list 2>&1
-    if ($existing -match $model.Split(":")[0]) {
-        Write-Ok "モデル '$model' は既にインストールされています"
-    } else {
-        Write-Info "モデル '$model' をダウンロードします..."
-        & ollama pull $model
-        Write-Ok "モデル '$model' のダウンロードが完了しました"
+    Write-Info "Downloading model '$model'..."
+    & ollama pull $model
+    Write-Ok "Model '$model' ready"
+
+    $envFile = Join-Path $ScriptDir ".env"
+    $envContent = @()
+    if (Test-Path $envFile) {
+        $envContent = Get-Content $envFile | Where-Object { $_ -notmatch "^QIIME2_AI_MODEL=" }
     }
-    # .env に保存
-    "QIIME2_AI_MODEL=$model" | Set-Content -Path (Join-Path $ScriptDir ".env") -Encoding UTF8
-    Write-Ok "モデル設定を .env に保存しました"
+    $envContent += "QIIME2_AI_MODEL=$model"
+    $envContent | Set-Content -Path $envFile -Encoding UTF8
 }
 
 Write-Sep
 
 # ----------------------------------------------------------
-# STEP 5: Docker Desktop の確認
+# STEP 5: Python packages
 # ----------------------------------------------------------
-Write-Info "Docker Desktop を確認しています..."
-$dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
-if ($dockerCmd) {
-    try {
-        $null = & docker info 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "Docker Desktop: 起動中"
-            & docker --version
-        } else {
-            Write-Warn "Docker Desktop がインストールされていますが、起動していません。"
-            Write-Host "  Docker Desktop を起動してから QIIME2 解析を開始してください。"
-        }
-    } catch {
-        Write-Warn "Docker の状態確認に失敗しました: $_"
-    }
-} else {
-    Write-Warn "Docker Desktop が見つかりません。"
-    Write-Host ""
-    Write-Host "  QIIME2 実行には Docker Desktop が必要です:" -ForegroundColor White
-    Write-Host "  https://www.docker.com/products/docker-desktop/"
-    Write-Host ""
-    Write-Host "  Windows 要件:"
-    Write-Host "  - Windows 10/11 64-bit (Home, Pro, Enterprise)"
-    Write-Host "  - WSL2 バックエンド推奨 (wsl --install で有効化)"
-}
+Write-Info "Installing Python packages..."
+& python -m pip install --quiet matplotlib seaborn pandas numpy scipy scikit-learn networkx statsmodels 2>&1 | Out-Null
+Write-Ok "Python packages installed"
 
 Write-Sep
 
 # ----------------------------------------------------------
-# STEP 6: QIIME2 Docker イメージのプル（オプション）
-# ----------------------------------------------------------
-$dockerCmd2 = Get-Command docker -ErrorAction SilentlyContinue
-if ($dockerCmd2) {
-    try {
-        $dockerOk = & docker info 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host ""
-            $pullQiime = Read-Host "QIIME2 Docker イメージ (quay.io/qiime2/amplicon:2026.1) を今すぐプルしますか? [y/N]"
-            if ($pullQiime -ieq "y") {
-                Write-Info "QIIME2 Docker イメージをダウンロードします (約 2-4 GB)..."
-                & docker pull quay.io/qiime2/amplicon:2026.1
-                Write-Ok "QIIME2 Docker イメージの取得が完了しました"
-            } else {
-                Write-Info "スキップします (初回解析時に自動取得されます)"
-            }
-        }
-    } catch {}
-}
-
-# ----------------------------------------------------------
-# 完了
+# Done
 # ----------------------------------------------------------
 Write-Host ""
-Write-Host "=" * 60 -ForegroundColor Green
-Write-Host "  セットアップが完了しました！" -ForegroundColor Green
-Write-Host "=" * 60 -ForegroundColor Green
+Write-Host ("=" * 60) -ForegroundColor Green
+Write-Host "  Setup complete!" -ForegroundColor Green
+Write-Host ("=" * 60) -ForegroundColor Green
 Write-Host ""
-Write-Host "次のステップ:" -ForegroundColor White
+Write-Host "Next steps:" -ForegroundColor White
 Write-Host ""
-Write-Host "  1. Docker Desktop を起動してください"
+Write-Host "  Run seq2pipe:" -ForegroundColor Cyan
+Write-Host "    .\launch.ps1 --smart --fastq-dir C:\path\to\data --metadata meta.tsv"
 Write-Host ""
-Write-Host "  2. エージェントを起動:"
-Write-Host "     launch.bat  (ダブルクリックでも起動できます)" -ForegroundColor Cyan
+Write-Host "  Or double-click: launch.bat"
 Write-Host ""
-Read-Host "Enter キーで終了"
+Read-Host "Press Enter to exit"

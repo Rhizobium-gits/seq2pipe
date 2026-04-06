@@ -104,14 +104,43 @@ else {
 }
 
 # ----------------------------------------------------------
+# QIIME2 conda environment check
+# ----------------------------------------------------------
+if ($env:QIIME2_CONDA_BIN) {
+    Write-Ok "QIIME2: $env:QIIME2_CONDA_BIN"
+}
+else {
+    # Auto-detect
+    $qiimeSearch = Get-Item "$env:USERPROFILE\miniforge3\envs\qiime2*\Scripts\qiime.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $qiimeSearch) {
+        $qiimeSearch = Get-Item "$env:USERPROFILE\miniconda3\envs\qiime2*\Scripts\qiime.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if ($qiimeSearch) {
+        $env:QIIME2_CONDA_BIN = Split-Path $qiimeSearch.FullName -Parent
+        Write-Ok "QIIME2 auto-detected: $env:QIIME2_CONDA_BIN"
+    }
+    else {
+        Write-Warn "QIIME2 not found. Run setup.bat to install."
+        Write-Host "  Or set QIIME2_CONDA_BIN in .env"
+    }
+}
+
+# ----------------------------------------------------------
 # Launch Python agent
 # ----------------------------------------------------------
 Write-Host ""
 Write-Info "Starting seq2pipe... (model: $env:QIIME2_AI_MODEL)"
 Write-Host ""
 
+# Use QIIME2 conda Python if available
+$pythonExe = "python"
+if ($env:QIIME2_CONDA_BIN -and (Test-Path "$env:QIIME2_CONDA_BIN\python.exe")) {
+    $pythonExe = "$env:QIIME2_CONDA_BIN\python.exe"
+    Write-Info "Using QIIME2 Python: $pythonExe"
+}
+
 $AgentScript = Join-Path $ScriptDir "cli.py"
-& python $AgentScript @args
+& $pythonExe $AgentScript @args
 if ($LASTEXITCODE -ne 0) {
     Write-Err "Agent exited with error."
     Read-Host "Press Enter to exit"
