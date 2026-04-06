@@ -1987,27 +1987,69 @@ def tool_run_qiime2_pipeline(
     # ── プリフライトチェック: qiime コマンドが見つかるか確認 ─────────────
     qiime_exec = shutil.which("qiime", path=run_env.get("PATH")) if QIIME2_CONDA_BIN else None
     if not qiime_exec:
-        # システム PATH でも探す
         qiime_exec = shutil.which("qiime")
+
+    use_docker = False
+    docker_image = "quay.io/qiime2/amplicon:2024.10"
+
+    if not qiime_exec:
+        # Docker フォールバック
+        docker_exec = shutil.which("docker")
+        if docker_exec:
+            print("  QIIME2 conda not found — trying Docker...")
+            try:
+                check = subprocess.run(
+                    ["docker", "info"], capture_output=True, timeout=10)
+                if check.returncode == 0:
+                    # Docker イメージの確認/プル
+                    img_check = subprocess.run(
+                        ["docker", "image", "inspect", docker_image],
+                        capture_output=True, timeout=10)
+                    if img_check.returncode != 0:
+                        print(f"  Pulling QIIME2 Docker image ({docker_image})...")
+                        print("  This may take several minutes on first run...")
+                        subprocess.run(
+                            ["docker", "pull", docker_image],
+                            timeout=1800)  # 30 min max
+                    use_docker = True
+                    qiime_exec = "docker"  # placeholder
+                    print(f"  Using QIIME2 via Docker: {docker_image}")
+            except Exception as e:
+                print(f"  Docker check failed: {e}")
+
     if not qiime_exec:
         return (
             "❌ QIIME2 が見つかりません。\n"
-            "以下を確認してください:\n"
-            "  1. QIIME2 conda 環境がインストールされているか\n"
-            "     例: conda create -n qiime2 ...\n"
-            "  2. 環境変数 QIIME2_CONDA_BIN に conda/bin パスを指定しているか\n"
-            "     例: QIIME2_CONDA_BIN=~/miniconda3/envs/qiime2/bin ./launch.sh\n"
-            f"  自動検出候補: ~/miniforge3/envs/qiime2/bin, ~/miniconda3/envs/qiime2/bin\n"
-            f"  現在の QIIME2_CONDA_BIN: '{QIIME2_CONDA_BIN or '未検出'}'"
+            "以下のいずれかを試してください:\n"
+            "  1. Docker Desktop を起動する (docker が見つかれば自動で使います)\n"
+            "  2. --export-dir で既存データを直接解析する\n"
+            "     例: launch.ps1 --smart --export-dir ./exported --metadata meta.tsv\n"
+            f"  Docker: {'見つかりました' if shutil.which('docker') else '見つかりません'}\n"
+            f"  QIIME2 conda: '{QIIME2_CONDA_BIN or '未検出'}'"
         )
 
     completed = []
     failed = []
 
     def _exec(cmd: str, step: str) -> tuple:
-        """コマンドを実行してステップ結果を返す"""
+        """コマンドを実行してステップ結果を返す（Docker 自動変換対応）"""
+        if use_docker and cmd.strip().startswith("qiime "):
+            # qiime コマンドを Docker 経由に変換
+            # ホストの out_dir を /data にマウント
+            host_dir = str(Path(out_dir).resolve())
+            # Windows パス → Docker パス変換
+            if os.name == 'nt':
+                host_dir = host_dir.replace('\\', '/')
+                if host_dir[1] == ':':
+                    host_dir = '/' + host_dir[0].lower() + host_dir[2:]
+            docker_cmd = (
+                f"docker run --rm -v {host_dir}:/data -w /data "
+                f"{docker_image} {cmd}"
+            )
+            cmd = docker_cmd
+
         print(f"\n{c(f'[PIPELINE] {step}', CYAN + BOLD)}")
-        print(f"{c(cmd, DIM)}")
+        print(f"{c(cmd[:200], DIM)}")
         try:
             proc = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
