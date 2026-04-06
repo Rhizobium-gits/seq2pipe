@@ -971,7 +971,29 @@ def main():
             )
             return
 
-        # モード5: AI駆動（export-dir のみ）
+        # Smart モード (mode 2) — export-dir から直接解析
+        if mode == "2":
+            from ai_driven_agent import run_ai_driven
+            from manual_auto_agent import parse_metadata
+            meta = args.metadata or _ask("Metadata TSV path")
+            if not meta or not Path(meta).exists():
+                print(f"Metadata not found: {meta}")
+                sys.exit(1)
+            rq = args.research_question or _ask("Research question", "Microbiome analysis")
+            exp_design = parse_metadata(meta)
+            print(f"\n{exp_design.summary()}\n")
+            ai_result = run_ai_driven(
+                research_question=rq, design=exp_design,
+                export_files=export_files,
+                output_dir=str(Path(export_dir).parent),
+                figure_dir=str(fig_dir), metadata_path=meta, model=model,
+                log_callback=_log, install_callback=_install_callback,
+            )
+            print(f"\n  Completed: {ai_result.completed_steps} steps")
+            print(f"  Figures: {len(ai_result.all_figures)} -> {fig_dir}")
+            return
+
+        # モード5: AI駆動（export-dir のみ）— 後方互換
         if mode == "5":
             from ai_driven_agent import run_ai_driven, run_data_recon
             from manual_auto_agent import parse_metadata
@@ -1236,8 +1258,28 @@ def main():
     pipeline_result = run_pipeline(config=config, log_callback=_log)
 
     if not pipeline_result.success:
-        print(f"\n❌ パイプライン失敗: {pipeline_result.error_message[:400]}")
-        sys.exit(1)
+        err_msg = pipeline_result.error_message[:400]
+        if "QIIME2" in err_msg and "見つかりません" in err_msg:
+            print(f"\n⚠️  QIIME2 が見つかりません — STEP 1 をスキップします")
+            print(f"   Windows の場合: 既にエクスポート済みの TSV ファイルで解析できます")
+            print(f"   --export-dir オプションでエクスポート済みデータのパスを指定してください:")
+            print(f"   例: .\\launch.ps1 --smart --export-dir C:\\path\\to\\exported --metadata meta.tsv")
+            print()
+            # QIIME2 なしでも Smart モードで続行可能か確認
+            export_dir_path = output_dir / "exported"
+            if export_dir_path.exists():
+                print(f"   既存のエクスポートデータが見つかりました: {export_dir_path}")
+                pipeline_result.output_dir = str(output_dir)
+                pipeline_result.export_dir = str(export_dir_path)
+                pipeline_result.success = True
+            else:
+                print(f"   エクスポートデータがありません。")
+                print(f"   macOS/Linux で QIIME2 パイプラインを実行してから、")
+                print(f"   exported/ フォルダをこの PC にコピーしてください。")
+                sys.exit(1)
+        else:
+            print(f"\n❌ パイプライン失敗: {err_msg}")
+            sys.exit(1)
 
     print(f"\n✅ パイプライン完了 → {pipeline_result.output_dir}")
     print()
