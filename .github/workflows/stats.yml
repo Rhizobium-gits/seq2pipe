@@ -1,0 +1,39 @@
+name: Download stats
+
+# Counts downloads and installs once a day and writes the stats branch (stats.json and the README's
+# downloads-*.svg chart). See scripts/download-stats.py for what is counted.
+# Writes only the stats branch (main and the releases are not touched; a commit made with GITHUB_TOKEN
+# does not start other workflows).
+#   AURALUNE_STATS_KEY  presses of the download buttons on https://auralune.tech (needed for that count)
+#   TRAFFIC_TOKEN       optional; with it, git clones are counted here too (otherwise only when the script
+#                       is run on a Mac logged in to gh as someone who can push)
+on:
+  schedule:
+    - cron: "43 21 * * *" # daily (UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-stats
+  cancel-in-progress: false
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The repository is not checked out (that would be counted as a clone): only the script is fetched.
+      - name: Count downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          AURALUNE_STATS_KEY: ${{ secrets.AURALUNE_STATS_KEY }}
+          STATS_PRODUCT: "seq2pipe"
+          MARKETPLACE_ITEM: ""
+          AURALUNE_SITE_IDS: "seq2pipe"
+        run: |
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GITHUB_REPOSITORY/contents/scripts/download-stats.py?ref=$GITHUB_SHA" > "$RUNNER_TEMP/download-stats.py"
+          python3 "$RUNNER_TEMP/download-stats.py"

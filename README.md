@@ -18,6 +18,12 @@
 >
 > **Current: v3.0.0**
 
+<p><a href="https://github.com/Rhizobium-gits/seq2pipe/blob/stats/stats.json"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FRhizobium-gits%2Fseq2pipe%2Fstats%2Fstats.json&query=%24.total&label=downloads&style=for-the-badge&labelColor=0d0d10&color=26262c" alt="downloads"></a> <a href="https://auralune.tech/products/seq2pipe/"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FRhizobium-gits%2Fseq2pipe%2Fstats%2Fstats.json&query=%24.site&label=via%20auralune.tech&style=for-the-badge&labelColor=0d0d10&color=e6c56b" alt="via auralune.tech"></a></p>
+
+<a href="https://github.com/Rhizobium-gits/seq2pipe/blob/stats/stats.json"><img src="https://raw.githubusercontent.com/Rhizobium-gits/seq2pipe/stats/downloads-ja.svg" width="820" alt="ダウンロード・git clone の累計の推移（毎日自動で更新）"></a>
+
+<sub>累計＝リリースのファイルのダウンロード＋git clone した人数（GitHub が数えた日ごとの人数。ボットも入る）＋ [auralune.tech](https://auralune.tech/products/seq2pipe/) から取ったソースの zip（GitHub は数えないので足す）。「via auralune.tech」は auralune.tech のダウンロードのボタンが押された数。毎日 `scripts/download-stats.py`（GitHub Actions）が数え直して `stats` ブランチに書きます。</sub>
+
 ---
 
 ## 日本語 | [English](#english)
