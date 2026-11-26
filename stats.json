@@ -1,0 +1,84 @@
+{
+  "updated": "2026-11-26T14:27:32Z",
+  "product": "seq2pipe",
+  "total": 23,
+  "release": 3,
+  "clone": 20,
+  "site": 0,
+  "site_source": 0,
+  "daily": {
+    "2026-11-26": {
+      "total": 23,
+      "release": 3,
+      "clone": 20,
+      "site": 0,
+      "site_source": 0,
+      "at": "2026-11-26T14:27:32Z"
+    }
+  },
+  "clones": {
+    "2026-11-13": {
+      "count": 2,
+      "uniques": 2
+    },
+    "2026-11-15": {
+      "count": 1,
+      "uniques": 1
+    },
+    "2026-11-16": {
+      "count": 3,
+      "uniques": 2
+    },
+    "2026-11-19": {
+      "count": 4,
+      "uniques": 4
+    },
+    "2026-11-20": {
+      "count": 3,
+      "uniques": 3
+    },
+    "2026-11-21": {
+      "count": 2,
+      "uniques": 2
+    },
+    "2026-11-22": {
+      "count": 2,
+      "uniques": 2
+    },
+    "2026-11-24": {
+      "count": 1,
+      "uniques": 1
+    },
+    "2026-11-25": {
+      "count": 3,
+      "uniques": 3
+    }
+  },
+  "releases": [
+    {
+      "tag": "v1.0.0",
+      "published": "2026-03-03T11:27:27Z",
+      "downloads": 0
+    },
+    {
+      "tag": "v1.1.0",
+      "published": "2026-03-25T12:51:12Z",
+      "downloads": 0
+    },
+    {
+      "tag": "v1.3.0",
+      "published": "2026-03-28T14:55:22Z",
+      "downloads": 0
+    },
+    {
+      "tag": "v2.0.0",
+      "published": "2026-03-29T03:31:20Z",
+      "downloads": 3
+    },
+    {
+      "tag": "v3.0.0",
+      "published": "2026-03-30T03:44:32Z",
+      "downloads": 0
+    }
+  ]
+}
